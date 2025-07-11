@@ -14,12 +14,12 @@
 
 ## ✨ Features
 
-- **Effortless Account Switching**: Quickly switch between your Valorant and League of Legends accounts with a single click.
-- **Game-Specific Profiles**: Manage separate profiles for Valorant and League of Legends, including custom icons and game settings.
-- **Automatic Settings Sync**: Automatically applies your preferred graphics and audio settings upon account switch.
-- **Desktop Shortcuts**: Create direct desktop shortcuts for your favorite accounts.
-- **iMA Menu Integration**: Seamlessly export your accounts to the iMA Menu (Context Menu) for quick access.
-- **Backup & Restore**: Easily backup and restore all your account profiles.
+- **Account Switching**: Quickly switch between Valorant and League of Legends accounts.
+- **Game Profiles**: Manage separate profiles for Valorant and League of Legends.
+- **Settings Sync**: Automatically applies graphics and audio settings upon account switch.
+- **Desktop Shortcuts**: Create desktop shortcuts for accounts.
+- **iMA Menu Integration**: Export accounts to the iMA Menu (Context Menu).
+- **Backup & Restore**: Backup and restore account profiles.
 
 ## 🚀 Getting Started
 
