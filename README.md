@@ -44,11 +44,11 @@ To add a new account:
 
 To export accounts to iMA Menu:
 1. Install iMA Menu from its [releases page](https://github.com/iMAboud/iMA-Menu/releases).
-2. In iMA Switcher, go to Settings (gear icon) > "Export to iMA Menu".
+2. In iMA Switcher, go to Settings > "Export to iMA Menu".
 3. After exporting, right-click on your taskbar > iMA Menu > Settings > Shell tab.
-4. Click "Add a shortcut" and select `valo.nss` (located in `C:\Program Files\iMA Menu\imports` by default).
+4. Click "Add" in the Shortcut column on the right, and select `valo.nss` (located in `C:\Program Files\iMA Menu\imports` by default).
 5. Save changes.
-6. Hold `Ctrl` and right-click on your taskbar to update the context menu.
+6. Hold `Ctrl` and right-click on desktop to update the context menu.
 </details>
 
 ## 📸 Screenshots
