@@ -23,7 +23,7 @@
 
 ## 🚀 Getting Started
 
-1.  **Download the latest release** from the [releases page](https://github.com/your-repo/your-repo/releases).
+1.  **Download the latest release** from the [releases page](https://github.com/iMAboud/iMA-Switcher/releases).
 2.  **Run the installer** and follow the on-screen instructions.
 3.  **Launch iMA Switcher** and start managing your accounts!
 
