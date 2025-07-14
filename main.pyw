@@ -59,12 +59,30 @@ except ImportError:
     Image = None
     print("Warning: Pillow not installed. Image conversion for icons will not work. Please install it with 'pip install Pillow'")
 
-def generate_icon(name, path=None):
-    """Generates a QIcon from a path or creates a default one with the account's first letter."""
-    if path and os.path.exists(path):
+def generate_icon(name, account_icon_path=None, rank=None, use_rank_icons=False, base_dir=None):
+    """Generates a QIcon based on account settings, rank, or a default one."""
+    if base_dir is None:
+        base_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
+
+    icon_path_to_use = None
+
+    if use_rank_icons and rank:
+        rank_icon_path = os.path.join(base_dir, "Assets", f"{rank.lower().replace(" ", "_")}.png")
+        if os.path.exists(rank_icon_path):
+            icon_path_to_use = rank_icon_path
+
+    if icon_path_to_use is None and account_icon_path and os.path.exists(account_icon_path):
+        icon_path_to_use = account_icon_path
+
+    if icon_path_to_use is None:
+        logo_path = os.path.join(base_dir, "logo.png")
+        if os.path.exists(logo_path):
+            icon_path_to_use = logo_path
+
+    if icon_path_to_use and os.path.exists(icon_path_to_use):
         try:
             if Image:
-                pil_image = Image.open(path)
+                pil_image = Image.open(icon_path_to_use)
                 pil_image = pil_image.convert("RGBA")
                 from io import BytesIO
                 byte_array = BytesIO()
@@ -75,10 +93,11 @@ def generate_icon(name, path=None):
                 pixmap.loadFromData(byte_array.getvalue(), "PNG")
                 return QIcon(pixmap)
             else:
-                return QIcon(path)
+                return QIcon(icon_path_to_use)
         except Exception as e:
-            print(f"Error loading icon from {path}: {e}. Using default icon.")
+            print(f"Error loading icon from {icon_path_to_use}: {e}. Using default icon.")
     
+    # Default icon if all else fails
     pixmap = QPixmap(128, 128)
     pixmap.fill(QColor("#c89f68"))
     p = QPainter(pixmap)
@@ -156,7 +175,7 @@ class ModernValorantSwitcher(QMainWindow):
 
     def init_ui(self):
         self.setWindowTitle("iMA Switcher")
-        self.setWindowIcon(generate_icon("V"))
+        self.setWindowIcon(generate_icon("V", base_dir=self.switcher.base_dir))
         self.setStyleSheet(
             """#main_widget { background-color: #2c2a2b; border-radius: 15px; border: 1px solid #4f4a4b; } 
                QScrollArea { border: none; background-color: transparent; } 
@@ -241,25 +260,28 @@ class ModernValorantSwitcher(QMainWindow):
         account_names_in_order = [name for name in ordered_accounts if name in accounts]
 
         show_game_icons = self.switcher.get_ima_config().get("ui_settings", {}).get("show_game_icons", True)
+        use_rank_icons = self.switcher.get_ima_config().get("ui_settings", {}).get("use_rank_icons", False)
 
         for name in account_names_in_order:
-            icon_path, game = accounts[name]
-            icon = generate_icon(name, icon_path)
-            widget = AccountWidget(name, icon, game, self.grid_container)
+            icon_path, game, rank = accounts[name]
+            icon = generate_icon(name, icon_path, rank, use_rank_icons, self.switcher.base_dir)
+            widget = AccountWidget(name, icon, game, rank, self.grid_container)
             widget.selected.connect(self.on_account_selected)
             widget.double_clicked.connect(self.on_account_double_clicked)
             widget.context_menu_requested.connect(self.show_context_menu)
             widget.set_show_game_icon(show_game_icons)
+            widget.set_show_rank_icon(self.switcher.get_ima_config().get("ui_settings", {}).get("show_rank_icon_left", False))
             self.account_widgets[name] = widget
 
-        for name, (icon_path, game) in accounts.items():
+        for name, (icon_path, game, rank) in accounts.items():
             if name not in self.account_widgets:
-                icon = generate_icon(name, icon_path)
-                widget = AccountWidget(name, icon, game, self.grid_container)
+                icon = generate_icon(name, icon_path, rank, use_rank_icons, self.switcher.base_dir)
+                widget = AccountWidget(name, icon, game, rank, self.grid_container)
                 widget.selected.connect(self.on_account_selected)
                 widget.double_clicked.connect(self.on_account_double_clicked)
                 widget.context_menu_requested.connect(self.show_context_menu)
                 widget.set_show_game_icon(show_game_icons)
+                widget.set_show_rank_icon(self.switcher.get_ima_config().get("ui_settings", {}).get("show_rank_icon_left", False))
                 self.account_widgets[name] = widget
 
         self.rearrange_grid()
@@ -368,6 +390,43 @@ class ModernValorantSwitcher(QMainWindow):
 
         actions["Create Desktop Shortcut"] = (self.context_handler.create_shortcut, "Create.png")
         
+        set_rank_menu = QMenu("Set Rank", self)
+        set_rank_menu.setIcon(QIcon(os.path.join(os.path.dirname(__file__), "Assets", "radiant.png"))) # Set Radiant icon for the main "Set Rank" menu
+
+        ranks_with_tiers = ["Iron", "Bronze", "Silver", "Gold", "Platinum", "Diamond", "Ascendant", "Immortal"]
+        for rank_name in ranks_with_tiers:
+            rank_tier_menu = QMenu(rank_name, self)
+            # Use the first tier icon for the submenu
+            first_tier_icon_path = os.path.join(os.path.dirname(__file__), "Assets", f"{rank_name.lower()}_1.png")
+            if os.path.exists(first_tier_icon_path):
+                rank_tier_menu.setIcon(QIcon(first_tier_icon_path))
+            
+            for i in range(1, 4): # Tiers 1, 2, 3
+                full_rank_name = f"{rank_name} {i}"
+                rank_icon_path = os.path.join(os.path.dirname(__file__), "Assets", f"{rank_name.lower()}_{i}.png")
+                
+                action = QAction(full_rank_name, self)
+                if os.path.exists(rank_icon_path):
+                    action.setIcon(QIcon(rank_icon_path))
+                action.triggered.connect(lambda checked, r=full_rank_name: self.context_handler.set_rank(r))
+                rank_tier_menu.addAction(action)
+            set_rank_menu.addMenu(rank_tier_menu)
+
+        # Add Radiant as a direct option
+        radiant_icon_path = os.path.join(os.path.dirname(__file__), "Assets", "radiant.png")
+        radiant_action = QAction("Radiant", self)
+        if os.path.exists(radiant_icon_path):
+            radiant_action.setIcon(QIcon(radiant_icon_path))
+        radiant_action.triggered.connect(lambda checked, r="Radiant": self.context_handler.set_rank(r))
+        set_rank_menu.addAction(radiant_action)
+
+        # Add "Clear Rank" option
+        clear_rank_action = QAction("Clear Rank", self)
+        clear_rank_action.triggered.connect(lambda: self.context_handler.set_rank(None))
+        set_rank_menu.addAction(clear_rank_action)
+
+        menu.addMenu(set_rank_menu)
+        
         change_game_menu = QMenu("Change Game", self)
         change_game_menu.setIcon(QIcon(os.path.join(os.path.dirname(__file__), "Assets", "Riot.png")))
         valorant_icon_path = os.path.join(os.path.dirname(__file__), "Assets", "valorant.png")
@@ -414,15 +473,13 @@ class ModernValorantSwitcher(QMainWindow):
 
         # Get account data to pass to GameSelectionDialog if needed
         account_data = self.switcher.get_saved_accounts().get(name)
-        account_icon_path = account_data[0] if account_data else None
-        account_icon_pixmap = QPixmap() # Default empty pixmap
-        if account_icon_path and os.path.exists(account_icon_path):
-            account_icon = generate_icon(name, account_icon_path)
-            account_icon_pixmap = account_icon.pixmap(account_icon.actualSize(QSize(180, 180)))
-        else:
-            # Generate a default icon if no custom icon is set
-            default_icon = generate_icon(name)
-            account_icon_pixmap = default_icon.pixmap(default_icon.actualSize(QSize(180, 180)))
+        account_icon_path, _, rank = account_data if account_data else (None, None, None)
+        
+        ui_settings = self.switcher.get_ima_config().get("ui_settings", {})
+        use_rank_icons = ui_settings.get("use_rank_icons", False)
+
+        account_icon = generate_icon(name, account_icon_path, rank, use_rank_icons, self.switcher.base_dir)
+        account_icon_pixmap = account_icon.pixmap(account_icon.actualSize(QSize(180, 180)))
 
         self.status_label.setText(f"Switching to '{name}'...")
         QApplication.processEvents()
@@ -481,9 +538,9 @@ def main():
         
         app = QApplication(sys.argv)
         accounts_data = switcher.get_saved_accounts()
-        icon_path, game_type = accounts_data.get(account_name, (None, None))
+        icon_path, game_type, rank = accounts_data.get(account_name, (None, None, None))
         
-        game_icon = generate_icon(account_name, icon_path)
+        game_icon = generate_icon(account_name, icon_path, rank, switcher.base_dir)
         pixmap = game_icon.pixmap(game_icon.actualSize(QSize(180, 180)))
 
         if game_type == "both":

@@ -1,5 +1,5 @@
 from PyQt5.QtWidgets import QMessageBox, QFileDialog, QDialog
-from ui_components import InputDialog
+from ui_components import InputDialog, ConfirmDeleteDialog
 
 class ContextActions:
     def __init__(self, parent):
@@ -28,10 +28,10 @@ class ContextActions:
 
     def delete(self):
         name = self.parent.get_selected_account_name()
-        if name and QMessageBox.question(
-            self.parent, "Confirm Delete", f"Are you sure you want to delete '{name}'?",
-            QMessageBox.Yes | QMessageBox.No
-        ) == QMessageBox.Yes:
+        if not name: return
+        
+        dialog = ConfirmDeleteDialog(name, self.parent)
+        if dialog.exec_() == QDialog.Accepted:
             if self.switcher.delete_account(name):
                 self.parent.status_label.setText(f"Account '{name}' deleted.")
                 self.parent.load_accounts()
@@ -52,10 +52,9 @@ class ContextActions:
     def remove_icon(self):
         name = self.parent.get_selected_account_name()
         if not name: return
-        if QMessageBox.question(
-            self.parent, "Remove Icon", f"Are you sure you want to remove the icon for '{name}'?",
-            QMessageBox.Yes | QMessageBox.No
-        ) == QMessageBox.Yes:
+        
+        dialog = ConfirmDeleteDialog(name, self.parent, title="Remove Icon", message=f"Remove icon for '{name}'?")
+        if dialog.exec_() == QDialog.Accepted:
             if self.switcher.remove_account_icon(name):
                 self.parent.status_label.setText(f"Icon removed for '{name}'.")
                 self.parent.load_accounts()
@@ -78,3 +77,13 @@ class ContextActions:
                 self.parent.load_accounts()
             else:
                 self.parent.status_label.setText(f"Failed to set game for '{name}'.")
+
+    def set_rank(self, rank):
+        name = self.parent.get_selected_account_name()
+        if not name: return
+        
+        if self.switcher.set_account_rank(name, rank):
+            self.parent.status_label.setText(f"Rank for '{name}' set to {rank or 'None'}.")
+            self.parent.load_accounts()
+        else:
+            self.parent.status_label.setText(f"Failed to set rank for '{name}'.")

@@ -28,19 +28,19 @@
 3.  **Launch iMA Switcher** and start managing your accounts!
 
 <details>
-<summary>⚙️ Add & Save Account Instructions</summary>
+<summary>⚙️ Add & Save Accounts</summary>
 
 To add a new account:
 1. Click the "Add Account" button in iMA Switcher. This will launch the Riot Client.
 2. Log in to your desired account. **Crucially, ensure "Stay signed in" is checked.**
-3. After logging in, the "Save Account" popup will appear in iMA Switcher. Enter a name for your account and select the game(s).
+3. After logging in, now enter a name for your account and select the game(s) in the "Save Account" Popup in iMA Switcher. 
 4. Click "Save".
 
 **Important**: Never sign out of the Riot Client. Only exit the client. For new accounts, always launch Riot Client via the "Add Account" button to prevent logging out of existing accounts.
 </details>
 
 <details>
-<summary>⚙️ Export to iMA Menu Instructions</summary>
+<summary>⚙️ Export to iMA Menu</summary>
 
 To export accounts to iMA Menu:
 1. Install iMA Menu from its [releases page](https://github.com/iMAboud/iMA-Menu/releases).

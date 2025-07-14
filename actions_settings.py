@@ -85,6 +85,7 @@ class SettingsActions:
                 self.switcher.generate_ima_menu_script(**settings, output_dir=output_dir, save_config=True)
                 msg_dialog = CustomMessageDialog("Export Successful", "Accounts added to iMA Menu", self.parent)
                 msg_dialog.exec_()
+                self.parent.load_accounts() # Refresh accounts in UI after export
             except Exception as e:
                 QMessageBox.critical(self.parent, "Export Failed", f"An error occurred: {e}")
 

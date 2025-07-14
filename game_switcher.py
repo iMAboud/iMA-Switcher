@@ -52,11 +52,35 @@ class GameSwitcher:
         except: return False
 
     def _load_config(self):
-        defaults = {"output_dir": None, "title": "Valorant", "menu_icon_path": "", "ordered_accounts": [], "riot_client_exe_path": None, "ui_settings": {"show_game_icons": True}}
+        defaults = {
+            "output_dir": None,
+            "title": "Valorant",
+            "menu_icon_path": "",
+            "ordered_accounts": [],
+            "riot_client_exe_path": None,
+            "ui_settings": {
+                "show_game_icons": True,
+                "show_rank_tips": True,
+                "tip_delay": 1.0,
+                "use_rank_icons": False,
+                "show_rank_icon_left": True
+            }
+        }
         if os.path.exists(self.config_path):
             try:
                 with open(self.config_path, 'r', encoding='utf-8') as f:
                     loaded_config = json.load(f)
+                    
+                    # Define all possible top-level deprecated keys
+                    deprecated_keys = ["last_switched_account", "save_last_window_size", "last_window_size", "show_game_icons"]
+                    for key in deprecated_keys:
+                        if key in loaded_config:
+                            del loaded_config[key]
+
+                    # Merge ui_settings specifically to preserve new defaults
+                    if "ui_settings" in loaded_config and isinstance(loaded_config["ui_settings"], dict):
+                        defaults["ui_settings"].update(loaded_config["ui_settings"])
+                    loaded_config["ui_settings"] = defaults["ui_settings"] # Ensure ui_settings in loaded_config is the merged one
                     defaults.update(loaded_config)
             except (json.JSONDecodeError, UnicodeDecodeError):
                 print("Warning: config.json is corrupted or has encoding issues. Using defaults.")
@@ -146,21 +170,47 @@ class GameSwitcher:
         if os.path.exists(game_config_path):
             with open(game_config_path, 'r') as f:
                 try:
-                    return json.load(f).get('game', 'valorant')
+                    data = json.load(f)
+                    return data.get('game', 'valorant'), data.get('rank', None)
                 except json.JSONDecodeError:
-                    return 'valorant'
-        return 'valorant'
+                    return 'valorant', None
+        return 'valorant', None
 
     def set_account_game(self, account_name, game):
         account_path = self._get_account_path(account_name)
         if not os.path.exists(account_path):
             return False
         game_config_path = os.path.join(account_path, 'game.json')
+        data = {}
+        if os.path.exists(game_config_path):
+            with open(game_config_path, 'r') as f:
+                try:
+                    data = json.load(f)
+                except json.JSONDecodeError:
+                    pass
+        data['game'] = game
         with open(game_config_path, 'w') as f:
-            json.dump({'game': game}, f)
+            json.dump(data, f)
         return True
 
-    def save_account(self, account_name, game='valorant'):
+    def set_account_rank(self, account_name, rank):
+        account_path = self._get_account_path(account_name)
+        if not os.path.exists(account_path):
+            return False
+        game_config_path = os.path.join(account_path, 'game.json')
+        data = {}
+        if os.path.exists(game_config_path):
+            with open(game_config_path, 'r') as f:
+                try:
+                    data = json.load(f)
+                except json.JSONDecodeError:
+                    pass
+        data['rank'] = rank
+        with open(game_config_path, 'w') as f:
+            json.dump(data, f)
+        return True
+
+    def save_account(self, account_name, game='valorant', rank=None):
         account_path = self._get_account_path(account_name)
         os.makedirs(account_path, exist_ok=True)
         for item_name in self.riot_games_config["LoginData"].keys():
@@ -174,6 +224,7 @@ class GameSwitcher:
             elif os.path.isfile(source_path):
                 shutil.copy2(source_path, dest_path)
         self.set_account_game(account_name, game)
+        if rank: self.set_account_rank(account_name, rank)
         self.update_ima_menu_if_enabled('add', account_name)
         return True
 
@@ -185,7 +236,7 @@ class GameSwitcher:
         if not os.path.exists(account_path):
             return False, f"Profile for '{account_name}' not found.", None
         
-        game = self.get_account_game(account_name)
+        game, _ = self.get_account_game(account_name)
 
         if game == 'both' and selected_game is None:
             return True, "Game selection required.", "both"
@@ -242,8 +293,8 @@ class GameSwitcher:
             dirs = [d for d in os.listdir(self.profiles_dir) if os.path.isdir(os.path.join(self.profiles_dir, d))]
             for account_name in sorted(dirs):
                 icon_path = os.path.join(self._get_account_path(account_name), "icon.png")
-                game = self.get_account_game(account_name)
-                accounts_data[account_name] = (icon_path if os.path.exists(icon_path) else None, game)
+                game, rank = self.get_account_game(account_name)
+                accounts_data[account_name] = (icon_path if os.path.exists(icon_path) else None, game, rank)
         except FileNotFoundError:
             os.makedirs(self.profiles_dir, exist_ok=True)
         return accounts_data
@@ -322,11 +373,23 @@ class GameSwitcher:
             shortcut.Description = f"Launch {game.capitalize()} with {account_name} account"
 
             account_data = self.get_saved_accounts()
-            account_icon_path, _ = account_data.get(account_name)
+            account_icon_path, _, rank = account_data.get(account_name)
             
-            icon_to_use = os.path.abspath(os.path.join(self.base_dir, "logo.png"))
-            if account_icon_path and os.path.exists(account_icon_path):
+            ui_settings = self.get_ima_config().get("ui_settings", {})
+            use_rank_icons = ui_settings.get("use_rank_icons", False)
+
+            icon_to_use = None
+
+            if use_rank_icons and rank:
+                rank_icon_candidate_path = os.path.join(self.base_dir, "Assets", f"{rank.lower().replace(" ", "_")}.png")
+                if os.path.exists(rank_icon_candidate_path):
+                    icon_to_use = rank_icon_candidate_path
+            
+            if icon_to_use is None and account_icon_path and os.path.exists(account_icon_path):
                 icon_to_use = account_icon_path
+
+            if icon_to_use is None:
+                icon_to_use = os.path.abspath(os.path.join(self.base_dir, "logo.png"))
 
             shortcut.IconLocation = icon_to_use
             
@@ -405,17 +468,44 @@ class GameSwitcher:
         main_app_path = sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(sys.argv[0])
         accounts_data = self.get_saved_accounts()
         
+        ui_settings = self.get_ima_config().get("ui_settings", {})
+        show_rank_tips = ui_settings.get("show_rank_tips", False)
+        tip_delay = ui_settings.get("tip_delay", 1.0)
+        use_rank_icons = ui_settings.get("use_rank_icons", False)
+
+        rank_order = ["Iron", "Bronze", "Silver", "Gold", "Platinum", "Diamond", "Ascendant", "Immortal", "Radiant"]
+        
         for account_name in ordered_accounts:
             if account_name not in accounts_data: continue
+            icon_source_path, _, rank = accounts_data.get(account_name)
+            
             item_icon_arg = ""
-            icon_source_path, _ = accounts_data.get(account_name)
-            if icon_source_path and os.path.exists(icon_source_path):
-                formatted_icon_path = icon_source_path.replace(os.sep, '\\')
-                item_icon_arg = f" icon='{formatted_icon_path}'"
+            icon_to_use_for_menu = None
+
+            if use_rank_icons and rank:
+                rank_icon_path = os.path.join(self.base_dir, "Assets", f"{rank.lower().replace(" ", "_")}.png")
+                if os.path.exists(rank_icon_path):
+                    icon_to_use_for_menu = rank_icon_path
+            
+            if icon_to_use_for_menu is None and icon_source_path and os.path.exists(icon_source_path):
+                icon_to_use_for_menu = icon_source_path
+
+            if icon_to_use_for_menu is None:
+                logo_path = os.path.join(self.base_dir, "logo.png")
+                if os.path.exists(logo_path):
+                    icon_to_use_for_menu = logo_path
+
+            if icon_to_use_for_menu:
+                item_icon_arg = f" icon='{icon_to_use_for_menu.replace(os.sep, '\\')}'"
+            
+            tip_arg = ""
+            if show_rank_tips and rank:
+                rank_index = rank_order.index(rank) if rank in rank_order else 0
+                tip_arg = f" tip=['{rank}', tip.info, {tip_delay}]"
             
             cmd_executable = f'"{main_app_path}"'
             cmd_args = f'--switch "{account_name}"'
-            item_line = f"    item(title='{account_name}' cmd='{cmd_executable}' args='{cmd_args}'{item_icon_arg})"
+            item_line = f"    item(title='{account_name}'{tip_arg} cmd='{cmd_executable}' args='{cmd_args}'{item_icon_arg})"
             script_content.append(item_line)
             
         script_content.append("}")

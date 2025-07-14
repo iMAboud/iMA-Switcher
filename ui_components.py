@@ -24,7 +24,8 @@ from PyQt5.QtWidgets import (
     QComboBox,
     QSlider,
     QGroupBox,
-    QFormLayout
+    QFormLayout,
+    QDoubleSpinBox
 )
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QPainterPath
 from PyQt5.QtCore import (
@@ -81,16 +82,22 @@ class LaunchNotificationWidget(QWidget):
         self.move(QDesktopWidget().availableGeometry().center() - self.frameGeometry().center())
 
 class ValueSlider(QWidget):
-    valueChanged = pyqtSignal(int)
+    valueChanged = pyqtSignal(float)
 
-    def __init__(self, min_val, max_val, parent=None):
+    def __init__(self, min_val, max_val, step=0.1, parent=None):
         super().__init__(parent)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
         
+        self.scale_factor = 100 # To handle floats with 2 decimal places
+        self.min_val_scaled = int(min_val * self.scale_factor)
+        self.max_val_scaled = int(max_val * self.scale_factor)
+        self.step_scaled = int(step * self.scale_factor)
+
         self.slider = QSlider(Qt.Horizontal)
-        self.slider.setRange(min_val, max_val)
+        self.slider.setRange(self.min_val_scaled, self.max_val_scaled)
+        self.slider.setSingleStep(self.step_scaled)
         self.slider.setStyleSheet("""
             QSlider::groove:horizontal {
                 border: 1px solid #4f4a4b;
@@ -115,27 +122,29 @@ class ValueSlider(QWidget):
             }
         """)
 
-        self.spin_box = QSpinBox()
+        self.spin_box = QDoubleSpinBox() # Use QDoubleSpinBox for float values
         self.spin_box.setRange(min_val, max_val)
+        self.spin_box.setSingleStep(step)
+        self.spin_box.setDecimals(1) # Display one decimal place
         self.spin_box.setFixedWidth(60)
         self.spin_box.setAlignment(Qt.AlignCenter)
         self.spin_box.setStyleSheet("""
-            QSpinBox { background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 5px; color: #e0d6d1; font-weight: bold; }
-            QSpinBox::up-button, QSpinBox::down-button { width: 0px; border: none; background: transparent; }
+            QDoubleSpinBox { background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 5px; color: #e0d6d1; font-weight: bold; }
+            QDoubleSpinBox::up-button, QDoubleSpinBox::down-button { width: 0px; border: none; background: transparent; }
         """)
 
         layout.addWidget(self.slider)
         layout.addWidget(self.spin_box)
 
-        self.slider.valueChanged.connect(self.spin_box.setValue)
-        self.spin_box.valueChanged.connect(self.slider.setValue)
-        self.slider.valueChanged.connect(self.valueChanged.emit)
+        self.slider.valueChanged.connect(lambda val: self.spin_box.setValue(val / self.scale_factor))
+        self.spin_box.valueChanged.connect(lambda val: self.slider.setValue(int(val * self.scale_factor)))
+        self.slider.valueChanged.connect(lambda val: self.valueChanged.emit(val / self.scale_factor))
 
     def value(self):
-        return self.slider.value()
+        return self.slider.value() / self.scale_factor
 
     def setValue(self, value):
-        self.slider.setValue(value)
+        self.slider.setValue(int(value * self.scale_factor))
 
 class RadioButtonGroup(QWidget):
     stateChanged = pyqtSignal(bool)
@@ -285,32 +294,34 @@ class ExportIMAMenuDialog(QDialog):
         content_layout.addWidget(self.accounts_list)
         
         button_layout = QHBoxLayout()
-        export_button = QPushButton("Export")
-        export_button.setStyleSheet("""
-            QPushButton {
-                background-color: #c89f68; 
-                color: #2c2a2b; 
-                font-weight: bold; 
-                border-radius: 8px; 
-                padding: 8px; 
-                border: none;
-            }
-            QPushButton:hover { background-color: #d9b68b; }
-        """)
-        export_button.clicked.connect(self.accept)
+        button_layout.setSpacing(15)
+        button_layout.addStretch()
+
         cancel_button = QPushButton("Cancel")
         cancel_button.setStyleSheet("""
             QPushButton {
                 background-color: #4f4a4b; color: #e0d6d1; font-weight: bold; 
-                border-radius: 8px; padding: 8px; border: 1px solid #4f4a4b;
+                border-radius: 8px; padding: 10px 20px; border: 1px solid #4f4a4b;
             }
             QPushButton:hover { background-color: #5a5556; border: 1px solid #c89f68; }
             QPushButton:pressed { background-color: #454142; }
         """)
         cancel_button.clicked.connect(self.reject)
-        button_layout.addStretch()
         button_layout.addWidget(cancel_button)
+
+        export_button = QPushButton("Export")
+        export_button.setStyleSheet("""
+            QPushButton {
+                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 10px 20px;
+            }
+            QPushButton:hover {
+                background-color: #d9b68b; /* Brighter coffee color */
+            }
+        """)
+        export_button.clicked.connect(self.accept)
         button_layout.addWidget(export_button)
+        
+        button_layout.addStretch()
         content_layout.addLayout(button_layout)
     
     def showEvent(self, event):
@@ -384,12 +395,20 @@ class CustomMessageDialog(PopupDialog):
         self.content_layout.addWidget(message_label)
         
         ok_button = QPushButton("OK")
-        ok_button.setStyleSheet("background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 8px;")
+        ok_button.setStyleSheet("""
+            QPushButton {
+                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 10px 20px;
+            }
+            QPushButton:hover {
+                background-color: #d9b68b; /* Brighter coffee color */
+            }
+        """)
         ok_button.clicked.connect(self.accept)
         
         button_layout = QHBoxLayout()
         button_layout.addStretch()
         button_layout.addWidget(ok_button)
+        button_layout.addStretch()
         self.content_layout.addLayout(button_layout)
 
 class InputDialog(PopupDialog):
@@ -406,12 +425,20 @@ class InputDialog(PopupDialog):
         self.content_layout.addWidget(self.input_field)
         
         save_button = QPushButton("Save")
-        save_button.setStyleSheet("background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 8px;")
+        save_button.setStyleSheet("""
+            QPushButton {
+                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 10px 20px;
+            }
+            QPushButton:hover {
+                background-color: #d9b68b; /* Brighter coffee color */
+            }
+        """)
         save_button.clicked.connect(self.accept)
         
         button_layout = QHBoxLayout()
         button_layout.addStretch()
         button_layout.addWidget(save_button)
+        button_layout.addStretch()
         self.content_layout.addLayout(button_layout)
 
     def get_text(self):
@@ -477,24 +504,34 @@ class SaveAccountDialog(PopupDialog):
         self.content_layout.addWidget(self.game_combo)
 
         button_layout = QHBoxLayout()
-        save_button = QPushButton("Save")
-        save_button.setStyleSheet("background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 8px;")
-        save_button.clicked.connect(self.accept)
-        
+        button_layout.setSpacing(15)
+        button_layout.addStretch()
+
         cancel_button = QPushButton("Cancel")
         cancel_button.setStyleSheet("""
             QPushButton {
                 background-color: #4f4a4b; color: #e0d6d1; font-weight: bold; 
-                border-radius: 8px; padding: 8px; border: 1px solid #4f4a4b;
+                border-radius: 8px; padding: 10px 20px; border: 1px solid #4f4a4b;
             }
             QPushButton:hover { background-color: #5a5556; border: 1px solid #c89f68; }
             QPushButton:pressed { background-color: #454142; }
         """)
         cancel_button.clicked.connect(self.reject)
-
-        button_layout.addStretch()
         button_layout.addWidget(cancel_button)
+
+        save_button = QPushButton("Save")
+        save_button.setStyleSheet("""
+            QPushButton {
+                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 10px 20px;
+            }
+            QPushButton:hover {
+                background-color: #d9b68b; /* Brighter coffee color */
+            }
+        """)
+        save_button.clicked.connect(self.accept)
         button_layout.addWidget(save_button)
+        
+        button_layout.addStretch()
         self.content_layout.addLayout(button_layout)
 
     def get_details(self):
@@ -594,37 +631,34 @@ class OptionsDialog(PopupDialog):
         self.content_layout.addWidget(self.status_label)
 
         button_layout = QHBoxLayout()
-        button_layout.setSpacing(10)
+        button_layout.setSpacing(15)
+        button_layout.addStretch()
         
-        apply_button = QPushButton("Apply")
         close_button = QPushButton("Close")
-        
-        button_style = """
-            QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold; 
-                border-radius: 8px; padding: 10px; border: 1px solid #c89f68;
-            }
-            QPushButton:hover { background-color: #d9b68b; padding-bottom: 9px; border-width: 2px;}
-            QPushButton:pressed { background-color: #b88f58; padding-bottom: 10px; border-width: 1px;}
-        """
-        apply_button.setStyleSheet(button_style)
-        
-        close_button_style = """
+        close_button.setStyleSheet("""
             QPushButton {
                 background-color: #4f4a4b; color: #e0d6d1; font-weight: bold; 
-                border-radius: 8px; padding: 10px; border: 1px solid #4f4a4b;
+                border-radius: 8px; padding: 10px 20px; border: 1px solid #4f4a4b;
             }
             QPushButton:hover { background-color: #5a5556; border: 1px solid #c89f68; }
             QPushButton:pressed { background-color: #454142; }
-        """
-        close_button.setStyleSheet(close_button_style)
-
-        apply_button.clicked.connect(self.apply_settings)
+        """)
         close_button.clicked.connect(self.close)
-
-        button_layout.addStretch()
         button_layout.addWidget(close_button)
+
+        apply_button = QPushButton("Apply")
+        apply_button.setStyleSheet("""
+            QPushButton {
+                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 10px 20px;
+            }
+            QPushButton:hover {
+                background-color: #d9b68b; /* Brighter coffee color */
+            }
+        """)
+        apply_button.clicked.connect(self.apply_settings)
         button_layout.addWidget(apply_button)
+        
+        button_layout.addStretch()
         self.content_layout.addLayout(button_layout)
 
         self.load_current_settings()
@@ -851,8 +885,20 @@ class OptionsDialog(PopupDialog):
         form_layout.setRowWrapPolicy(QFormLayout.WrapAllRows)
 
         self.show_game_icons_toggle = RadioButtonGroup("On", "Off")
-        form_layout.addRow(QLabel("Show Game Icons:"), self.show_game_icons_toggle)
+        form_layout.addRow(QLabel("Show Game in UI:"), self.show_game_icons_toggle)
         
+        self.show_rank_icon_left_toggle = RadioButtonGroup("On", "Off")
+        form_layout.addRow(QLabel("Show Rank in UI:"), self.show_rank_icon_left_toggle)
+
+        self.use_rank_icons_toggle = RadioButtonGroup("On", "Off")
+        form_layout.addRow(QLabel("Use Rank icons instead of Account:"), self.use_rank_icons_toggle)
+
+        self.show_rank_tips_toggle = RadioButtonGroup("On", "Off")
+        form_layout.addRow(QLabel("Show Rank Tips:"), self.show_rank_tips_toggle)
+
+        self.tip_delay_slider = ValueSlider(0.0, 2.0, 0.1) # 0.0 to 2.0 seconds
+        form_layout.addRow(QLabel("Tip Delay (seconds):"), self.tip_delay_slider)
+
         layout.addLayout(form_layout)
         layout.addStretch()
         self.tab_widget.addTab(ui_tab, QIcon(os.path.join(os.path.dirname(__file__), "Assets", "Graphics.png")), "UI") # Using Graphics.png as a placeholder icon for now
@@ -937,7 +983,11 @@ class OptionsDialog(PopupDialog):
                 audio_settings_to_save[key] = "True" if control.get_state() else "False"
 
         ui_settings_to_save = {
-            "show_game_icons": self.show_game_icons_toggle.get_state()
+            "show_game_icons": self.show_game_icons_toggle.get_state(),
+            "show_rank_tips": self.show_rank_tips_toggle.get_state(),
+            "tip_delay": self.tip_delay_slider.value(),
+            "use_rank_icons": self.use_rank_icons_toggle.get_state(),
+            "show_rank_icon_left": self.show_rank_icon_left_toggle.get_state()
         }
 
         settings_to_save = {
@@ -989,14 +1039,18 @@ class OptionsDialog(PopupDialog):
                     control.set_state(is_true_default)
             else:
                 if key.startswith("EAresFloatSettingName::"):
-                    control.setValue(int(float(value_str) * 100))
+                    control.setValue(float(value_str))
                 elif key.startswith("EAresIntSettingName::"):
-                    control.setValue(int(value_str))
+                    control.setValue(int(float(value_str)))
                 elif key.startswith("EAresBoolSettingName::"):
                     control.set_state(value_str.lower() == 'true')
         
-        ui_settings = self.switcher.config.get("ui_settings", {})
+        ui_settings = self.switcher.get_ima_config().get("ui_settings", {})
         self.show_game_icons_toggle.set_state(ui_settings.get("show_game_icons", True))
+        self.show_rank_tips_toggle.set_state(ui_settings.get("show_rank_tips", False))
+        self.tip_delay_slider.setValue(ui_settings.get("tip_delay", 1.0))
+        self.use_rank_icons_toggle.set_state(ui_settings.get("use_rank_icons", False))
+        self.show_rank_icon_left_toggle.set_state(ui_settings.get("show_rank_icon_left", False))
         
         self.status_label.setText("Loaded saved settings.")
 
@@ -1119,15 +1173,60 @@ class GameSelectionDialog(PopupDialog):
         self.game_selected.emit(game_id)
         self.accept()
 
+class ConfirmDeleteDialog(PopupDialog):
+    def __init__(self, account_name, parent=None, title="Confirm Delete", message=None):
+        super().__init__(title, parent)
+        self.setFixedSize(350, 180)
+        
+        if message is None:
+            message = f"Delete '{account_name}'?"
+
+        message_label = QLabel(message)
+        message_label.setStyleSheet("color: #e0d6d1; font-size: 16px; font-weight: bold; text-align: center;")
+        message_label.setAlignment(Qt.AlignCenter)
+        self.content_layout.addWidget(message_label)
+        
+        button_layout = QHBoxLayout()
+        button_layout.setSpacing(15) # Increased spacing between buttons
+        button_layout.addStretch()
+
+        no_button = QPushButton("No")
+        no_button.setStyleSheet("""
+            QPushButton {
+                background-color: #4f4a4b; color: #e0d6d1; font-weight: bold; 
+                border-radius: 8px; padding: 10px 20px; border: 1px solid #4f4a4b; /* Increased padding */
+            }
+            QPushButton:hover { background-color: #5a5556; border: 1px solid #c89f68; }
+            QPushButton:pressed { background-color: #454142; }
+        """)
+        no_button.clicked.connect(self.reject)
+        button_layout.addWidget(no_button)
+
+        yes_button = QPushButton("Yes")
+        yes_button.setStyleSheet("""
+            QPushButton {
+                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 10px 20px;
+            }
+            QPushButton:hover {
+                background-color: #d9b68b; /* Brighter coffee color */
+            }
+        """)
+        yes_button.clicked.connect(self.accept)
+        button_layout.addWidget(yes_button)
+        
+        button_layout.addStretch()
+        self.content_layout.addLayout(button_layout)
+
 class AccountWidget(QWidget):
     selected = pyqtSignal(str)
     double_clicked = pyqtSignal(str)
     context_menu_requested = pyqtSignal(str, QPoint)
 
-    def __init__(self, account_name, icon, game, parent=None, is_add_button=False):
+    def __init__(self, account_name, icon, game, rank, parent=None, is_add_button=False):
         super().__init__(parent)
         self.account_name = account_name
         self.game = game
+        self.rank = rank
         self.setObjectName("AccountWidget")
         self.setFixedSize(120, 140)
         self.is_selected, self.is_hovered = False, False
@@ -1163,9 +1262,11 @@ class AccountWidget(QWidget):
         else:
             self.game_icon_label = QLabel(self)
             game_icon_size = 24
+            self.game_icon_label = QLabel(self)
+            game_icon_size = 24
             self.game_icon_label.setFixedSize(game_icon_size, game_icon_size)
             self.game_icon_label.setAlignment(Qt.AlignCenter)
-            self.game_icon_label.move(self.width() - game_icon_size - 10, self.height() - game_icon_size - 10)
+            self.game_icon_label.move(self.width() - game_icon_size - 10, 10) # Top right
             
             valorant_icon_path = os.path.join(os.path.dirname(__file__), "Assets", "valorant.png")
             lol_icon_path = os.path.join(os.path.dirname(__file__), "Assets", "lol.png")
@@ -1181,6 +1282,18 @@ class AccountWidget(QWidget):
             elif self.game == 'both' and os.path.exists(riot_icon_path):
                 pixmap = QPixmap(riot_icon_path).scaled(game_icon_size, game_icon_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 self.game_icon_label.setPixmap(pixmap)
+
+            self.rank_icon_label = QLabel(self)
+            self.rank_icon_label.setFixedSize(game_icon_size, game_icon_size)
+            self.rank_icon_label.setAlignment(Qt.AlignCenter)
+            self.rank_icon_label.move(10, 10) # Top left
+            self.rank_icon_label.setVisible(False) # Hide by default
+
+            if self.rank:
+                rank_icon_path = os.path.join(os.path.dirname(__file__), "Assets", f"{self.rank.lower().replace(" ", "_")}.png")
+                if os.path.exists(rank_icon_path):
+                    pixmap = QPixmap(rank_icon_path).scaled(game_icon_size, game_icon_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    self.rank_icon_label.setPixmap(pixmap)
 
     def init_animations(self):
         self.icon_anim = QPropertyAnimation(self.icon_label, b"geometry", duration=150, easingCurve=QEasingCurve.OutQuad)
@@ -1243,6 +1356,10 @@ class AccountWidget(QWidget):
     def set_show_game_icon(self, show): # New method
         if hasattr(self, 'game_icon_label'):
             self.game_icon_label.setVisible(show)
+
+    def set_show_rank_icon(self, show): # New method
+        if hasattr(self, 'rank_icon_label'):
+            self.rank_icon_label.setVisible(show and self.rank is not None)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -1320,7 +1437,7 @@ class InstallerDialog(PopupDialog):
             self.riot_path_warning_label.setText("")
         else:
             self.riot_path_edit.setText("")
-            self.riot_path_warning_label.setText("Riot Client not found. Please select 'RiotClientServices.exe'.")
+            self.riot_path_warning_label.setText("Please select 'RiotClientServices.exe'.")
 
         self.desktop_shortcut_checkbox = QCheckBox("Add shortcut to Desktop")
         self.desktop_shortcut_checkbox.setChecked(True)
@@ -1335,9 +1452,21 @@ class InstallerDialog(PopupDialog):
         self.content_layout.addStretch()
         
         install_button = QPushButton("Install")
-        install_button.setStyleSheet("background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 10px;")
+        install_button.setStyleSheet("""
+            QPushButton {
+                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 10px 20px;
+            }
+            QPushButton:hover {
+                background-color: #d9b68b; /* Brighter coffee color */
+            }
+        """)
         install_button.clicked.connect(self.accept);
-        self.content_layout.addWidget(install_button)
+        
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        button_layout.addWidget(install_button)
+        button_layout.addStretch()
+        self.content_layout.addLayout(button_layout)
 
     def select_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Installation Folder", self.path_edit.text())
