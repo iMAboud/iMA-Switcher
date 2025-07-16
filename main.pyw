@@ -585,8 +585,8 @@ class ModernValorantSwitcher(QMainWindow):
                 self.launch_notification = LaunchNotificationWidget(name, account_icon_pixmap, in_game_name=in_game_name, in_game_tag=in_game_tag, rank=rank, use_rank_icons=use_rank_icons)
                 self.launch_notification.show()
                 QApplication.processEvents()
-                self.refresh_accounts() # Refresh after successful switch
             except Exception as e: print(f"Could not create notification: {e}")
+        self.refresh_accounts() # Refresh after any switch attempt
 
     def _handle_game_selection(self, account_name, game):
         # This method is called when a game is selected from the GameSelectionDialog
@@ -633,6 +633,7 @@ def main():
             if selected_game:
                 result, _, _ = switcher.switch_account(account_name, selected_game=selected_game)
                 if result:
+                    switcher.fetch_and_update_rank_data(account_name)
                     notification = LaunchNotificationWidget(account_name, pixmap, in_game_name=in_game_name, in_game_tag=in_game_tag, rank=rank, use_rank_icons=use_rank_icons, standalone=True)
                     notification.show()
                     sys.exit(app.exec_())
@@ -643,6 +644,7 @@ def main():
         else:
             result, _, _ = switcher.switch_account(account_name)
             if result:
+                switcher.fetch_and_update_rank_data(account_name)
                 notification = LaunchNotificationWidget(account_name, pixmap, in_game_name=in_game_name, in_game_tag=in_game_tag, rank=rank, use_rank_icons=use_rank_icons, standalone=True)
                 notification.show()
                 sys.exit(app.exec_())

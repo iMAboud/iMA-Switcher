@@ -1049,7 +1049,7 @@ class OptionsDialog(PopupDialog):
             "show_name_tag": self.show_name_tag_toggle.get_state(),
             "show_current_rr": self.show_current_rr_toggle.get_state(),
             "show_last_game_rr": self.show_last_game_rr_toggle.get_state(),
-            "rank_check_region": self.rank_check_region_combo.currentText()
+            "rank_check_region": self.rank_check_region_combo.currentData()
         }
 
         settings_to_save = {
@@ -1134,8 +1134,12 @@ class OptionsDialog(PopupDialog):
         self.show_name_tag_toggle.set_state(ui_settings.get("show_name_tag", True))
         self.show_current_rr_toggle.set_state(ui_settings.get("show_current_rr", True))
         self.show_last_game_rr_toggle.set_state(ui_settings.get("show_last_game_rr", True))
-        # Set the combo box by data, not by text
-        index = self.rank_check_region_combo.findData(ui_settings.get("rank_check_region", "eu"))
+        # Set the combo box by data, but handle old text-based values for backward compatibility
+        saved_region = ui_settings.get("rank_check_region", "eu")
+        index = self.rank_check_region_combo.findData(saved_region) # Try finding by data (e.g., "eu")
+        if index == -1:
+            index = self.rank_check_region_combo.findText(saved_region) # Fallback to finding by text (e.g., "Europe (eu)")
+        
         if index != -1:
             self.rank_check_region_combo.setCurrentIndex(index)
         

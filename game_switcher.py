@@ -290,6 +290,9 @@ class GameSwitcher:
                 update_thread.daemon = True
                 update_thread.start()
             
+            # Fetch rank data after a successful switch
+            self.fetch_and_update_rank_data(account_name)
+
             return True, "Account switched successfully.", game
         except FileNotFoundError:
             return False, f"Riot Client not found at:\n{self.riot_games_config['ExeLocationDefault']}", None
@@ -757,14 +760,36 @@ class GameSwitcher:
         return all_success, None if all_success else "One or more files failed to update."
 
     def _parse_rank_data(self, html_content):
-        # Example: iMA#boud [Diamond 1] : 10 RR [-12]
-        match = re.search(r'\[(.*?)\]\s*:\s*(\d+)\s*RR\s*\[([+-]?\d+)\]', html_content)
-        if match:
-            rank = match.group(1).strip()
-            current_rr = int(match.group(2))
-            last_game_rr = int(match.group(3))
-            return rank, current_rr, last_game_rr
-        return None, None, None
+        # A more robust parsing method to handle variations in the source HTML
+        rank = None
+        current_rr = None
+        last_game_rr = None
+
+        # Try to find rank, which is typically in brackets. E.g., "[Diamond 1]"
+        rank_match = re.search(r'\[(.*?)\]', html_content)
+        if rank_match:
+            rank = rank_match.group(1).strip()
+        elif "unrated" in html_content.lower() or "unranked" in html_content.lower():
+            rank = 'Unranked'
+
+        # If a rank was found, look for RR values.
+        if rank:
+            # Look for current RR, e.g., ": 10 RR" or "55 RR"
+            rr_match = re.search(r':?\s*(\d+)\s*RR', html_content)
+            if rr_match:
+                current_rr = int(rr_match.group(1))
+            elif rank.lower() in ['unranked', 'unrated']:
+                current_rr = 0
+
+            # Look for last game's RR change, e.g., "[-12]" or "[+25]"
+            last_rr_match = re.search(r'\[([+-]?\d+)\]', html_content)
+            if last_rr_match:
+                last_game_rr = int(last_rr_match.group(1))
+            elif rank.lower() in ['unranked', 'unrated']:
+                last_game_rr = 0
+        
+        # Return the found data. Some values might be None if not found.
+        return rank, current_rr, last_game_rr
 
     def fetch_and_update_rank_data(self, account_name, on_update_callback=None):
         account_data = self.get_saved_accounts().get(account_name)
@@ -779,7 +804,24 @@ class GameSwitcher:
             return
 
         ui_settings = self.get_ima_config().get("ui_settings", {})
-        region = ui_settings.get("rank_check_region", "eu")
+        raw_region = ui_settings.get("rank_check_region", "eu")
+
+        # Map full region names to their two-letter codes for URL construction
+        region_map = {
+            "Europe (eu)": "eu",
+            "Asia Pacific (ap)": "ap",
+            "Brazil (br)": "br",
+            "Korea (kr)": "kr",
+            "Latin America (latam)": "latam",
+            "North America (na)": "na",
+            "eu": "eu",
+            "ap": "ap",
+            "br": "br",
+            "kr": "kr",
+            "latam": "latam",
+            "na": "na"
+        }
+        region = region_map.get(raw_region, "eu") # Default to 'eu' if not found
 
         url = f"https://valorantrank.chat/{region}/{in_game_name}/{in_game_tag}?mmrChange=true"
         print(f"Fetching rank for {account_name} from: {url}")
