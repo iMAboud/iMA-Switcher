@@ -1,0 +1,48 @@
+{
+    "output_dir": null,
+    "title": "Valorant",
+    "menu_icon_path": "",
+    "ordered_accounts": [],
+    "riot_client_exe_path": null,
+    "ui_settings": {
+        "show_game_icons": true,
+        "show_rank_tips": true,
+        "tip_delay": 1.0,
+        "use_rank_icons": true,
+        "show_rank_icon_left": true,
+        "show_name_tag": false
+    },
+    "graphics_settings": {
+        "display_mode": "Default",
+        "quality": {
+            "sg.ViewDistanceQuality": 0,
+            "sg.AntiAliasingQuality": 0,
+            "sg.ShadowQuality": 0,
+            "sg.PostProcessQuality": 0,
+            "sg.TextureQuality": 0,
+            "sg.EffectsQuality": 0,
+            "sg.FoliageQuality": 0,
+            "sg.ShadingQuality": 0
+        },
+        "riot_settings": {
+            "EAresIntSettingName::MaterialQuality": "0",
+            "EAresIntSettingName::TextureQuality": "0",
+            "EAresIntSettingName::DetailQuality": "High",
+            "EAresIntSettingName::UIQuality": "0",
+            "EAresIntSettingName::NvidiaReflexLowLatencySetting": "2"
+        },
+        "audio_settings": {
+            "EAresFloatSettingName::OverallVolume": "0.800000",
+            "EAresFloatSettingName::SoundEffectsVolume": "0.805900",
+            "EAresFloatSettingName::VoiceOverVolume": "0.478000",
+            "EAresFloatSettingName::VideoVolume": "0.128000",
+            "EAresFloatSettingName::AllMusicOverallVolume": "0.124000",
+            "EAresFloatSettingName::MenuAndLobbyMusicVolume": "0.118000",
+            "EAresFloatSettingName::CharacterSelectMusicVolume": "0.121000",
+            "EAresIntSettingName::MicVolume": "100.0",
+            "EAresIntSettingName::VoiceVolume": "100.0",
+            "EAresBoolSettingName::PushToTalkEnabled": "True",
+            "EAresBoolSettingName::EnableHRTF": "False"
+        }
+    }
+}

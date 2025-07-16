@@ -4,6 +4,8 @@ import math
 import ctypes
 import shutil 
 import subprocess 
+import time
+import threading 
 
 if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
     sys.path.append(sys._MEIPASS)
@@ -62,12 +64,13 @@ except ImportError:
 def generate_icon(name, account_icon_path=None, rank=None, use_rank_icons=False, base_dir=None):
     """Generates a QIcon based on account settings, rank, or a default one."""
     if base_dir is None:
-        base_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
+        base_dir = sys._MEIPASS if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
 
     icon_path_to_use = None
 
     if use_rank_icons and rank:
-        rank_icon_path = os.path.join(base_dir, "Assets", f"{rank.lower().replace(" ", "_")}.png")
+        rank_icon_name = rank.lower().replace(" ", "_") if rank.lower() != 'unranked' else 'unranked'
+        rank_icon_path = os.path.join(base_dir, "Assets", f"{rank_icon_name}.png")
         if os.path.exists(rank_icon_path):
             icon_path_to_use = rank_icon_path
 
@@ -120,10 +123,19 @@ def run_installer():
             destination_exe_path = os.path.join(install_path, "iMA Switcher.exe")
             shutil.copy2(current_exe, destination_exe_path)
 
+            # Copy Assets folder to the permanent install location
+            source_assets_path = os.path.join(sys._MEIPASS if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__)), "Assets")
+            destination_assets_path = os.path.join(install_path, "Assets")
+            if os.path.exists(source_assets_path):
+                shutil.copytree(source_assets_path, destination_assets_path, dirs_exist_ok=True)
+
             riot_games_exe_path = dialog.get_riot_games_path()
             switcher_instance = GameSwitcher(base_directory=install_path) 
             if riot_games_exe_path:
                 switcher_instance.set_riot_client_paths(riot_games_exe_path)
+            
+            # Save the permanent install path to config.json
+            switcher_instance.set_ima_config({"app_install_path": install_path})
 
             if dialog.should_add_desktop_shortcut():
                 desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
@@ -150,13 +162,16 @@ def run_installer():
 
 
 class ModernValorantSwitcher(QMainWindow):
+    account_updated = pyqtSignal(str) # New signal
+
     def __init__(self):
         super().__init__()
         self.setWindowFlags(Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
 
         self.switcher = GameSwitcher()
-        self.switcher._ensure_initialized() 
+        self.switcher._ensure_initialized()
+        # self.switcher.start_rank_update_scheduler() # Removed this line 
         if not self.switcher.is_admin():
             QMessageBox.critical(
                 self,
@@ -172,6 +187,12 @@ class ModernValorantSwitcher(QMainWindow):
         self.init_ui()
         self.load_accounts()
         self.center_on_screen()
+
+        # New: Connect signal and start scheduler
+        self.account_updated.connect(self.on_account_updated)
+        self.switcher.start_rank_update_scheduler(on_update_callback=self.account_updated.emit)
+        self.initial_rank_fetch()
+
 
     def init_ui(self):
         self.setWindowTitle("iMA Switcher")
@@ -193,6 +214,7 @@ class ModernValorantSwitcher(QMainWindow):
         main_layout.setSpacing(0)
         
         self.title_bar = CustomTitleBar("iMA Switcher", self)
+        self.title_bar.refresh_button.clicked.connect(self.refresh_accounts)
         main_layout.addWidget(self.title_bar)
         
         content_layout = QVBoxLayout()
@@ -258,31 +280,30 @@ class ModernValorantSwitcher(QMainWindow):
 
         ordered_accounts = self.switcher.get_ima_config().get("ordered_accounts", [])
         account_names_in_order = [name for name in ordered_accounts if name in accounts]
+        
+        # Add remaining accounts that are not in the ordered list
+        for name in sorted(accounts.keys()):
+            if name not in account_names_in_order:
+                account_names_in_order.append(name)
 
         show_game_icons = self.switcher.get_ima_config().get("ui_settings", {}).get("show_game_icons", True)
         use_rank_icons = self.switcher.get_ima_config().get("ui_settings", {}).get("use_rank_icons", False)
+        show_name_tag = self.switcher.get_ima_config().get("ui_settings", {}).get("show_name_tag", False)
 
+        # A single loop to create all account widgets
         for name in account_names_in_order:
-            icon_path, game, rank = accounts[name]
+            icon_path, game, rank, in_game_name, in_game_tag, current_rr, last_game_rr = accounts[name]
             icon = generate_icon(name, icon_path, rank, use_rank_icons, self.switcher.base_dir)
-            widget = AccountWidget(name, icon, game, rank, self.grid_container)
+            widget = AccountWidget(name, icon, game, rank, in_game_name, in_game_tag, current_rr, last_game_rr, self.grid_container)
             widget.selected.connect(self.on_account_selected)
             widget.double_clicked.connect(self.on_account_double_clicked)
             widget.context_menu_requested.connect(self.show_context_menu)
             widget.set_show_game_icon(show_game_icons)
             widget.set_show_rank_icon(self.switcher.get_ima_config().get("ui_settings", {}).get("show_rank_icon_left", False))
+            widget.set_show_name_tag(show_name_tag)
+            widget.set_show_current_rr(self.switcher.get_ima_config().get("ui_settings", {}).get("show_current_rr", True))
+            widget.set_show_last_game_rr(self.switcher.get_ima_config().get("ui_settings", {}).get("show_last_game_rr", True))
             self.account_widgets[name] = widget
-
-        for name, (icon_path, game, rank) in accounts.items():
-            if name not in self.account_widgets:
-                icon = generate_icon(name, icon_path, rank, use_rank_icons, self.switcher.base_dir)
-                widget = AccountWidget(name, icon, game, rank, self.grid_container)
-                widget.selected.connect(self.on_account_selected)
-                widget.double_clicked.connect(self.on_account_double_clicked)
-                widget.context_menu_requested.connect(self.show_context_menu)
-                widget.set_show_game_icon(show_game_icons)
-                widget.set_show_rank_icon(self.switcher.get_ima_config().get("ui_settings", {}).get("show_rank_icon_left", False))
-                self.account_widgets[name] = widget
 
         self.rearrange_grid()
         self.update_window_size()
@@ -299,24 +320,33 @@ class ModernValorantSwitcher(QMainWindow):
 
     def rearrange_grid(self):
         if not self.account_widgets: return
+
         num_columns = 4
         
-        ordered_names = list(self.switcher.get_ima_config().get("ordered_accounts", []))
-        
-        current_account_names = set(self.account_widgets.keys())
-        for name in sorted(list(current_account_names - set(ordered_names))):
-            ordered_names.append(name)
-
-        for i, name in enumerate(ordered_names):
+        # The account_widgets dictionary is already ordered correctly from load_accounts
+        for i, name in enumerate(self.account_widgets.keys()):
             widget = self.account_widgets.get(name)
             if widget: self.grid_layout.addWidget(widget, i // num_columns, i % num_columns)
 
     def update_window_size(self):
         num_accounts = len(self.account_widgets)
-        COLS, W_W, W_H, S, H_M, V_M, T_B, B_B = 4, 120, 140, 10, 20, 20, 40, 60
-        if num_accounts == 0: self.setFixedSize(300, 200); return
+        COLS = 4
+        if num_accounts == 0:
+            self.setFixedSize(300, 200)
+            return
+
+        # Get the height of a single account widget (which can vary)
+        sample_widget = next(iter(self.account_widgets.values()), None)
+        if sample_widget:
+            W_H = sample_widget.height() # Use actual widget height
+        else:
+            W_H = 140 # Default if no accounts
+
+        W_W, S, H_M, V_M, T_B, B_B = 120, 10, 20, 20, 40, 60
+
         num_rows = max(1, math.ceil(num_accounts / COLS))
-        display_rows = min(num_rows, 4)
+        display_rows = min(num_rows, 4) # Max 4 rows visible without scrolling
+
         grid_width = (COLS * W_W) + ((COLS - 1) * S) + H_M
         grid_height = (display_rows * W_H) + ((display_rows - 1) * S) + V_M
         self.setFixedSize(grid_width + 20, grid_height + T_B + B_B)
@@ -344,6 +374,23 @@ class ModernValorantSwitcher(QMainWindow):
 
     def center_on_screen(self):
         self.move(QDesktopWidget().availableGeometry().center() - self.frameGeometry().center())
+
+    def closeEvent(self, event):
+        # Ensure the iMA menu script is updated with current settings on close
+        ima_config = self.switcher.get_ima_config()
+        if ima_config.get("output_dir"):
+            try:
+                self.switcher.generate_ima_menu_script(
+                    output_dir=ima_config["output_dir"],
+                    title=ima_config["title"],
+                    ordered_accounts=ima_config["ordered_accounts"],
+                    menu_icon_path=ima_config.get("menu_icon_path", ""),
+                    save_config=False  # Already saved by OptionsDialog or other actions
+                )
+                print("iMA menu script updated on application close.")
+            except Exception as e:
+                print(f"Error updating iMA menu script on close: {e}")
+        event.accept()
     
     def create_gear_icon(self, color):
         from PyQt5.QtCore import QRectF
@@ -375,6 +422,32 @@ class ModernValorantSwitcher(QMainWindow):
         self.on_account_selected(name)
         self.switch_to_selected_account()
 
+    def on_account_updated(self, account_name):
+        """
+        Slot to handle updates for a single account widget.
+        """
+        print(f"UI received update for: {account_name}")
+        self.load_accounts()
+        self.status_label.setText(f"Updated: {account_name}")
+
+    def initial_rank_fetch(self):
+        """
+        Fetches ranks for all accounts in separate threads after UI is shown.
+        """
+        self.refresh_accounts()
+
+    def refresh_accounts(self):
+        """        Fetches ranks for all accounts and updates the UI.
+        """
+        self.status_label.setText("Refreshing ranks...")
+        accounts = self.switcher.get_saved_accounts()
+        for name in accounts:
+            threading.Thread(
+                target=self.switcher.fetch_and_update_rank_data,
+                args=(name, self.account_updated.emit),
+                daemon=True
+            ).start()
+
     def show_context_menu(self, name, pos):
         self.on_account_selected(name)
         menu = QMenu(self)
@@ -392,6 +465,14 @@ class ModernValorantSwitcher(QMainWindow):
         
         set_rank_menu = QMenu("Set Rank", self)
         set_rank_menu.setIcon(QIcon(os.path.join(os.path.dirname(__file__), "Assets", "radiant.png"))) # Set Radiant icon for the main "Set Rank" menu
+
+        # Add Unranked as a direct option
+        unranked_icon_path = os.path.join(os.path.dirname(__file__), "Assets", "unranked.png")
+        unranked_action = QAction("Unranked", self)
+        if os.path.exists(unranked_icon_path):
+            unranked_action.setIcon(QIcon(unranked_icon_path))
+        unranked_action.triggered.connect(lambda checked, r="Unranked": self.context_handler.set_rank(r))
+        set_rank_menu.addAction(unranked_action)
 
         ranks_with_tiers = ["Iron", "Bronze", "Silver", "Gold", "Platinum", "Diamond", "Ascendant", "Immortal"]
         for rank_name in ranks_with_tiers:
@@ -420,10 +501,7 @@ class ModernValorantSwitcher(QMainWindow):
         radiant_action.triggered.connect(lambda checked, r="Radiant": self.context_handler.set_rank(r))
         set_rank_menu.addAction(radiant_action)
 
-        # Add "Clear Rank" option
-        clear_rank_action = QAction("Clear Rank", self)
-        clear_rank_action.triggered.connect(lambda: self.context_handler.set_rank(None))
-        set_rank_menu.addAction(clear_rank_action)
+        
 
         menu.addMenu(set_rank_menu)
         
@@ -473,7 +551,7 @@ class ModernValorantSwitcher(QMainWindow):
 
         # Get account data to pass to GameSelectionDialog if needed
         account_data = self.switcher.get_saved_accounts().get(name)
-        account_icon_path, _, rank = account_data if account_data else (None, None, None)
+        account_icon_path, game, rank, in_game_name, in_game_tag, current_rr, last_game_rr = account_data if account_data else (None, None, None, None, None, None, None)
         
         ui_settings = self.switcher.get_ima_config().get("ui_settings", {})
         use_rank_icons = ui_settings.get("use_rank_icons", False)
@@ -488,7 +566,7 @@ class ModernValorantSwitcher(QMainWindow):
 
         if game_type_or_selected_game == "both":
             # If game is 'both', show selection dialog
-            self.launch_notification = LaunchNotificationWidget(name, account_icon_pixmap, standalone=False) # Show temporary notification
+            self.launch_notification = LaunchNotificationWidget(name, account_icon_pixmap, in_game_name=in_game_name, in_game_tag=in_game_tag, rank=rank, use_rank_icons=use_rank_icons, standalone=False) # Show temporary notification
             self.launch_notification.show()
             QApplication.processEvents()
 
@@ -504,9 +582,10 @@ class ModernValorantSwitcher(QMainWindow):
         else:
             # If a game was directly launched (not 'both'), show the 6-second notification
             try:
-                self.launch_notification = LaunchNotificationWidget(name, account_icon_pixmap)
+                self.launch_notification = LaunchNotificationWidget(name, account_icon_pixmap, in_game_name=in_game_name, in_game_tag=in_game_tag, rank=rank, use_rank_icons=use_rank_icons)
                 self.launch_notification.show()
                 QApplication.processEvents()
+                self.refresh_accounts() # Refresh after successful switch
             except Exception as e: print(f"Could not create notification: {e}")
 
     def _handle_game_selection(self, account_name, game):
@@ -538,9 +617,11 @@ def main():
         
         app = QApplication(sys.argv)
         accounts_data = switcher.get_saved_accounts()
-        icon_path, game_type, rank = accounts_data.get(account_name, (None, None, None))
+        account_icon_path, game_type, rank, in_game_name, in_game_tag, current_rr, last_game_rr = accounts_data.get(account_name, (None, None, None, None, None, None, None))
         
-        game_icon = generate_icon(account_name, icon_path, rank, switcher.base_dir)
+        ui_settings = switcher.get_ima_config().get("ui_settings", {})
+        use_rank_icons = ui_settings.get("use_rank_icons", False)
+        game_icon = generate_icon(account_name, account_icon_path, rank, use_rank_icons, switcher.base_dir)
         pixmap = game_icon.pixmap(game_icon.actualSize(QSize(180, 180)))
 
         if game_type == "both":
@@ -552,7 +633,7 @@ def main():
             if selected_game:
                 result, _, _ = switcher.switch_account(account_name, selected_game=selected_game)
                 if result:
-                    notification = LaunchNotificationWidget(account_name, pixmap, standalone=True)
+                    notification = LaunchNotificationWidget(account_name, pixmap, in_game_name=in_game_name, in_game_tag=in_game_tag, rank=rank, use_rank_icons=use_rank_icons, standalone=True)
                     notification.show()
                     sys.exit(app.exec_())
                 else:
@@ -562,7 +643,7 @@ def main():
         else:
             result, _, _ = switcher.switch_account(account_name)
             if result:
-                notification = LaunchNotificationWidget(account_name, pixmap, standalone=True)
+                notification = LaunchNotificationWidget(account_name, pixmap, in_game_name=in_game_name, in_game_tag=in_game_tag, rank=rank, use_rank_icons=use_rank_icons, standalone=True)
                 notification.show()
                 sys.exit(app.exec_())
             else:

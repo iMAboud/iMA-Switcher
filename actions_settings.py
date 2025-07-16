@@ -24,15 +24,15 @@ class SettingsActions:
     def save_current_account(self):
         dialog = SaveAccountDialog(self.parent)
         if dialog.exec_() == QDialog.Accepted:
-            name, game = dialog.get_details()
+            name, game, in_game_name, in_game_tag = dialog.get_details()
             if not name:
                 self.parent.status_label.setText("Account name cannot be empty.")
                 return
             if name in self.switcher.get_saved_accounts():
                 QMessageBox.warning(self.parent, "Account Exists", f'An account named "{name}" already exists.')
                 return
-            self.switcher.save_account(name, game)
-            self.parent.status_label.setText(f"Account '{name}' saved for {game.capitalize()}.")
+            self.switcher.save_account(name, game, in_game_name=in_game_name, in_game_tag=in_game_tag)
+            self.parent.status_label.setText(f"Account '{name}' saved for {game.capitalize()}. ")
             self.parent.load_accounts()
 
     def backup_profiles(self):
