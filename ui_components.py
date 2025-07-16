@@ -1049,11 +1049,7 @@ class OptionsDialog(PopupDialog):
             "show_name_tag": self.show_name_tag_toggle.get_state(),
             "show_current_rr": self.show_current_rr_toggle.get_state(),
             "show_last_game_rr": self.show_last_game_rr_toggle.get_state(),
-<<<<<<< HEAD
             "rank_check_region": self.rank_check_region_combo.currentData()
-=======
-            "rank_check_region": self.rank_check_region_combo.currentText()
->>>>>>> 21ca92033583db9dcd673ff3efd6d34f3597bb6d
         }
 
         settings_to_save = {
