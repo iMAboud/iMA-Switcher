@@ -42,11 +42,11 @@ from PyQt5.QtCore import (
 
 
 class LaunchNotificationWidget(QWidget):
-    def __init__(self, account_name, icon_pixmap, parent=None, standalone=False):
+    def __init__(self, account_name, icon_pixmap, in_game_name=None, in_game_tag=None, rank=None, use_rank_icons=False, parent=None, standalone=False):
         super().__init__(parent)
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool | Qt.CustomizeWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground); self.setAttribute(Qt.WA_DeleteOnClose)
-        self.setup_ui(account_name, icon_pixmap)
+        self.setup_ui(account_name, icon_pixmap, in_game_name, in_game_tag, rank, use_rank_icons)
         self.center_on_screen()
         if standalone:
             QTimer.singleShot(6000, self.close_and_exit)
@@ -60,7 +60,7 @@ class LaunchNotificationWidget(QWidget):
         if app_instance:
             app_instance.quit()
 
-    def setup_ui(self, name, pixmap):
+    def setup_ui(self, name, pixmap, in_game_name, in_game_tag, rank, use_rank_icons):
         self.setFixedSize(300, 350)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -73,10 +73,34 @@ class LaunchNotificationWidget(QWidget):
         icon_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(icon_label); layout.addSpacing(15)
         
+        name_layout = QHBoxLayout()
+        name_layout.setAlignment(Qt.AlignCenter)
+
+        # Rank icon next to name
+        if rank and not use_rank_icons: # Only show if not already using rank icon as main icon
+            rank_icon_path = os.path.join(os.path.dirname(__file__), "Assets", f"{rank.lower().replace(" ", "_")}.png")
+            if os.path.exists(rank_icon_path):
+                rank_pixmap = QPixmap(rank_icon_path).scaled(24, 24, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                rank_label = QLabel(self)
+                rank_label.setPixmap(rank_pixmap)
+                name_layout.addWidget(rank_label)
+
         name_label = QLabel(name, self)
         name_label.setAlignment(Qt.AlignCenter)
         name_label.setStyleSheet("color: white; font-size: 28px; font-weight: bold; text-align: center;")
-        layout.addWidget(name_label)
+        name_layout.addWidget(name_label)
+        layout.addLayout(name_layout)
+
+        if in_game_name and in_game_tag:
+            in_game_label = QLabel(f"{in_game_name}#{in_game_tag}", self)
+            in_game_label.setAlignment(Qt.AlignCenter)
+            in_game_label.setStyleSheet("color: #b0a8a8; font-size: 16px; text-align: center;")
+            layout.addWidget(in_game_label)
+        elif in_game_name:
+            in_game_label = QLabel(in_game_name, self)
+            in_game_label.setAlignment(Qt.AlignCenter)
+            in_game_label.setStyleSheet("color: #b0a8a8; font-size: 16px; text-align: center;")
+            layout.addWidget(in_game_label)
 
     def center_on_screen(self):
         self.move(QDesktopWidget().availableGeometry().center() - self.frameGeometry().center())
@@ -412,10 +436,12 @@ class CustomMessageDialog(PopupDialog):
         self.content_layout.addLayout(button_layout)
 
 class InputDialog(PopupDialog):
-    def __init__(self, title, prompt, default_text="", parent=None):
+    def __init__(self, title, prompt, default_text="", in_game_name_default="", in_game_tag_default="", parent=None):
         super().__init__(title, parent)
-        self.setFixedSize(350, 180)
         
+        self.in_game_name_edit = None
+        self.in_game_tag_edit = None
+
         prompt_label = QLabel(prompt)
         prompt_label.setStyleSheet("color: #e0d6d1;")
         self.content_layout.addWidget(prompt_label)
@@ -423,6 +449,28 @@ class InputDialog(PopupDialog):
         self.input_field = QLineEdit(default_text)
         self.input_field.setStyleSheet("background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 10px; color: #e0d6d1;")
         self.content_layout.addWidget(self.input_field)
+
+        if in_game_name_default is not None or in_game_tag_default is not None:
+            self.content_layout.addWidget(QLabel("In-game Name and Tag (optional):"))
+            in_game_name_tag_layout = QHBoxLayout()
+            in_game_name_tag_layout.setContentsMargins(0,0,0,0)
+            in_game_name_tag_layout.setSpacing(5)
+
+            self.in_game_name_edit = QLineEdit(in_game_name_default)
+            self.in_game_name_edit.setPlaceholderText("In-game Name")
+            self.in_game_name_edit.setStyleSheet("background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 10px; color: #e0d6d1;")
+            in_game_name_tag_layout.addWidget(self.in_game_name_edit)
+            
+            in_game_name_tag_layout.addWidget(QLabel("#"))
+
+            self.in_game_tag_edit = QLineEdit(in_game_tag_default)
+            self.in_game_tag_edit.setPlaceholderText("Tag")
+            self.in_game_tag_edit.setStyleSheet("background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 10px; color: #e0d6d1;")
+            in_game_name_tag_layout.addWidget(self.in_game_tag_edit)
+            self.content_layout.addLayout(in_game_name_tag_layout)
+            self.setFixedSize(350, 250) # Adjust size for two inputs
+        else:
+            self.setFixedSize(350, 180) # Original size for one input
         
         save_button = QPushButton("Save")
         save_button.setStyleSheet("""
@@ -442,12 +490,14 @@ class InputDialog(PopupDialog):
         self.content_layout.addLayout(button_layout)
 
     def get_text(self):
+        if self.in_game_name_edit and self.in_game_tag_edit:
+            return self.input_field.text().strip(), self.in_game_name_edit.text().strip(), self.in_game_tag_edit.text().strip()
         return self.input_field.text().strip()
 
 class SaveAccountDialog(PopupDialog):
     def __init__(self, parent=None):
         super().__init__("Save Account", parent)
-        self.setFixedSize(380, 240)
+        self.setFixedSize(380, 300)
 
         name_label = QLabel("Enter a name for the current account:")
         name_label.setStyleSheet("color: #e0d6d1; font-size: 16px; font-weight: bold; text-align: center;")
@@ -457,6 +507,24 @@ class SaveAccountDialog(PopupDialog):
         self.name_edit = QLineEdit()
         self.name_edit.setStyleSheet("background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 10px; color: #e0d6d1;")
         self.content_layout.addWidget(self.name_edit)
+
+        self.content_layout.addWidget(QLabel("Enter in-game name and tag (optional):"))
+        in_game_name_tag_layout = QHBoxLayout()
+        in_game_name_tag_layout.setContentsMargins(0,0,0,0)
+        in_game_name_tag_layout.setSpacing(5)
+
+        self.in_game_name_edit = QLineEdit()
+        self.in_game_name_edit.setPlaceholderText("In-game Name")
+        self.in_game_name_edit.setStyleSheet("background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 10px; color: #e0d6d1;")
+        in_game_name_tag_layout.addWidget(self.in_game_name_edit)
+        
+        in_game_name_tag_layout.addWidget(QLabel("#"))
+
+        self.in_game_tag_edit = QLineEdit()
+        self.in_game_tag_edit.setPlaceholderText("Tag")
+        self.in_game_tag_edit.setStyleSheet("background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 10px; color: #e0d6d1;")
+        in_game_name_tag_layout.addWidget(self.in_game_tag_edit)
+        self.content_layout.addLayout(in_game_name_tag_layout)
 
         self.content_layout.addWidget(QLabel("Select Game:"))
         self.game_combo = QComboBox()
@@ -471,7 +539,7 @@ class SaveAccountDialog(PopupDialog):
             }
             QComboBox:hover { border: 1px solid #d9b68b; }
             QComboBox::drop-down { border: none; }
-            QComboBox::down-arrow { image: none; }
+            QComboBox::down-arrow { image: none; /* Can add a custom arrow icon here */ }
             QComboBox QAbstractItemView { 
                 background-color: #3a3637; 
                 border: 1px solid #c89f68; 
@@ -535,7 +603,7 @@ class SaveAccountDialog(PopupDialog):
         self.content_layout.addLayout(button_layout)
 
     def get_details(self):
-        return self.name_edit.text().strip(), self.game_combo.currentData()
+        return self.name_edit.text().strip(), self.game_combo.currentData(), self.in_game_name_edit.text().strip(), self.in_game_tag_edit.text().strip()
 
 class SettingsDialog(PopupDialog):
     def __init__(self, actions, parent):
@@ -592,13 +660,13 @@ class OptionsDialog(PopupDialog):
 
         self.main_widget.setStyleSheet("""
             #popup_widget { background-color: #2c2a2b; border-radius: 15px; border: 1px solid #4f4a4b; }
-            QLabel { color: #FFFFFF; font-weight: normal; }
-            QGroupBox { 
-                color: #c89f68; 
+            QLabel { color: #e0d6d1; font-weight: normal; }
+            QGroupBox {
+                color: #FFFFFF; /* This is for the content of the groupbox, not the title */
                 font-size: 14px;
-                font-weight: bold; 
-                border: 1px solid #4f4a4b; 
-                border-radius: 8px; 
+                font-weight: bold;
+                border: 1px solid #c89f68; /* Coffee colored border */
+                border-radius: 8px;
                 margin-top: 10px;
             }
             QGroupBox::title {
@@ -606,6 +674,7 @@ class OptionsDialog(PopupDialog):
                 subcontrol-position: top left;
                 padding: 0 10px;
                 left: 10px;
+                color: #FFFFFF; /* Explicitly white for the title */
             }
         """)
 
@@ -621,10 +690,10 @@ class OptionsDialog(PopupDialog):
         """)
         self.content_layout.addWidget(self.tab_widget)
 
+        self.setup_ui_tab()
         self.setup_graphics_tab()
         self.setup_audio_tab()
         self.setup_advanced_tab()
-        self.setup_ui_tab()
 
         self.status_label = QLabel("")
         self.status_label.setStyleSheet("color: #e0d6d1; font-size: 12px; padding-top: 5px;")
@@ -820,133 +889,122 @@ class OptionsDialog(PopupDialog):
         layout.addStretch()
         self.tab_widget.addTab(advanced_tab, QIcon(os.path.join(os.path.dirname(__file__), "Assets", "Advanced.png")), "Advanced")
 
-    def setup_advanced_tab(self):
-        advanced_tab = QWidget()
-        layout = QVBoxLayout(advanced_tab)
-        layout.setContentsMargins(20, 15, 20, 15)
-        layout.setSpacing(10)
-        
-        preset_buttons_layout = QHBoxLayout()
-        recommended_button = QPushButton("Recommended (Low)")
-        default_button = QPushButton("Default (High)")
-        
-        preset_style = """
-            QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold; 
-                border-radius: 8px; padding: 8px; border: 1px solid #c89f68;
-            }
-            QPushButton:hover { background-color: #d9b68b; }
-            QPushButton:pressed { background-color: #b88f58; }
-        """
-        recommended_button.setStyleSheet(preset_style)
-        default_button.setStyleSheet(preset_style)
-        
-        recommended_button.clicked.connect(lambda: self.set_all_qualities(0))
-        default_button.clicked.connect(lambda: self.set_all_qualities(3))
-
-        preset_buttons_layout.addWidget(recommended_button)
-        preset_buttons_layout.addWidget(default_button)
-        layout.addLayout(preset_buttons_layout)
-        layout.addSpacing(15)
-
-        grid_layout = QGridLayout()
-        grid_layout.setSpacing(10)
-        
-        items = list(self.quality_settings_map.items())
-        num_rows = (len(items) + 1) // 2 
-
-        for i, (key, display_name) in enumerate(items):
-            row, col = i % num_rows, (i // num_rows) * 2
-            
-            label = QLabel(display_name + ":")
-            grid_layout.addWidget(label, row, col)
-            
-            spin_box = QSpinBox()
-            spin_box.setRange(0, 3)
-            spin_box.setStyleSheet("QSpinBox { background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 5px; color: #e0d6d1; }")
-            spin_box.setFixedWidth(60)
-            self.spin_boxes[key] = spin_box
-            grid_layout.addWidget(spin_box, row, col + 1, Qt.AlignLeft)
-
-        layout.addLayout(grid_layout)
-        layout.addStretch()
-        self.tab_widget.addTab(advanced_tab, QIcon(os.path.join(os.path.dirname(__file__), "Assets", "Advanced.png")), "Advanced")
-
     def setup_ui_tab(self):
         ui_tab = QWidget()
-        layout = QVBoxLayout(ui_tab)
-        layout.setContentsMargins(15, 15, 15, 15)
-        layout.setSpacing(15)
-        layout.setAlignment(Qt.AlignTop)
+        main_layout = QVBoxLayout(ui_tab)
+        main_layout.setContentsMargins(15, 15, 15, 15)
+        main_layout.setSpacing(15)
+        main_layout.setAlignment(Qt.AlignTop)
 
-        form_layout = QFormLayout()
-        form_layout.setSpacing(10)
-        form_layout.setLabelAlignment(Qt.AlignLeft)
-        form_layout.setRowWrapPolicy(QFormLayout.WrapAllRows)
+        # Top Group (Show in UI)
+        top_group = QGroupBox("Show in UI")
+        top_group.setStyleSheet("""
+            QGroupBox {
+                color: #FFFFFF;
+                font-size: 14px;
+                font-weight: bold;
+                border: 1px solid #c89f68; /* Coffee colored border */
+                border-radius: 8px;
+                margin-top: 10px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                padding: 0 10px;
+                left: 10px;
+                color: #FFFFFF; /* Explicitly white for the title */
+            }
+        """)
+        top_layout = QGridLayout(top_group)
+        top_layout.setSpacing(10)
 
         self.show_game_icons_toggle = RadioButtonGroup("On", "Off")
-        form_layout.addRow(QLabel("Show Game in UI:"), self.show_game_icons_toggle)
-        
-        self.show_rank_icon_left_toggle = RadioButtonGroup("On", "Off")
-        form_layout.addRow(QLabel("Show Rank in UI:"), self.show_rank_icon_left_toggle)
+        top_layout.addWidget(QLabel("Game Icon:"), 0, 0)
+        top_layout.addWidget(self.show_game_icons_toggle, 0, 1)
 
+        self.show_rank_icon_left_toggle = RadioButtonGroup("On", "Off")
+        top_layout.addWidget(QLabel("Rank Icon:"), 1, 0)
+        top_layout.addWidget(self.show_rank_icon_left_toggle, 1, 1)
+
+        self.show_name_tag_toggle = RadioButtonGroup("On", "Off")
+        top_layout.addWidget(QLabel("Name#Tag:"), 2, 0)
+        top_layout.addWidget(self.show_name_tag_toggle, 2, 1)
+
+        self.show_current_rr_toggle = RadioButtonGroup("On", "Off")
+        top_layout.addWidget(QLabel("Current RR:"), 3, 0)
+        top_layout.addWidget(self.show_current_rr_toggle, 3, 1)
+
+        self.show_last_game_rr_toggle = RadioButtonGroup("On", "Off")
+        top_layout.addWidget(QLabel("Last Game's RR:"), 4, 0)
+        top_layout.addWidget(self.show_last_game_rr_toggle, 4, 1)
+        
         self.use_rank_icons_toggle = RadioButtonGroup("On", "Off")
-        form_layout.addRow(QLabel("Use Rank icons instead of Account:"), self.use_rank_icons_toggle)
+        top_layout.addWidget(QLabel("Use Rank for Account Icon:"), 5, 0)
+        top_layout.addWidget(self.use_rank_icons_toggle, 5, 1)
+
+        # Bottom Group (Menu & Rank Settings)
+        bottom_group = QGroupBox("Menu & Rank Settings")
+        bottom_group.setStyleSheet("""
+            QGroupBox {
+                color: #FFFFFF;
+                font-size: 14px;
+                font-weight: bold;
+                border: 1px solid #c89f68; /* Coffee colored border */
+                border-radius: 8px;
+                margin-top: 10px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                padding: 0 10px;
+                left: 10px;
+                color: #FFFFFF; /* Explicitly white for the title */
+            }
+        """)
+        bottom_layout = QGridLayout(bottom_group)
+        bottom_layout.setSpacing(10)
 
         self.show_rank_tips_toggle = RadioButtonGroup("On", "Off")
-        form_layout.addRow(QLabel("Show Rank Tips:"), self.show_rank_tips_toggle)
+        bottom_layout.addWidget(QLabel("Show Rank Tips (iMA Menu):"), 0, 0)
+        bottom_layout.addWidget(self.show_rank_tips_toggle, 0, 1)
 
-        self.tip_delay_slider = ValueSlider(0.0, 2.0, 0.1) # 0.0 to 2.0 seconds
-        form_layout.addRow(QLabel("Tip Delay (seconds):"), self.tip_delay_slider)
+        self.tip_delay_slider = ValueSlider(0.0, 2.0, 0.1)
+        bottom_layout.addWidget(QLabel("Tip Delay (seconds):"), 1, 0)
+        bottom_layout.addWidget(self.tip_delay_slider, 1, 1)
 
-        layout.addLayout(form_layout)
-        layout.addStretch()
-        self.tab_widget.addTab(ui_tab, QIcon(os.path.join(os.path.dirname(__file__), "Assets", "Graphics.png")), "UI") # Using Graphics.png as a placeholder icon for now
+        self.rank_check_region_combo = QComboBox()
+        self.rank_check_region_combo.addItem("Europe (eu)", "eu")
+        self.rank_check_region_combo.addItem("Asia Pacific (ap)", "ap")
+        self.rank_check_region_combo.addItem("Brazil (br)", "br")
+        self.rank_check_region_combo.addItem("Korea (kr)", "kr")
+        self.rank_check_region_combo.addItem("Latin America (latam)", "latam")
+        self.rank_check_region_combo.addItem("North America (na)", "na")
+        self.rank_check_region_combo.setStyleSheet("""
+            QComboBox { 
+                background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; 
+                padding: 8px; color: #e0d6d1; font-weight: bold;
+            }
+            QComboBox:hover { border: 1px solid #d9b68b; }
+            QComboBox::drop-down { border: none; }
+            QComboBox::down-arrow { image: none; }
+            QComboBox QAbstractItemView { 
+                background-color: #3a3637; border: 1px solid #c89f68; 
+                selection-background-color: #c89f68; color: #e0d6d1;
+                selection-color: #2c2a2b; padding: 5px;
+            }
+        """)
+        bottom_layout.addWidget(QLabel("Region:"), 2, 0)
+        bottom_layout.addWidget(self.rank_check_region_combo, 2, 1)
+
+        main_layout.addWidget(top_group)
+        main_layout.addWidget(bottom_group)
+        main_layout.addStretch()
+
+        self.tab_widget.addTab(ui_tab, QIcon(os.path.join(os.path.dirname(__file__), "Assets", "app_icon.png")), "UI")
 
     def set_all_qualities(self, value):
         for spin_box in self.spin_boxes.values():
             spin_box.setValue(value)
-
-    def load_current_settings(self):
-        settings = self.switcher.get_graphics_settings()
-        self.display_mode_combo.setCurrentText(settings.get("display_mode", "Default"))
-        
-        riot_settings = settings.get("riot_settings", {})
-        for key, combo_box in self.riot_combo_boxes.items():
-            if key == "EAresIntSettingName::MaterialQuality":
-                value = riot_settings.get(key, "High")
-                if value == "0": combo_box.setCurrentText("Low")
-                elif value == "2": combo_box.setCurrentText("Med")
-                else: combo_box.setCurrentText("High")
-            elif key == "EAresIntSettingName::NvidiaReflexLowLatencySetting":
-                value = riot_settings.get(key, "On")
-                if value == "0": combo_box.setCurrentText("Off")
-                elif value == "2": combo_box.setCurrentText("On + Boost")
-                else: combo_box.setCurrentText("On")
-            else: # Texture, Detail, UI Quality
-                value = riot_settings.get(key, "High")
-                if value == "0": combo_box.setCurrentText("Low")
-                elif value == "1": combo_box.setCurrentText("Med")
-                else: combo_box.setCurrentText("High")
-
-        audio_settings = settings.get("audio_settings", {})
-        for key, control in self.audio_controls.items():
-            value_str = audio_settings.get(key)
-            if value_str is None: 
-                if isinstance(control, ValueSlider):
-                    control.setValue(100)
-                elif isinstance(control, RadioButtonGroup):
-                    is_true_default = (key == "EAresBoolSettingName::PushToTalkEnabled")
-                    control.set_state(is_true_default)
-            else:
-                if key.startswith("EAresFloatSettingName::"):
-                    control.setValue(int(float(value_str) * 100))
-                elif key.startswith("EAresIntSettingName::"):
-                    control.setValue(int(value_str))
-                elif key.startswith("EAresBoolSettingName::"):
-                    control.set_state(value_str.lower() == 'true')
-        
-        self.status_label.setText("Loaded saved settings.")
 
     def apply_settings(self):
         quality_settings = {key: spin_box.value() for key, spin_box in self.spin_boxes.items()}
@@ -987,7 +1045,11 @@ class OptionsDialog(PopupDialog):
             "show_rank_tips": self.show_rank_tips_toggle.get_state(),
             "tip_delay": self.tip_delay_slider.value(),
             "use_rank_icons": self.use_rank_icons_toggle.get_state(),
-            "show_rank_icon_left": self.show_rank_icon_left_toggle.get_state()
+            "show_rank_icon_left": self.show_rank_icon_left_toggle.get_state(),
+            "show_name_tag": self.show_name_tag_toggle.get_state(),
+            "show_current_rr": self.show_current_rr_toggle.get_state(),
+            "show_last_game_rr": self.show_last_game_rr_toggle.get_state(),
+            "rank_check_region": self.rank_check_region_combo.currentText()
         }
 
         settings_to_save = {
@@ -999,10 +1061,25 @@ class OptionsDialog(PopupDialog):
         }
         self.switcher.save_graphics_settings(settings_to_save)
         success, message = self.switcher.update_all_game_user_settings(settings_to_save)
+        self.switcher.update_ima_menu_if_enabled('update', None)
         
+        ima_config = self.switcher.get_ima_config()
+        if ima_config.get("output_dir"):
+            try:
+                self.switcher.generate_ima_menu_script(
+                    output_dir=ima_config["output_dir"],
+                    title=ima_config["title"],
+                    ordered_accounts=ima_config["ordered_accounts"],
+                    menu_icon_path=ima_config.get("menu_icon_path", ""),
+                    save_config=False
+                )
+                print("iMA menu script updated due to UI settings change.")
+            except Exception as e:
+                print(f"Error updating iMA menu script from OptionsDialog: {e}")
+
         if success:
             self.status_label.setText("Settings applied successfully to all accounts.")
-            self.settings_applied.emit() # Emit signal on success
+            self.settings_applied.emit()
         else:
             self.status_label.setText(f"Failed to apply settings: {message}")
 
@@ -1039,7 +1116,10 @@ class OptionsDialog(PopupDialog):
                     control.set_state(is_true_default)
             else:
                 if key.startswith("EAresFloatSettingName::"):
-                    control.setValue(float(value_str))
+                    if value_str.upper() == 'MAX':
+                        control.setValue(100)
+                    else:
+                        control.setValue(float(value_str) * 100)
                 elif key.startswith("EAresIntSettingName::"):
                     control.setValue(int(float(value_str)))
                 elif key.startswith("EAresBoolSettingName::"):
@@ -1051,6 +1131,13 @@ class OptionsDialog(PopupDialog):
         self.tip_delay_slider.setValue(ui_settings.get("tip_delay", 1.0))
         self.use_rank_icons_toggle.set_state(ui_settings.get("use_rank_icons", False))
         self.show_rank_icon_left_toggle.set_state(ui_settings.get("show_rank_icon_left", False))
+        self.show_name_tag_toggle.set_state(ui_settings.get("show_name_tag", True))
+        self.show_current_rr_toggle.set_state(ui_settings.get("show_current_rr", True))
+        self.show_last_game_rr_toggle.set_state(ui_settings.get("show_last_game_rr", True))
+        # Set the combo box by data, not by text
+        index = self.rank_check_region_combo.findData(ui_settings.get("rank_check_region", "eu"))
+        if index != -1:
+            self.rank_check_region_combo.setCurrentIndex(index)
         
         self.status_label.setText("Loaded saved settings.")
 
@@ -1077,7 +1164,28 @@ class CustomTitleBar(QWidget):
         title_label = QLabel(title)
         title_label.setStyleSheet("color: #e0d6d1; font-size: 16px; font-weight: bold; background: transparent;")
         layout.addWidget(title_label)
-        layout.addStretch()
+
+        if not is_dialog:
+            self.refresh_button = QPushButton("⟳")
+            self.refresh_button.setFixedSize(QSize(30, 30))
+            self.refresh_button.setStyleSheet("""QPushButton { background-color: #4f4a4b; color: #e0d6d1; font-size: 20px; font-weight: bold; border: none; border-radius: 15px; } QPushButton:hover { background-color: #c89f68; }""")
+            layout.addWidget(self.refresh_button)
+
+        layout.addStretch() # This stretch should be before minimize and close
+
+        if not is_dialog: # Minimize button only for main app
+            self.minimize_button = QPushButton("−")
+            self.minimize_button.setFixedSize(QSize(30, 30))
+            self.minimize_button.setStyleSheet("""QPushButton { background-color: #4f4a4b; color: #e0d6d1; font-size: 20px; font-weight: bold; border: none; border-radius: 15px; } QPushButton:hover { background-color: #c89f68; }""")
+            self.minimize_button.clicked.connect(self.parent_window.showMinimized)
+            layout.addWidget(self.minimize_button)
+        
+        # Removed close button from CustomTitleBar as it's handled by window flags
+        # close_button = QPushButton("✕")
+        # close_button.setFixedSize(QSize(30, 30))
+        # close_button.clicked.connect(self.parent_window.close)
+        # close_button.setStyleSheet("QPushButton { background-color: #f38ba8; color: #ffffff; font-size: 18px; font-weight: bold; border: none; border-radius: 15px; } QPushButton:hover { background-color: #e67e80; }")
+        # layout.addWidget(close_button)
         
         close_button = QPushButton("✕")
         close_button.setFixedSize(QSize(30, 30))
@@ -1222,11 +1330,15 @@ class AccountWidget(QWidget):
     double_clicked = pyqtSignal(str)
     context_menu_requested = pyqtSignal(str, QPoint)
 
-    def __init__(self, account_name, icon, game, rank, parent=None, is_add_button=False):
+    def __init__(self, account_name, icon, game, rank, in_game_name, in_game_tag, current_rr, last_game_rr, parent=None, is_add_button=False):
         super().__init__(parent)
         self.account_name = account_name
         self.game = game
         self.rank = rank
+        self.in_game_name = in_game_name
+        self.in_game_tag = in_game_tag
+        self.current_rr = current_rr
+        self.last_game_rr = last_game_rr
         self.setObjectName("AccountWidget")
         self.setFixedSize(120, 140)
         self.is_selected, self.is_hovered = False, False
@@ -1244,14 +1356,54 @@ class AccountWidget(QWidget):
     def init_ui(self, icon):
         icon_size = 70
         self.icon_label = QLabel(self)
-        self.set_icon(icon, icon_size)
         self.name_label = QLabel(self.account_name, self, objectName="NameLabel")
-        self.name_label.setAlignment(Qt.AlignCenter | Qt.AlignTop)
-        self.name_label.setWordWrap(True)
+        self.name_label.setAlignment(Qt.AlignCenter)
+        self.in_game_name_tag_label = QLabel(self)
+        self.last_game_rr_label = QLabel(self)
+        self.current_rr_label = QLabel(self)
+
+        self.set_icon(icon, icon_size)
         
-        self.icon_label.setGeometry((self.width() - icon_size) // 2, 15, icon_size, icon_size)
-        self.name_label.setGeometry(10, self.icon_label.y() + icon_size + 5, 100, 40)
-        self.icon_original_geom, self.name_original_geom = (self.icon_label.geometry(), self.name_label.geometry())
+        # Current RR Label (Above Icon)
+        if self.current_rr is not None:
+            self.current_rr_label.setText(str(self.current_rr))
+        self.current_rr_label.setAlignment(Qt.AlignCenter)
+        self.current_rr_label.setStyleSheet("color: white; font-size: 14px; font-weight: bold;")
+        self.current_rr_label.setGeometry(10, 5, 100, 20)
+
+        # Icon Label
+        self.icon_label.setGeometry((self.width() - icon_size) // 2, 25, icon_size, icon_size)
+        
+        # Name Label
+        self.name_label.setGeometry(10, self.icon_label.y() + icon_size + 5, 100, 20)
+
+        # In-game Name#Tag Label (Below Name)
+        in_game_text = ""
+        if self.in_game_name and self.in_game_tag:
+            in_game_text = f"{self.in_game_name}#{self.in_game_tag}"
+        elif self.in_game_name:
+            in_game_text = self.in_game_name
+        self.in_game_name_tag_label.setText(in_game_text)
+        self.in_game_name_tag_label.setAlignment(Qt.AlignCenter | Qt.AlignTop)
+        self.in_game_name_tag_label.setStyleSheet("color: #b0a8a8; font-size: 9px;") # Smaller and dimmed
+        self.in_game_name_tag_label.setGeometry(10, self.name_label.y() + self.name_label.height(), 100, 20)
+
+        # Last Game RR Label (Below In-game Name#Tag)
+        if self.last_game_rr is not None:
+            rr_text = f"+{self.last_game_rr}" if self.last_game_rr > 0 else str(self.last_game_rr)
+            rr_color = "#a6e3a1" if self.last_game_rr > 0 else ("#f38ba8" if self.last_game_rr < 0 else "#e0d6d1") # White for 0
+            self.last_game_rr_label.setText(f"({rr_text})")
+            self.last_game_rr_label.setStyleSheet(f"color: {rr_color}; font-size: 11px;")
+        self.last_game_rr_label.setAlignment(Qt.AlignCenter)
+        self.last_game_rr_label.setGeometry(10, self.in_game_name_tag_label.y() + self.in_game_name_tag_label.height() - 5, 100, 20)
+
+        # Store original geometries for animations
+        self.icon_original_geom = self.icon_label.geometry()
+        self.name_original_geom = self.name_label.geometry()
+        self.in_game_name_tag_original_geom = self.in_game_name_tag_label.geometry()
+        self.current_rr_original_geom = self.current_rr_label.geometry()
+        self.last_game_rr_original_geom = self.last_game_rr_label.geometry()
+        
         self.icon_label.setGraphicsEffect(QGraphicsDropShadowEffect(blurRadius=12, color=QColor(0, 0, 0, 80), offset=QPoint(2, 2)))
 
         if self.is_add_button:
@@ -1259,9 +1411,8 @@ class AccountWidget(QWidget):
             self.icon_label.setGraphicsEffect(None)
             self.name_label.setStyleSheet("color: #c89f68; font-size: 16px; font-weight: bold;")
             self.icon_label.setStyleSheet("color: #c89f68;")
+            self.in_game_name_tag_label.setVisible(False) # Ensure hidden for add button
         else:
-            self.game_icon_label = QLabel(self)
-            game_icon_size = 24
             self.game_icon_label = QLabel(self)
             game_icon_size = 24
             self.game_icon_label.setFixedSize(game_icon_size, game_icon_size)
@@ -1298,6 +1449,69 @@ class AccountWidget(QWidget):
     def init_animations(self):
         self.icon_anim = QPropertyAnimation(self.icon_label, b"geometry", duration=150, easingCurve=QEasingCurve.OutQuad)
         self.name_anim = QPropertyAnimation(self.name_label, b"geometry", duration=150, easingCurve=QEasingCurve.OutQuad)
+        self.in_game_name_tag_anim = QPropertyAnimation(self.in_game_name_tag_label, b"geometry", duration=150, easingCurve=QEasingCurve.OutQuad)
+        self.current_rr_anim = QPropertyAnimation(self.current_rr_label, b"geometry", duration=150, easingCurve=QEasingCurve.OutQuad)
+        self.last_game_rr_anim = QPropertyAnimation(self.last_game_rr_label, b"geometry", duration=150, easingCurve=QEasingCurve.OutQuad)
+
+    def set_icon(self, icon, size):
+        source_pixmap = icon.pixmap(QSize(512, 512))
+        original_width, original_height = source_pixmap.width(), source_pixmap.height()
+        square_side = min(original_width, original_height)
+        crop_x, crop_y = (original_width - square_side) // 2, (original_height - square_side) // 2
+        cropped_pixmap = source_pixmap.copy(crop_x, crop_y, square_side, square_side)
+        scaled_pixmap = cropped_pixmap.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        circular_pixmap = QPixmap(size, size)
+        circular_pixmap.fill(Qt.transparent)
+        painter = QPainter(circular_pixmap)
+        painter.setRenderHint(QPainter.Antialiasing)
+        path = QPainterPath()
+        path.addEllipse(0, 0, size, size)
+        painter.setClipPath(path)
+        x, y = int((size - scaled_pixmap.width()) / 2), int((size - scaled_pixmap.height()) / 2)
+        painter.drawPixmap(x, y, scaled_pixmap)
+        painter.end()
+        self.icon_label.setPixmap(circular_pixmap)
+
+    def enterEvent(self, event):
+        if self.is_add_button: return
+        self.is_hovered = True
+        scale_factor = 1.1
+        new_icon_rect = QRectF(0,0,self.icon_original_geom.width() * scale_factor,self.icon_original_geom.height() * scale_factor)
+        new_icon_rect.moveCenter(self.icon_original_geom.center())
+        self.icon_anim.setEndValue(new_icon_rect.toRect())
+        self.icon_anim.start()
+        new_name_rect = QRectF(0,0,self.name_original_geom.width()*scale_factor,self.name_original_geom.height()*scale_factor)
+        new_name_rect.moveCenter(self.name_original_geom.center())
+        self.name_anim.setEndValue(new_name_rect.toRect())
+        self.name_anim.start()
+        new_in_game_name_tag_rect = QRectF(0,0,self.in_game_name_tag_original_geom.width()*scale_factor,self.in_game_name_tag_original_geom.height()*scale_factor)
+        new_in_game_name_tag_rect.moveCenter(self.in_game_name_tag_original_geom.center())
+        self.in_game_name_tag_anim.setEndValue(new_in_game_name_tag_rect.toRect())
+        self.in_game_name_tag_anim.start()
+        new_current_rr_rect = QRectF(0,0,self.current_rr_original_geom.width()*scale_factor,self.current_rr_original_geom.height()*scale_factor)
+        new_current_rr_rect.moveCenter(self.current_rr_original_geom.center())
+        self.current_rr_anim.setEndValue(new_current_rr_rect.toRect())
+        self.current_rr_anim.start()
+        new_last_game_rr_rect = QRectF(0,0,self.last_game_rr_original_geom.width()*scale_factor,self.last_game_rr_original_geom.height()*scale_factor)
+        new_last_game_rr_rect.moveCenter(self.last_game_rr_original_geom.center())
+        self.last_game_rr_anim.setEndValue(new_last_game_rr_rect.toRect())
+        self.last_game_rr_anim.start()
+        self.update()
+
+    def leaveEvent(self, event):
+        if self.is_add_button: return
+        self.is_hovered = False
+        self.icon_anim.setEndValue(self.icon_original_geom)
+        self.icon_anim.start()
+        self.name_anim.setEndValue(self.name_original_geom)
+        self.name_anim.start()
+        self.in_game_name_tag_anim.setEndValue(self.in_game_name_tag_original_geom)
+        self.in_game_name_tag_anim.start()
+        self.current_rr_anim.setEndValue(self.current_rr_original_geom)
+        self.current_rr_anim.start()
+        self.last_game_rr_anim.setEndValue(self.last_game_rr_original_geom)
+        self.last_game_rr_anim.start()
+        self.update()
 
     def set_icon(self, icon, size):
         source_pixmap = icon.pixmap(QSize(512, 512))
@@ -1361,6 +1575,26 @@ class AccountWidget(QWidget):
         if hasattr(self, 'rank_icon_label'):
             self.rank_icon_label.setVisible(show and self.rank is not None)
 
+    def set_show_name_tag(self, show):
+        if hasattr(self, 'in_game_name_tag_label'):
+            self.in_game_name_tag_label.setVisible(show and bool(self.in_game_name or self.in_game_tag))
+            # Adjust widget height dynamically
+            if show and bool(self.in_game_name or self.in_game_tag):
+                self.setFixedSize(120, 155) # Increased height
+            else:
+                self.setFixedSize(120, 140) # Original height
+            # Trigger a layout update in the parent (ModernValorantSwitcher)
+            if self.parentWidget() and hasattr(self.parentWidget(), 'update_window_size'):
+                self.parentWidget().update_window_size()
+
+    def set_show_current_rr(self, show):
+        if hasattr(self, 'current_rr_label'):
+            self.current_rr_label.setVisible(show and self.current_rr is not None)
+
+    def set_show_last_game_rr(self, show):
+        if hasattr(self, 'last_game_rr_label'):
+            self.last_game_rr_label.setVisible(show and self.last_game_rr is not None)
+
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             self.selected.emit(self.account_name)
@@ -1373,6 +1607,50 @@ class AccountWidget(QWidget):
     def contextMenuEvent(self, event):
         if self.is_add_button: return
         self.context_menu_requested.emit(self.account_name, self.mapToGlobal(event.pos()))
+
+    def update_data(self, account_name, icon, game, rank, in_game_name, in_game_tag, current_rr, last_game_rr):
+        self.account_name = account_name
+        self.game = game
+        self.rank = rank
+        self.in_game_name = in_game_name
+        self.in_game_tag = in_game_tag
+        self.current_rr = current_rr
+        self.last_game_rr = last_game_rr
+
+        # Redraw the entire widget with new data
+        self.set_icon(icon, 70)
+        self.name_label.setText(self.account_name)
+
+        if self.current_rr is not None:
+            self.current_rr_label.setText(str(self.current_rr))
+            self.current_rr_label.setVisible(True)
+        else:
+            self.current_rr_label.setVisible(False)
+
+        if self.last_game_rr is not None:
+            rr_text = f"+{self.last_game_rr}" if self.last_game_rr > 0 else str(self.last_game_rr)
+            rr_color = "#a6e3a1" if self.last_game_rr > 0 else "#f38ba8"
+            self.last_game_rr_label.setText(f"({rr_text})")
+            self.last_game_rr_label.setStyleSheet(f"color: {rr_color}; font-size: 11px;")
+            self.last_game_rr_label.setVisible(True)
+        else:
+            self.last_game_rr_label.setVisible(False)
+
+        in_game_text = ""
+        if self.in_game_name and self.in_game_tag:
+            in_game_text = f"{self.in_game_name}#{self.in_game_tag}"
+        elif self.in_game_name:
+            in_game_text = self.in_game_name
+        self.in_game_name_tag_label.setText(in_game_text)
+
+        # Update visibility based on settings
+        # Note: This assumes you have access to settings, might need to pass them in
+        self.set_show_game_icon(self.game_icon_label.isVisible())
+        self.set_show_rank_icon(self.rank_icon_label.isVisible())
+        self.set_show_name_tag(self.in_game_name_tag_label.isVisible())
+        self.set_show_current_rr(self.current_rr_label.isVisible())
+        self.set_show_last_game_rr(self.last_game_rr_label.isVisible())
+        self.update()
 
 class HoverButton(QPushButton):
     def __init__(self, *args, **kwargs):

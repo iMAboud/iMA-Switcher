@@ -14,17 +14,47 @@ class ContextActions:
         old_name = self.parent.get_selected_account_name()
         if not old_name: return
 
-        dialog = InputDialog("Rename Account", f"Enter a new name for '{old_name}':", old_name, self.parent)
+        # Get current in-game name and tag for pre-filling
+        _game, _rank, current_in_game_name, current_in_game_tag, _rr, _last_rr = self.switcher.get_account_game(old_name)
+
+        dialog = InputDialog(
+            "Rename Account", 
+            f"Enter a new name for '{old_name}':", 
+            old_name, 
+            in_game_name_default=current_in_game_name or "", 
+            in_game_tag_default=current_in_game_tag or "", 
+            parent=self.parent
+        )
         if dialog.exec_() == QDialog.Accepted:
-            new_name = dialog.get_text()
-            if not new_name or new_name == old_name: return
-            if new_name in self.switcher.get_saved_accounts():
+            result = dialog.get_text()
+            if isinstance(result, tuple):
+                new_name, new_in_game_name, new_in_game_tag = result
+            else:
+                new_name = result
+                new_in_game_name = current_in_game_name
+                new_in_game_tag = current_in_game_tag
+
+            # Ensure empty strings are converted to None for storage consistency
+            if new_in_game_name == "": new_in_game_name = None
+            if new_in_game_tag == "": new_in_game_tag = None
+
+            if not new_name or (new_name == old_name and new_in_game_name == current_in_game_name and new_in_game_tag == current_in_game_tag): return
+            
+            if new_name != old_name and new_name in self.switcher.get_saved_accounts():
                 QMessageBox.warning(self.parent, "Account Exists", f'An account named "{new_name}" already exists.')
                 return
-            if self.switcher.rename_account(old_name, new_name):
+            
+            if new_name != old_name:
+                if not self.switcher.rename_account(old_name, new_name):
+                    QMessageBox.critical(self.parent, "Rename Failed", f"Failed to rename '{old_name}' to '{new_name}'.")
+                    return
                 self.parent.status_label.setText(f"Renamed '{old_name}' to '{new_name}'.")
-                self.parent.selected_account_name = new_name 
-                self.parent.load_accounts()
+                self.parent.selected_account_name = new_name
+            else:
+                self.parent.status_label.setText(f"Updated in-game name/tag for '{new_name}'.")
+
+            self.switcher.set_account_in_game_name_tag(new_name, new_in_game_name, new_in_game_tag)
+            self.parent.load_accounts()
 
     def delete(self):
         name = self.parent.get_selected_account_name()

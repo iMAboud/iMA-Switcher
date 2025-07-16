@@ -7,6 +7,13 @@ import sys
 import threading
 from zipfile import ZipFile
 from datetime import datetime
+import re
+import time
+try:
+    import requests
+except ImportError:
+    requests = None
+    print("Warning: 'requests' library not installed. Rank fetching will not work. Please install it with 'pip install requests'")
 try:
     from PIL import Image
 except ImportError:
@@ -16,13 +23,18 @@ except ImportError:
 class GameSwitcher:
     def __init__(self, base_directory=None):
         self.app_data_path = os.getenv('LOCALAPPDATA')
+        
+        # Base directory for application assets (where the executable is or _MEIPASS)
         if base_directory:
             self.base_dir = base_directory
         else:
-            self.base_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
+            self.base_dir = sys._MEIPASS if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
         
-        self.profiles_dir = os.path.join(self.base_dir, "profiles")
-        self.config_path = os.path.join(self.base_dir, "config.json")
+        # Persistent directory for user profiles and configuration
+        self.user_data_dir = os.path.join(self.app_data_path, "iMA Switcher")
+        
+        self.profiles_dir = os.path.join(self.user_data_dir, "profiles")
+        self.config_path = os.path.join(self.user_data_dir, "config.json")
         self.config = None
 
         self.GAMES = {
@@ -63,7 +75,8 @@ class GameSwitcher:
                 "show_rank_tips": True,
                 "tip_delay": 1.0,
                 "use_rank_icons": False,
-                "show_rank_icon_left": True
+                "show_rank_icon_left": True,
+                "show_name_tag": True
             }
         }
         if os.path.exists(self.config_path):
@@ -165,52 +178,60 @@ class GameSwitcher:
             except OSError as e:
                 print(f"Failed to remove {path}: {e}")
 
-    def get_account_game(self, account_name):
+    def _load_game_config(self, account_name):
         game_config_path = os.path.join(self._get_account_path(account_name), 'game.json')
         if os.path.exists(game_config_path):
-            with open(game_config_path, 'r') as f:
+            with open(game_config_path, 'r', encoding='utf-8') as f:
                 try:
-                    data = json.load(f)
-                    return data.get('game', 'valorant'), data.get('rank', None)
+                    return json.load(f)
                 except json.JSONDecodeError:
-                    return 'valorant', None
-        return 'valorant', None
+                    print(f"Warning: game.json for {account_name} is corrupted. Starting with empty config.")
+                    return {}
+        return {}
+
+    def _save_game_config(self, account_name, data):
+        game_config_path = os.path.join(self._get_account_path(account_name), 'game.json')
+        with open(game_config_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+
+    def get_account_game(self, account_name):
+        data = self._load_game_config(account_name)
+        result = (data.get('game', 'valorant'), data.get('rank', None), data.get('in_game_name', None), data.get('in_game_tag', None), data.get('current_rr', None), data.get('last_game_rr', None))
+        print(f"DEBUG: get_account_game for {account_name} returning: {result} (length: {len(result)})")
+        return result
 
     def set_account_game(self, account_name, game):
         account_path = self._get_account_path(account_name)
         if not os.path.exists(account_path):
             return False
-        game_config_path = os.path.join(account_path, 'game.json')
-        data = {}
-        if os.path.exists(game_config_path):
-            with open(game_config_path, 'r') as f:
-                try:
-                    data = json.load(f)
-                except json.JSONDecodeError:
-                    pass
+        data = self._load_game_config(account_name)
         data['game'] = game
-        with open(game_config_path, 'w') as f:
-            json.dump(data, f)
+        self._save_game_config(account_name, data)
         return True
 
     def set_account_rank(self, account_name, rank):
         account_path = self._get_account_path(account_name)
         if not os.path.exists(account_path):
             return False
-        game_config_path = os.path.join(account_path, 'game.json')
-        data = {}
-        if os.path.exists(game_config_path):
-            with open(game_config_path, 'r') as f:
-                try:
-                    data = json.load(f)
-                except json.JSONDecodeError:
-                    pass
+        data = self._load_game_config(account_name)
         data['rank'] = rank
-        with open(game_config_path, 'w') as f:
-            json.dump(data, f)
+        self._save_game_config(account_name, data)
+        self.update_ima_menu_if_enabled('update', account_name)
         return True
 
-    def save_account(self, account_name, game='valorant', rank=None):
+    def set_account_in_game_name_tag(self, account_name, in_game_name, in_game_tag, current_rr=None, last_game_rr=None):
+        account_path = self._get_account_path(account_name)
+        if not os.path.exists(account_path):
+            return False
+        data = self._load_game_config(account_name)
+        data['in_game_name'] = in_game_name
+        data['in_game_tag'] = in_game_tag
+        data['current_rr'] = current_rr
+        data['last_game_rr'] = last_game_rr
+        self._save_game_config(account_name, data)
+        return True
+
+    def save_account(self, account_name, game='valorant', rank=None, in_game_name=None, in_game_tag=None):
         account_path = self._get_account_path(account_name)
         os.makedirs(account_path, exist_ok=True)
         for item_name in self.riot_games_config["LoginData"].keys():
@@ -225,6 +246,7 @@ class GameSwitcher:
                 shutil.copy2(source_path, dest_path)
         self.set_account_game(account_name, game)
         if rank: self.set_account_rank(account_name, rank)
+        if in_game_name or in_game_tag: self.set_account_in_game_name_tag(account_name, in_game_name, in_game_tag)
         self.update_ima_menu_if_enabled('add', account_name)
         return True
 
@@ -236,7 +258,7 @@ class GameSwitcher:
         if not os.path.exists(account_path):
             return False, f"Profile for '{account_name}' not found.", None
         
-        game, _ = self.get_account_game(account_name)
+        game, rank, in_game_name, in_game_tag, current_rr, last_game_rr = self.get_account_game(account_name)
 
         if game == 'both' and selected_game is None:
             return True, "Game selection required.", "both"
@@ -293,8 +315,9 @@ class GameSwitcher:
             dirs = [d for d in os.listdir(self.profiles_dir) if os.path.isdir(os.path.join(self.profiles_dir, d))]
             for account_name in sorted(dirs):
                 icon_path = os.path.join(self._get_account_path(account_name), "icon.png")
-                game, rank = self.get_account_game(account_name)
-                accounts_data[account_name] = (icon_path if os.path.exists(icon_path) else None, game, rank)
+                game, rank, in_game_name, in_game_tag, current_rr, last_game_rr = self.get_account_game(account_name)
+                accounts_data[account_name] = (icon_path if os.path.exists(icon_path) else None, game, rank, in_game_name, in_game_tag, current_rr, last_game_rr)
+                print(f"DEBUG: get_saved_accounts for {account_name} adding: {accounts_data[account_name]} (length: {len(accounts_data[account_name])})")
         except FileNotFoundError:
             os.makedirs(self.profiles_dir, exist_ok=True)
         return accounts_data
@@ -373,7 +396,7 @@ class GameSwitcher:
             shortcut.Description = f"Launch {game.capitalize()} with {account_name} account"
 
             account_data = self.get_saved_accounts()
-            account_icon_path, _, rank = account_data.get(account_name)
+            account_icon_path, _, rank, _, _, _, _ = account_data.get(account_name)
             
             ui_settings = self.get_ima_config().get("ui_settings", {})
             use_rank_icons = ui_settings.get("use_rank_icons", False)
@@ -381,7 +404,8 @@ class GameSwitcher:
             icon_to_use = None
 
             if use_rank_icons and rank:
-                rank_icon_candidate_path = os.path.join(self.base_dir, "Assets", f"{rank.lower().replace(" ", "_")}.png")
+                app_install_path = self.get_ima_config().get("app_install_path", self.base_dir)
+                rank_icon_candidate_path = os.path.join(app_install_path, "Assets", f"{rank.lower().replace(" ", "_")}.png")
                 if os.path.exists(rank_icon_candidate_path):
                     icon_to_use = rank_icon_candidate_path
             
@@ -389,7 +413,8 @@ class GameSwitcher:
                 icon_to_use = account_icon_path
 
             if icon_to_use is None:
-                icon_to_use = os.path.abspath(os.path.join(self.base_dir, "logo.png"))
+                app_install_path = self.get_ima_config().get("app_install_path", self.base_dir)
+                icon_to_use = os.path.abspath(os.path.join(app_install_path, "logo.png"))
 
             shortcut.IconLocation = icon_to_use
             
@@ -420,16 +445,16 @@ class GameSwitcher:
         except Exception as e:
             print(f"Restore failed: {e}"); return False
 
-    def update_ima_menu_if_enabled(self, action, name, old_name=None):
+    def update_ima_menu_if_enabled(self, action, name=None, old_name=None):
         ima_config = self.get_ima_config()
         if not ima_config.get("output_dir"): return
         
         print(f"iMA Auto-Update: Action='{action}', Name='{name}'")
         
         current_ordered_list = ima_config.get("ordered_accounts", [])
-        if action == 'add' and name not in current_ordered_list: current_ordered_list.append(name)
-        elif action == 'delete' and name in current_ordered_list: current_ordered_list.remove(name)
-        elif action == 'rename' and old_name in current_ordered_list: current_ordered_list[current_ordered_list.index(old_name)] = name
+        if action == 'add' and name and name not in current_ordered_list: current_ordered_list.append(name)
+        elif action == 'delete' and name and name in current_ordered_list: current_ordered_list.remove(name)
+        elif action == 'rename' and name and old_name and old_name in current_ordered_list: current_ordered_list[current_ordered_list.index(old_name)] = name
         elif action == 'restore': current_ordered_list = sorted(list(self.get_saved_accounts().keys()))
         
         ima_config["ordered_accounts"] = current_ordered_list
@@ -459,7 +484,7 @@ class GameSwitcher:
                 base_icon_name = os.path.basename(menu_icon_path)
                 dest_icon_path = os.path.join(icons_dir, base_icon_name)
                 shutil.copy(menu_icon_path, dest_icon_path)
-                ima_icon_path = f"@app.dir\imports\icons\{base_icon_name}"
+                ima_icon_path = fr"@app.dir\imports\icons\{base_icon_name}"
                 menu_icon_arg = f" icon='{ima_icon_path}'"
             except Exception as e:
                 print(f"Could not copy menu icon: {e}")
@@ -477,13 +502,14 @@ class GameSwitcher:
         
         for account_name in ordered_accounts:
             if account_name not in accounts_data: continue
-            icon_source_path, _, rank = accounts_data.get(account_name)
+            icon_source_path, game, rank, in_game_name, in_game_tag, current_rr, last_game_rr = accounts_data.get(account_name)
             
             item_icon_arg = ""
             icon_to_use_for_menu = None
 
             if use_rank_icons and rank:
-                rank_icon_path = os.path.join(self.base_dir, "Assets", f"{rank.lower().replace(" ", "_")}.png")
+                app_install_path = self.get_ima_config().get("app_install_path", self.base_dir)
+                rank_icon_path = os.path.join(app_install_path, "Assets", f"{rank.lower().replace(" ", "_")}.png")
                 if os.path.exists(rank_icon_path):
                     icon_to_use_for_menu = rank_icon_path
             
@@ -491,7 +517,8 @@ class GameSwitcher:
                 icon_to_use_for_menu = icon_source_path
 
             if icon_to_use_for_menu is None:
-                logo_path = os.path.join(self.base_dir, "logo.png")
+                app_install_path = self.get_ima_config().get("app_install_path", self.base_dir)
+                logo_path = os.path.join(app_install_path, "Assets", "logo.png")
                 if os.path.exists(logo_path):
                     icon_to_use_for_menu = logo_path
 
@@ -728,4 +755,71 @@ class GameSwitcher:
                     print(f"Error updating {ini_file_path}: {e}"); all_success = False
 
         return all_success, None if all_success else "One or more files failed to update."
+
+    def _parse_rank_data(self, html_content):
+        # Example: iMA#boud [Diamond 1] : 10 RR [-12]
+        match = re.search(r'\[(.*?)\]\s*:\s*(\d+)\s*RR\s*\[([+-]?\d+)\]', html_content)
+        if match:
+            rank = match.group(1).strip()
+            current_rr = int(match.group(2))
+            last_game_rr = int(match.group(3))
+            return rank, current_rr, last_game_rr
+        return None, None, None
+
+    def fetch_and_update_rank_data(self, account_name, on_update_callback=None):
+        account_data = self.get_saved_accounts().get(account_name)
+        if not account_data:
+            print(f"Account {account_name} not found for rank update.")
+            return
+
+        _, _, rank, in_game_name, in_game_tag, current_rr, last_game_rr = account_data
+
+        if not in_game_name or not in_game_tag:
+            print(f"Skipping rank update for {account_name}: Missing in-game name or tag.")
+            return
+
+        ui_settings = self.get_ima_config().get("ui_settings", {})
+        region = ui_settings.get("rank_check_region", "eu")
+
+        url = f"https://valorantrank.chat/{region}/{in_game_name}/{in_game_tag}?mmrChange=true"
+        print(f"Fetching rank for {account_name} from: {url}")
+
+        try:
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            html_content = response.text
+
+            new_rank, new_current_rr, new_last_game_rr = self._parse_rank_data(html_content)
+
+            if new_rank and new_current_rr is not None and new_last_game_rr is not None:
+                if new_rank.lower() == 'unrated':
+                    new_rank = 'Unranked'
+                if new_rank != rank or new_current_rr != current_rr or new_last_game_rr != last_game_rr:
+                    print(f"Updating rank data for {account_name}: Rank={new_rank}, RR={new_current_rr}, Last Game RR={new_last_game_rr}")
+                    self.set_account_in_game_name_tag(account_name, in_game_name, in_game_tag, new_current_rr, new_last_game_rr)
+                    self.set_account_rank(account_name, new_rank)
+                    if on_update_callback:
+                        on_update_callback(account_name)
+                else:
+                    print(f"Rank data for {account_name} is up to date.")
+            else:
+                print(f"Could not parse rank data for {account_name} from URL: {url}")
+        except requests.exceptions.RequestException as e:
+            print(f"Error fetching rank for {account_name} from {url}: {e}")
+        except Exception as e:
+            print(f"An unexpected error occurred during rank update for {account_name}: {e}")
+
+    def _run_rank_update_loop(self, on_update_callback=None):
+        while True:
+            print("Starting scheduled rank update for all accounts...")
+            accounts = list(self.get_saved_accounts().keys())
+            for account_name in accounts:
+                threading.Thread(target=self.fetch_and_update_rank_data, args=(account_name, on_update_callback)).start()
+            time.sleep(3600) # Wait an hour before the next cycle
+
+    def start_rank_update_scheduler(self, on_update_callback=None):
+        print("DEBUG: start_rank_update_scheduler called.")
+        # Initial fetch is now deferred and handled by the main UI thread
+        scheduler_thread = threading.Thread(target=self._run_rank_update_loop, args=(on_update_callback,), daemon=True)
+        scheduler_thread.start()
 
