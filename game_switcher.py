@@ -804,6 +804,7 @@ class GameSwitcher:
             return
 
         ui_settings = self.get_ima_config().get("ui_settings", {})
+        ui_settings = self.get_ima_config().get("ui_settings", {})
         raw_region = ui_settings.get("rank_check_region", "eu")
 
         # Map full region names to their two-letter codes for URL construction

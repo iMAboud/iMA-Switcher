@@ -585,6 +585,7 @@ class ModernValorantSwitcher(QMainWindow):
                 self.launch_notification = LaunchNotificationWidget(name, account_icon_pixmap, in_game_name=in_game_name, in_game_tag=in_game_tag, rank=rank, use_rank_icons=use_rank_icons)
                 self.launch_notification.show()
                 QApplication.processEvents()
+                self.refresh_accounts() # Refresh after successful switch
             except Exception as e: print(f"Could not create notification: {e}")
         self.refresh_accounts() # Refresh after any switch attempt
 
