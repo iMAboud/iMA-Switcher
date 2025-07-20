@@ -76,7 +76,11 @@ class GameSwitcher:
                 "tip_delay": 1.0,
                 "use_rank_icons": False,
                 "show_rank_icon_left": True,
-                "show_name_tag": True
+                "show_name_tag": True,
+                "auto_rank_update": True,
+                "rank_check_region": "eu",
+                "grid_size": 4,
+                "orientation": "vertical"
             }
         }
         if os.path.exists(self.config_path):
@@ -158,12 +162,12 @@ class GameSwitcher:
     def _terminate_processes(self):
         all_processes = self.GAMES['valorant']["processes_to_kill"] + self.GAMES['lol']["processes_to_kill"]
         for exe in all_processes:
-            subprocess.run(f"taskkill /f /im {exe}", shell=True, check=False, capture_output=True)
+            subprocess.run(f"taskkill /f /im {exe}", shell=True, capture_output=True, text=True)
 
     def _create_junction(self, source, link_name):
         startupinfo = subprocess.STARTUPINFO()
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        subprocess.run(['cmd', '/c', 'mklink', '/J', link_name, source], check=True, startupinfo=startupinfo)
+        subprocess.run(['cmd', '/c', 'mklink', '/J', link_name, source], check=True, startupinfo=startupinfo, capture_output=True, text=True)
 
     def _remove_junction_or_dir(self, path):
         if not os.path.lexists(path): return
@@ -250,7 +254,7 @@ class GameSwitcher:
         self.update_ima_menu_if_enabled('add', account_name)
         return True
 
-    def switch_account(self, account_name, selected_game=None):
+    def switch_account(self, account_name, selected_game=None, on_update_callback=None):
         if not self.is_admin():
             return False, "Administrator rights are required to switch accounts.", None
         
@@ -291,7 +295,12 @@ class GameSwitcher:
                 update_thread.start()
             
             # Fetch rank data after a successful switch
-            self.fetch_and_update_rank_data(account_name)
+            ui_settings = self.get_ima_config().get("ui_settings", {})
+            if ui_settings.get("auto_rank_update", True):
+                # Run the rank update in a separate thread to avoid blocking the UI
+                update_thread = threading.Thread(target=self.fetch_and_update_all_accounts, args=(on_update_callback,))
+                update_thread.daemon = True
+                update_thread.start()
 
             return True, "Account switched successfully.", game
         except FileNotFoundError:
@@ -395,8 +404,8 @@ class GameSwitcher:
             shortcut.TargetPath = target_path
             shortcut.Arguments = arguments
             shortcut.WorkingDirectory = working_dir
-            game = self.get_account_game(account_name)
-            shortcut.Description = f"Launch {game.capitalize()} with {account_name} account"
+            _game, _rank, _in_game_name, _in_game_tag, _current_rr, _last_game_rr = self.get_account_game(account_name)
+            shortcut.Description = f"Launch {_game.capitalize()} with {account_name} account"
 
             account_data = self.get_saved_accounts()
             account_icon_path, _, rank, _, _, _, _ = account_data.get(account_name)
@@ -404,28 +413,32 @@ class GameSwitcher:
             ui_settings = self.get_ima_config().get("ui_settings", {})
             use_rank_icons = ui_settings.get("use_rank_icons", False)
 
-            icon_to_use = None
-
-            if use_rank_icons and rank:
-                app_install_path = self.get_ima_config().get("app_install_path", self.base_dir)
-                rank_icon_candidate_path = os.path.join(app_install_path, "Assets", f"{rank.lower().replace(" ", "_")}.png")
-                if os.path.exists(rank_icon_candidate_path):
-                    icon_to_use = rank_icon_candidate_path
-            
-            if icon_to_use is None and account_icon_path and os.path.exists(account_icon_path):
-                icon_to_use = account_icon_path
-
-            if icon_to_use is None:
-                app_install_path = self.get_ima_config().get("app_install_path", self.base_dir)
-                icon_to_use = os.path.abspath(os.path.join(app_install_path, "logo.png"))
-
-            shortcut.IconLocation = icon_to_use
-            
+            shortcut.IconLocation = self.get_icon_path_for_account(account_name, rank, use_rank_icons)
             shortcut.Save()
             return True
         except Exception as e:
             print(f"Error creating shortcut: {e}")
             return False
+
+    def get_icon_path_for_account(self, account_name, rank=None, use_rank_icons=False):
+        icon_path_to_use = None
+        account_data = self.get_saved_accounts().get(account_name)
+        account_icon_path = account_data[0] if account_data else None # Extract icon_path from the tuple
+
+        if use_rank_icons and rank:
+            app_install_path = self.get_ima_config().get("app_install_path", self.base_dir)
+            rank_icon_candidate_path = os.path.join(app_install_path, "Assets", f"{rank.lower().replace(" ", "_")}.png")
+            if os.path.exists(rank_icon_candidate_path):
+                icon_path_to_use = rank_icon_candidate_path
+        
+        if icon_path_to_use is None and account_icon_path and os.path.exists(account_icon_path):
+            icon_path_to_use = account_icon_path
+
+        if icon_path_to_use is None:
+            app_install_path = self.get_ima_config().get("app_install_path", self.base_dir)
+            icon_path_to_use = os.path.abspath(os.path.join(app_install_path, "logo.png"))
+        
+        return icon_path_to_use
 
     def get_backup_filename(self):
         now = datetime.now()
@@ -791,19 +804,22 @@ class GameSwitcher:
         # Return the found data. Some values might be None if not found.
         return rank, current_rr, last_game_rr
 
-    def fetch_and_update_rank_data(self, account_name, on_update_callback=None):
+    def fetch_and_update_rank_data(self, account_name, is_manual_refresh=False, on_update_callback=None):
+        ui_settings = self.get_ima_config().get("ui_settings", {})
+        auto_rank_update_enabled = ui_settings.get("auto_rank_update", True)
+
+        if not auto_rank_update_enabled and not is_manual_refresh:
+            return
+
         account_data = self.get_saved_accounts().get(account_name)
         if not account_data:
-            print(f"Account {account_name} not found for rank update.")
             return
 
         _, _, rank, in_game_name, in_game_tag, current_rr, last_game_rr = account_data
 
         if not in_game_name or not in_game_tag:
-            print(f"Skipping rank update for {account_name}: Missing in-game name or tag.")
             return
 
-        ui_settings = self.get_ima_config().get("ui_settings", {})
         ui_settings = self.get_ima_config().get("ui_settings", {})
         raw_region = ui_settings.get("rank_check_region", "eu")
 
@@ -825,7 +841,6 @@ class GameSwitcher:
         region = region_map.get(raw_region, "eu") # Default to 'eu' if not found
 
         url = f"https://valorantrank.chat/{region}/{in_game_name}/{in_game_tag}?mmrChange=true"
-        print(f"Fetching rank for {account_name} from: {url}")
 
         try:
             response = requests.get(url, timeout=10)
@@ -838,30 +853,37 @@ class GameSwitcher:
                 if new_rank.lower() == 'unrated':
                     new_rank = 'Unranked'
                 if new_rank != rank or new_current_rr != current_rr or new_last_game_rr != last_game_rr:
-                    print(f"Updating rank data for {account_name}: Rank={new_rank}, RR={new_current_rr}, Last Game RR={new_last_game_rr}")
                     self.set_account_in_game_name_tag(account_name, in_game_name, in_game_tag, new_current_rr, new_last_game_rr)
                     self.set_account_rank(account_name, new_rank)
                     if on_update_callback:
                         on_update_callback(account_name)
-                else:
-                    print(f"Rank data for {account_name} is up to date.")
-            else:
-                print(f"Could not parse rank data for {account_name} from URL: {url}")
         except requests.exceptions.RequestException as e:
-            print(f"Error fetching rank for {account_name} from {url}: {e}")
+            pass
         except Exception as e:
-            print(f"An unexpected error occurred during rank update for {account_name}: {e}")
+            pass
+
+    def fetch_and_update_all_accounts(self, on_update_callback=None):
+        """Fetches rank data for all saved accounts."""
+        accounts = list(self.get_saved_accounts().keys())
+        threads = []
+        for account_name in accounts:
+            thread = threading.Thread(target=self.fetch_and_update_rank_data, args=(account_name, False, on_update_callback))
+            threads.append(thread)
+            thread.start()
+        
+        for thread in threads:
+            thread.join() # Wait for all threads to complete
 
     def _run_rank_update_loop(self, on_update_callback=None):
         while True:
-            print("Starting scheduled rank update for all accounts...")
-            accounts = list(self.get_saved_accounts().keys())
-            for account_name in accounts:
-                threading.Thread(target=self.fetch_and_update_rank_data, args=(account_name, on_update_callback)).start()
+            ui_settings = self.get_ima_config().get("ui_settings", {})
+            if ui_settings.get("auto_rank_update", True):
+                accounts = list(self.get_saved_accounts().keys())
+                for account_name in accounts:
+                    threading.Thread(target=self.fetch_and_update_rank_data, args=(account_name, on_update_callback)).start()
             time.sleep(3600) # Wait an hour before the next cycle
 
     def start_rank_update_scheduler(self, on_update_callback=None):
-        print("DEBUG: start_rank_update_scheduler called.")
         # Initial fetch is now deferred and handled by the main UI thread
         scheduler_thread = threading.Thread(target=self._run_rank_update_loop, args=(on_update_callback,), daemon=True)
         scheduler_thread.start()

@@ -4,7 +4,6 @@ import math
 import ctypes
 import shutil 
 import subprocess 
-import time
 import threading 
 
 if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
@@ -26,7 +25,7 @@ from PyQt5.QtWidgets import (
     QDialog,
 )
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QFont, QColor, QImage
-from PyQt5.QtCore import Qt, QSize, QPoint, pyqtSignal
+from PyQt5.QtCore import Qt, QSize, QPoint, pyqtSignal, QTimer
 
 from game_switcher import GameSwitcher
 from ui_components import (
@@ -61,31 +60,11 @@ except ImportError:
     Image = None
     print("Warning: Pillow not installed. Image conversion for icons will not work. Please install it with 'pip install Pillow'")
 
-def generate_icon(name, account_icon_path=None, rank=None, use_rank_icons=False, base_dir=None):
-    """Generates a QIcon based on account settings, rank, or a default one."""
-    if base_dir is None:
-        base_dir = sys._MEIPASS if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
-
-    icon_path_to_use = None
-
-    if use_rank_icons and rank:
-        rank_icon_name = rank.lower().replace(" ", "_") if rank.lower() != 'unranked' else 'unranked'
-        rank_icon_path = os.path.join(base_dir, "Assets", f"{rank_icon_name}.png")
-        if os.path.exists(rank_icon_path):
-            icon_path_to_use = rank_icon_path
-
-    if icon_path_to_use is None and account_icon_path and os.path.exists(account_icon_path):
-        icon_path_to_use = account_icon_path
-
-    if icon_path_to_use is None:
-        logo_path = os.path.join(base_dir, "logo.png")
-        if os.path.exists(logo_path):
-            icon_path_to_use = logo_path
-
-    if icon_path_to_use and os.path.exists(icon_path_to_use):
+def _load_qicon_from_path(icon_path):
+    if icon_path and os.path.exists(icon_path):
         try:
             if Image:
-                pil_image = Image.open(icon_path_to_use)
+                pil_image = Image.open(icon_path)
                 pil_image = pil_image.convert("RGBA")
                 from io import BytesIO
                 byte_array = BytesIO()
@@ -96,9 +75,9 @@ def generate_icon(name, account_icon_path=None, rank=None, use_rank_icons=False,
                 pixmap.loadFromData(byte_array.getvalue(), "PNG")
                 return QIcon(pixmap)
             else:
-                return QIcon(icon_path_to_use)
+                return QIcon(icon_path)
         except Exception as e:
-            print(f"Error loading icon from {icon_path_to_use}: {e}. Using default icon.")
+            print(f"Error loading icon from {icon_path}: {e}. Using default icon.")
     
     # Default icon if all else fails
     pixmap = QPixmap(128, 128)
@@ -106,9 +85,11 @@ def generate_icon(name, account_icon_path=None, rank=None, use_rank_icons=False,
     p = QPainter(pixmap)
     p.setPen(QColor("#2c2a2b"))
     p.setFont(QFont("Segoe UI", 56, QFont.Bold))
-    p.drawText(pixmap.rect(), Qt.AlignCenter, name[0].upper())
+    p.drawText(pixmap.rect(), Qt.AlignCenter, "?") # Use a generic placeholder
     p.end()
     return QIcon(pixmap)
+
+
 
 def run_installer():
     app = QApplication(sys.argv)
@@ -190,16 +171,25 @@ class ModernValorantSwitcher(QMainWindow):
 
         # New: Connect signal and start scheduler
         self.account_updated.connect(self.on_account_updated)
-        self.switcher.start_rank_update_scheduler(on_update_callback=self.account_updated.emit)
-        self.initial_rank_fetch()
+        
+        ui_settings = self.switcher.get_ima_config().get("ui_settings", {})
+        if ui_settings.get("auto_rank_update", True):
+            self.switcher.start_rank_update_scheduler(on_update_callback=self.account_updated.emit)
+            self.initial_rank_fetch()
+
+        self.refresh_timer = QTimer(self)
+        self.refresh_timer.timeout.connect(self.check_for_refresh_signal)
+        self.refresh_timer.start(2000) # Check every 2 seconds
 
 
     def init_ui(self):
         self.setWindowTitle("iMA Switcher")
-        self.setWindowIcon(generate_icon("V", base_dir=self.switcher.base_dir))
+        self.setWindowIcon(_load_qicon_from_path(os.path.join(self.switcher.base_dir, "logo.png")))
         self.setStyleSheet(
             """#main_widget { background-color: #2c2a2b; border-radius: 15px; border: 1px solid #4f4a4b; } 
                QScrollArea { border: none; background-color: transparent; } 
+               QScrollArea QScrollBar:vertical { border: none; background: transparent; width: 0px; }
+               QScrollArea QScrollBar:horizontal { border: none; background: transparent; height: 0px; }
                QWidget#grid_container { background-color: transparent; } 
                QMenu { background-color: #3a3637; color: #e0d6d1; border: 1px solid #4f4a4b; border-radius: 8px; } 
                QMenu::item { padding: 8px 20px; border-radius: 5px; } 
@@ -225,6 +215,7 @@ class ModernValorantSwitcher(QMainWindow):
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll_area.setStyleSheet("QScrollArea { border: none; background-color: transparent; } QScrollBar:vertical { border: none; background: transparent; width: 0px; } QScrollBar:horizontal { border: none; background: transparent; height: 0px; }")
         content_layout.addWidget(self.scroll_area)
 
         bottom_layout = QGridLayout()
@@ -286,23 +277,25 @@ class ModernValorantSwitcher(QMainWindow):
             if name not in account_names_in_order:
                 account_names_in_order.append(name)
 
-        show_game_icons = self.switcher.get_ima_config().get("ui_settings", {}).get("show_game_icons", True)
-        use_rank_icons = self.switcher.get_ima_config().get("ui_settings", {}).get("use_rank_icons", False)
-        show_name_tag = self.switcher.get_ima_config().get("ui_settings", {}).get("show_name_tag", False)
+        ui_settings = self.switcher.get_ima_config().get("ui_settings", {})
+        show_game_icons = ui_settings.get("show_game_icons", True)
+        use_rank_icons = ui_settings.get("use_rank_icons", False)
+        show_name_tag = ui_settings.get("show_name_tag", False)
 
         # A single loop to create all account widgets
         for name in account_names_in_order:
             icon_path, game, rank, in_game_name, in_game_tag, current_rr, last_game_rr = accounts[name]
-            icon = generate_icon(name, icon_path, rank, use_rank_icons, self.switcher.base_dir)
+            icon_path_to_use = self.switcher.get_icon_path_for_account(name, rank, use_rank_icons)
+            icon = _load_qicon_from_path(icon_path_to_use)
             widget = AccountWidget(name, icon, game, rank, in_game_name, in_game_tag, current_rr, last_game_rr, self.grid_container)
             widget.selected.connect(self.on_account_selected)
             widget.double_clicked.connect(self.on_account_double_clicked)
             widget.context_menu_requested.connect(self.show_context_menu)
             widget.set_show_game_icon(show_game_icons)
-            widget.set_show_rank_icon(self.switcher.get_ima_config().get("ui_settings", {}).get("show_rank_icon_left", False))
+            widget.set_show_rank_icon(ui_settings.get("show_rank_icon_left", False))
             widget.set_show_name_tag(show_name_tag)
-            widget.set_show_current_rr(self.switcher.get_ima_config().get("ui_settings", {}).get("show_current_rr", True))
-            widget.set_show_last_game_rr(self.switcher.get_ima_config().get("ui_settings", {}).get("show_last_game_rr", True))
+            widget.set_show_current_rr(ui_settings.get("show_current_rr", True))
+            widget.set_show_last_game_rr(ui_settings.get("show_last_game_rr", True))
             self.account_widgets[name] = widget
 
         self.rearrange_grid()
@@ -321,8 +314,9 @@ class ModernValorantSwitcher(QMainWindow):
     def rearrange_grid(self):
         if not self.account_widgets: return
 
-        num_columns = 4
-        
+        ui_settings = self.switcher.get_ima_config().get("ui_settings", {})
+        num_columns = ui_settings.get("grid_size", 4)
+
         # The account_widgets dictionary is already ordered correctly from load_accounts
         for i, name in enumerate(self.account_widgets.keys()):
             widget = self.account_widgets.get(name)
@@ -330,26 +324,32 @@ class ModernValorantSwitcher(QMainWindow):
 
     def update_window_size(self):
         num_accounts = len(self.account_widgets)
-        COLS = 4
         if num_accounts == 0:
             self.setFixedSize(300, 200)
             return
 
-        # Get the height of a single account widget (which can vary)
         sample_widget = next(iter(self.account_widgets.values()), None)
         if sample_widget:
-            W_H = sample_widget.height() # Use actual widget height
+            W_H = sample_widget.height()
+            W_W = sample_widget.width()
         else:
-            W_H = 140 # Default if no accounts
+            W_H = 140
+            W_W = 120
 
-        W_W, S, H_M, V_M, T_B, B_B = 120, 10, 20, 20, 40, 60
+        S, H_M, V_M, T_B, B_B = 10, 20, 20, 40, 60 # Adjusted V_M and T_B for better spacing
 
-        num_rows = max(1, math.ceil(num_accounts / COLS))
-        display_rows = min(num_rows, 4) # Max 4 rows visible without scrolling
+        ui_settings = self.switcher.get_ima_config().get("ui_settings", {})
+        num_columns = ui_settings.get("grid_size", 4)
+        num_rows_needed = math.ceil(num_accounts / num_columns)
+        display_rows = num_rows_needed # Use actual needed rows
 
-        grid_width = (COLS * W_W) + ((COLS - 1) * S) + H_M
+        grid_width = (num_columns * W_W) + ((num_columns - 1) * S) + H_M
         grid_height = (display_rows * W_H) + ((display_rows - 1) * S) + V_M
+        self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
         self.setFixedSize(grid_width + 20, grid_height + T_B + B_B)
+        self.scroll_area.widget().setMinimumSize(grid_width, grid_height) # Ensure scroll area content is large enough
 
     def show_settings_dialog(self):
         actions = self.get_settings_actions()
@@ -423,18 +423,28 @@ class ModernValorantSwitcher(QMainWindow):
         self.switch_to_selected_account()
 
     def on_account_updated(self, account_name):
-        """
-        Slot to handle updates for a single account widget.
-        """
-        print(f"UI received update for: {account_name}")
+        QApplication.processEvents()  # Process any pending events
         self.load_accounts()
-        self.status_label.setText(f"Updated: {account_name}")
 
     def initial_rank_fetch(self):
         """
-        Fetches ranks for all accounts in separate threads after UI is shown.
+        Fetches ranks for all accounts in separate threads after UI is shown,
+        but only if auto_rank_update is enabled.
         """
-        self.refresh_accounts()
+        ui_settings = self.switcher.get_ima_config().get("ui_settings", {})
+        if ui_settings.get("auto_rank_update", True):
+            self.refresh_accounts()
+        else:
+            print("Initial rank fetch skipped: Auto rank update is disabled.")
+
+    def check_for_refresh_signal(self):
+        signal_file = os.path.join(self.switcher.user_data_dir, '.refresh_ui')
+        if os.path.exists(signal_file):
+            try:
+                os.remove(signal_file)
+                self.load_accounts()
+            except OSError as e:
+                print(f"Error removing signal file: {e}")
 
     def refresh_accounts(self):
         """        Fetches ranks for all accounts and updates the UI.
@@ -444,7 +454,7 @@ class ModernValorantSwitcher(QMainWindow):
         for name in accounts:
             threading.Thread(
                 target=self.switcher.fetch_and_update_rank_data,
-                args=(name, self.account_updated.emit),
+                args=(name, True, self.account_updated.emit),
                 daemon=True
             ).start()
 
@@ -556,13 +566,14 @@ class ModernValorantSwitcher(QMainWindow):
         ui_settings = self.switcher.get_ima_config().get("ui_settings", {})
         use_rank_icons = ui_settings.get("use_rank_icons", False)
 
-        account_icon = generate_icon(name, account_icon_path, rank, use_rank_icons, self.switcher.base_dir)
+        account_icon_path_str = self.switcher.get_icon_path_for_account(name, rank, use_rank_icons)
+        account_icon = _load_qicon_from_path(account_icon_path_str)
         account_icon_pixmap = account_icon.pixmap(account_icon.actualSize(QSize(180, 180)))
 
         self.status_label.setText(f"Switching to '{name}'...")
         QApplication.processEvents()
 
-        result, message, game_type_or_selected_game = self.switcher.switch_account(name, selected_game=selected_game)
+        result, message, game_type_or_selected_game = self.switcher.switch_account(name, selected_game=selected_game, on_update_callback=self.account_updated.emit)
 
         if game_type_or_selected_game == "both":
             # If game is 'both', show selection dialog
@@ -585,7 +596,6 @@ class ModernValorantSwitcher(QMainWindow):
                 self.launch_notification = LaunchNotificationWidget(name, account_icon_pixmap, in_game_name=in_game_name, in_game_tag=in_game_tag, rank=rank, use_rank_icons=use_rank_icons)
                 self.launch_notification.show()
                 QApplication.processEvents()
-                self.refresh_accounts() # Refresh after successful switch
             except Exception as e: print(f"Could not create notification: {e}")
         self.refresh_accounts() # Refresh after any switch attempt
 
@@ -599,6 +609,20 @@ class ModernValorantSwitcher(QMainWindow):
             QMessageBox.critical(self, "Launch Failed", message)
         else:
             self.status_label.setText(f"Successfully launched {game.capitalize()} for '{account_name}'.")
+        self.refresh_accounts()
+
+def _handle_game_selection_standalone(switcher, account_name, game, pixmap):
+    # This method is called when a game is selected from the GameSelectionDialog in standalone mode
+    result, _, _ = switcher.switch_account(account_name, selected_game=game)
+    if result:
+        ui_settings = switcher.get_ima_config().get("ui_settings", {})
+        if ui_settings.get("auto_rank_update", True):
+            switcher.fetch_and_update_all_accounts()
+        notification = LaunchNotificationWidget(account_name, pixmap, standalone=True)
+        notification.show()
+    else:
+        sys.exit(1)
+
 
 def main():
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
@@ -622,30 +646,24 @@ def main():
         
         ui_settings = switcher.get_ima_config().get("ui_settings", {})
         use_rank_icons = ui_settings.get("use_rank_icons", False)
-        game_icon = generate_icon(account_name, account_icon_path, rank, use_rank_icons, switcher.base_dir)
+        game_icon_path = switcher.get_icon_path_for_account(account_name, rank, use_rank_icons)
+        game_icon = _load_qicon_from_path(game_icon_path)
         pixmap = game_icon.pixmap(game_icon.actualSize(QSize(180, 180)))
 
         if game_type == "both":
             selection_dialog = GameSelectionDialog(account_name, pixmap)
-            selected_game = None
-            if selection_dialog.exec_() == QDialog.Accepted:
-                selected_game = selection_dialog.game_selected_value
-            
-            if selected_game:
-                result, _, _ = switcher.switch_account(account_name, selected_game=selected_game)
-                if result:
-                    switcher.fetch_and_update_rank_data(account_name)
-                    notification = LaunchNotificationWidget(account_name, pixmap, in_game_name=in_game_name, in_game_tag=in_game_tag, rank=rank, use_rank_icons=use_rank_icons, standalone=True)
-                    notification.show()
-                    sys.exit(app.exec_())
-                else:
-                    sys.exit(1)
-            else:
-                sys.exit(0) # User cancelled game selection
+            selection_dialog.game_selected.connect(lambda game: _handle_game_selection_standalone(switcher, account_name, game, pixmap))
+            selection_dialog.show() # Use show() for non-modal behavior
+            sys.exit(app.exec_()) # Keep the app running until dialog is closed or game launched
+
         else:
-            result, _, _ = switcher.switch_account(account_name)
+            result, _, _ = switcher.switch_account(account_name, on_update_callback=None)
             if result:
-                switcher.fetch_and_update_rank_data(account_name)
+                ui_settings = switcher.get_ima_config().get("ui_settings", {})
+                if ui_settings.get("auto_rank_update", True):
+                    switcher.fetch_and_update_all_accounts()
+                    with open(os.path.join(switcher.user_data_dir, '.refresh_ui'), 'w') as f:
+                        f.write('1')
                 notification = LaunchNotificationWidget(account_name, pixmap, in_game_name=in_game_name, in_game_tag=in_game_tag, rank=rank, use_rank_icons=use_rank_icons, standalone=True)
                 notification.show()
                 sys.exit(app.exec_())
