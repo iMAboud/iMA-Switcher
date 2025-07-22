@@ -1,6 +1,6 @@
 import os
 from PyQt5.QtWidgets import QMessageBox, QFileDialog, QDialog
-from ui_components import SaveAccountDialog, ExportIMAMenuDialog, OptionsDialog, CustomMessageDialog
+from ui_components import SaveAccountDialog, ExportIMAMenuDialog, OptionsDialog, CustomMessageDialog, ConfirmDeleteDialog
 
 class SettingsActions:
     def __init__(self, parent):
@@ -22,7 +22,7 @@ class SettingsActions:
             )
 
     def save_current_account(self):
-        dialog = SaveAccountDialog(self.parent)
+        dialog = SaveAccountDialog(self.parent, switcher_instance=self.switcher)
         if dialog.exec_() == QDialog.Accepted:
             name, game, in_game_name, in_game_tag = dialog.get_details()
             if not name:
@@ -47,16 +47,20 @@ class SettingsActions:
 
     def restore_profiles(self):
         path, _ = QFileDialog.getOpenFileName(self.parent, "Select Backup", "", "ZIP Files (*.zip)")
-        if path and QMessageBox.question(
-            self.parent,
-            "Confirm Restore", "This will overwrite all current profiles. Continue?",
-            QMessageBox.Yes | QMessageBox.No
-        ) == QMessageBox.Yes:
-            if self.switcher.restore_profiles(path):
-                self.parent.status_label.setText("Profiles restored successfully.")
-                self.parent.load_accounts()
-            else:
-                self.parent.status_label.setText("Restore failed.")
+        if path:
+            dialog = ConfirmDeleteDialog(
+                account_name="", 
+                parent=self.parent,
+                title="Confirm Restore",
+                message="""Are you sure you want to overwrite
+current settings?"""
+            )
+            if dialog.exec_() == QDialog.Accepted:
+                if self.switcher.restore_profiles(path):
+                    self.parent.status_label.setText("Profiles restored successfully.")
+                    self.parent.load_accounts()
+                else:
+                    self.parent.status_label.setText("Restore failed.")
 
     def open_profiles_folder(self):
         os.startfile(self.switcher.profiles_dir)

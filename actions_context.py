@@ -1,5 +1,5 @@
-from PyQt5.QtWidgets import QMessageBox, QFileDialog, QDialog
-from ui_components import InputDialog, ConfirmDeleteDialog
+from PyQt5.QtWidgets import QMessageBox, QDialog
+from ui_components import InputDialog, ConfirmDeleteDialog, IconPickerDialog
 
 class ContextActions:
     def __init__(self, parent):
@@ -69,27 +69,24 @@ class ContextActions:
     def change_icon(self):
         name = self.parent.get_selected_account_name()
         if not name: return
-        path, _ = QFileDialog.getOpenFileName(
-            self.parent, f"Select Icon for {name}", "", "Images (*.png *.jpg *.jpeg *.ico)"
-        )
-        if path:
-            if self.switcher.set_account_icon(name, path):
-                self.parent.status_label.setText(f"Icon updated for '{name}'.")
-                self.parent.load_accounts()
-            else:
-                self.parent.status_label.setText(f"Failed to update icon for '{name}'.")
 
-    def remove_icon(self):
-        name = self.parent.get_selected_account_name()
-        if not name: return
+        current_icon_path, _, _, _, _, _, _ = self.switcher.get_saved_accounts().get(name, (None, None, None, None, None, None, None))
         
-        dialog = ConfirmDeleteDialog(name, self.parent, title="Remove Icon", message=f"Remove icon for '{name}'?")
+        dialog = IconPickerDialog(self.switcher, current_icon_path, self.parent)
         if dialog.exec_() == QDialog.Accepted:
-            if self.switcher.remove_account_icon(name):
-                self.parent.status_label.setText(f"Icon removed for '{name}'.")
-                self.parent.load_accounts()
-            else:
-                self.parent.status_label.setText(f"Failed to remove icon for '{name}'.")
+            new_icon_path = dialog.get_selected_icon_path()
+            if new_icon_path:
+                if self.switcher.set_account_icon(name, new_icon_path):
+                    self.parent.status_label.setText(f"Icon updated for '{name}'.")
+                    self.parent.on_account_updated(name)
+                else:
+                    self.parent.status_label.setText(f"Failed to update icon for '{name}'.")
+            else: # No icon path means remove
+                if self.switcher.remove_account_icon(name):
+                    self.parent.status_label.setText(f"Icon removed for '{name}'.")
+                    self.parent.on_account_updated(name)
+                else:
+                    self.parent.status_label.setText(f"Failed to remove icon for '{name}'.")
 
     def create_shortcut(self):
         name = self.parent.get_selected_account_name()
@@ -104,7 +101,7 @@ class ContextActions:
         if name:
             if self.switcher.set_account_game(name, game):
                 self.parent.status_label.setText(f"Set game for '{name}' to {game.capitalize()}. ")
-                self.parent.load_accounts()
+                self.parent.on_account_updated(name)
             else:
                 self.parent.status_label.setText(f"Failed to set game for '{name}'.")
 
@@ -114,6 +111,6 @@ class ContextActions:
         
         if self.switcher.set_account_rank(name, rank):
             self.parent.status_label.setText(f"Rank for '{name}' set to {rank or 'None'}.")
-            self.parent.load_accounts()
+            self.parent.on_account_updated(name)
         else:
             self.parent.status_label.setText(f"Failed to set rank for '{name}'.")

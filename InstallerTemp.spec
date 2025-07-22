@@ -5,7 +5,7 @@ a = Analysis(
     ['main.pyw'],
     pathex=[],
     binaries=[],
-    datas=[('Assets', 'Assets')],
+    datas=[('Assets', 'Assets'), ('icons', 'icons')],
     hiddenimports=['game_switcher', 'actions_context', 'actions_settings', 'ui_components', 'win32com.client', 'requests'],
     hookspath=[],
     hooksconfig={},

@@ -46,9 +46,26 @@ from PyQt5.QtCore import (
 def get_asset_path(filename):
     return os.path.join(os.path.dirname(__file__), "Assets", filename)
 
+def get_icon_path(filename):
+    return os.path.join(os.path.dirname(__file__), "icons", filename)
+
+def get_icon_paths_from_folder(folder_path):
+    """
+    Retrieves all image file paths from the specified folder.
+    """
+    icon_paths = []
+    if os.path.exists(folder_path) and os.path.isdir(folder_path):
+        for filename in os.listdir(folder_path):
+            file_path = os.path.join(folder_path, filename)
+            if os.path.isfile(file_path) and filename.lower().endswith(('.png', '.jpg', '.jpeg', '.ico')):
+                icon_paths.append(file_path)
+    return icon_paths
+
 
 class LaunchNotificationWidget(QWidget):
-    def __init__(self, account_name, icon_pixmap, in_game_name=None, in_game_tag=None, rank=None, use_rank_icons=False, parent=None, standalone=False):
+    def __init__(self, account_name, icon_pixmap, in_game_name=None, in_game_tag=None, rank=None, use_rank_icons=False, parent=None, standalone=False, switcher_instance=None):
+        super().__init__(parent)
+        self.switcher_instance = switcher_instance
         super().__init__(parent)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool | Qt.CustomizeWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground); self.setAttribute(Qt.WA_DeleteOnClose)
@@ -86,7 +103,7 @@ class LaunchNotificationWidget(QWidget):
         if rank and not use_rank_icons: # Only show if not already using rank icon as main icon
             rank_icon_path = get_asset_path(f"{rank.lower().replace(" ", "_")}.png")
             if os.path.exists(rank_icon_path):
-                rank_pixmap = QPixmap(rank_icon_path).scaled(24, 24, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                rank_pixmap = self.switcher_instance.get_qicon_from_path(rank_icon_path).pixmap(24, 24)
                 rank_label = QLabel(self)
                 rank_label.setPixmap(rank_pixmap)
                 name_layout.addWidget(rank_label)
@@ -371,7 +388,7 @@ class ExportIMAMenuDialog(QDialog):
         for name in sorted(list(all_accounts - current_accounts)): self._add_item(name, self.accounts_data[name][0])
 
     def _add_item(self, name, icon_path):
-        item = QListWidgetItem(name); item.setIcon(QIcon(icon_path or "")); self.accounts_list.addItem(item)
+        item = QListWidgetItem(name); item.setIcon(self.parent().switcher.get_qicon_from_path(icon_path or "")); self.accounts_list.addItem(item)
 
     def select_icon(self):
         path, _ = QFileDialog.getOpenFileName(self, "Select Icon", "", "Icon Files (*.ico *.png)")
@@ -501,9 +518,10 @@ class InputDialog(PopupDialog):
         return self.input_field.text().strip()
 
 class SaveAccountDialog(PopupDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, switcher_instance=None):
         super().__init__("Save Account", parent)
         self.setFixedSize(380, 300)
+        self.switcher_instance = switcher_instance
 
         name_label = QLabel("Enter a name for the current account:")
         name_label.setStyleSheet("color: #e0d6d1; font-size: 16px; font-weight: bold; text-align: center;")
@@ -560,18 +578,18 @@ class SaveAccountDialog(PopupDialog):
         lol_icon_path = get_asset_path("lol.png")
 
         if os.path.exists(valorant_icon_path):
-            self.game_combo.addItem(QIcon(valorant_icon_path), "Valorant", "valorant")
+            self.game_combo.addItem(self.switcher_instance.get_qicon_from_path(valorant_icon_path), "Valorant", "valorant")
         else:
             self.game_combo.addItem("Valorant", "valorant")
 
         if os.path.exists(lol_icon_path):
-            self.game_combo.addItem(QIcon(lol_icon_path), "League of Legends", "lol")
+            self.game_combo.addItem(self.switcher_instance.get_qicon_from_path(lol_icon_path), "League of Legends", "lol")
         else:
             self.game_combo.addItem("League of Legends", "lol")
 
         riot_icon_path = get_asset_path("Riot.png")
         if os.path.exists(riot_icon_path):
-            self.game_combo.addItem(QIcon(riot_icon_path), "Both", "both")
+            self.game_combo.addItem(self.switcher_instance.get_qicon_from_path(riot_icon_path), "Both", "both")
         else:
             self.game_combo.addItem("Both", "both")
             
@@ -1320,11 +1338,12 @@ border-bottom: 1px solid #4f4a4b;
 class GameSelectionDialog(PopupDialog):
     game_selected = pyqtSignal(str)
 
-    def __init__(self, account_name, account_icon_pixmap, parent=None):
+    def __init__(self, account_name, account_icon_pixmap, parent=None, switcher_instance=None):
         super().__init__("Select Game", parent)
         self.setFixedSize(400, 450)
         self.account_name = account_name
         self.account_icon_pixmap = account_icon_pixmap
+        self.switcher_instance = switcher_instance
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
 
         self.content_layout.setContentsMargins(20, 20, 20, 20)
@@ -1366,7 +1385,8 @@ class GameSelectionDialog(PopupDialog):
             QPushButton { background-color: #3a3637; border-radius: 15px; border: 2px solid #4f4a4b; }
             QPushButton:hover { background-color: #4f4a4b; border-color: #c89f68; }
             QPushButton:pressed { background-color: #2c2a2b; }
-        """)
+        """
+)
         button.clicked.connect(lambda: self._set_selected_game_and_accept(game_id))
 
         layout = QVBoxLayout(button)
@@ -1374,9 +1394,10 @@ class GameSelectionDialog(PopupDialog):
         layout.setSpacing(10)
 
         icon_path = get_asset_path(icon_filename)
-        if os.path.exists(icon_path):
+        print(f"DEBUG: _create_game_button - icon_path: {icon_path}, exists: {os.path.exists(icon_path)}")
+        if self.switcher_instance and os.path.exists(icon_path):
             icon_label = QLabel()
-            pixmap = QPixmap(icon_path).scaled(80, 80, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            pixmap = self.switcher_instance.get_qicon_from_path(icon_path).pixmap(80, 80).scaled(80, 80, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             icon_label.setPixmap(pixmap)
             icon_label.setAlignment(Qt.AlignCenter)
             layout.addWidget(icon_label)
@@ -1392,6 +1413,216 @@ class GameSelectionDialog(PopupDialog):
         self.game_selected_value = game_id
         self.game_selected.emit(game_id)
         self.accept()
+
+class IconPickerDialog(PopupDialog):
+    def __init__(self, switcher_instance, current_icon_path, parent=None):
+        super().__init__("Change Icon", parent)
+        self.switcher = switcher_instance
+        self.selected_icon_path = current_icon_path
+        self.setFixedSize(420, 550)
+
+        # --- Main Layout and Styling ---
+        self.content_layout.setSpacing(15)
+        self.content_layout.setAlignment(Qt.AlignTop)
+        self.main_widget.setStyleSheet("""#popup_widget { background-color: #2c2a2b; border-radius: 15px; border: 1px solid #4f4a4b; }
+            QLabel { color: #e0d6d1; font-weight: bold; }
+            QScrollArea { background-color: #3a3637; border: 1px solid #4f4a4b; border-radius: 10px; }""")
+
+        # --- Icon Preview Section ---
+        preview_container = QWidget()
+        preview_layout = QVBoxLayout(preview_container)
+        preview_layout.setAlignment(Qt.AlignCenter)
+        preview_layout.setContentsMargins(0, 10, 0, 10)
+
+        self.icon_display_widget = QWidget()
+        self.icon_display_widget.setFixedSize(130, 130)
+
+        # The preview button is a child of the display widget, positioned manually
+        self.icon_preview_button = QPushButton(self.icon_display_widget)
+        self.icon_preview_button.setFixedSize(120, 120)
+        self.icon_preview_button.move(5, 5)  # Centered (130-120)/2
+        self.icon_preview_button.clicked.connect(self.select_icon_from_device)
+
+        # The remove button is also a child, moved to the corner and raised
+        self.remove_button = QPushButton("✕", self.icon_display_widget)
+        self.remove_button.setFixedSize(24, 24)
+        self.remove_button.setStyleSheet("""QPushButton { background-color: #f38ba8; color: white; font-size: 14px; font-weight: bold; border-radius: 12px; border: 1px solid transparent; }
+            QPushButton:hover { background-color: #e67e80; border-color: white; }""")
+        self.remove_button.clicked.connect(self.remove_icon)
+        self.remove_button.move(5, 5)  # Top-left corner
+        self.remove_button.raise_()
+
+        preview_layout.addWidget(self.icon_display_widget)
+        self.content_layout.addWidget(preview_container)
+
+        # --- Icons Grid Section ---
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        grid_container = QWidget()
+        grid_container.setStyleSheet("background-color: #3a3637;")
+        self.grid_layout = QGridLayout(grid_container)
+        self.grid_layout.setSpacing(15)
+        self.grid_layout.setContentsMargins(15, 15, 15, 15)
+        scroll_area.setWidget(grid_container)
+        
+        self.content_layout.addWidget(scroll_area)
+
+        # --- Buttons Section ---
+        button_layout = QHBoxLayout()
+        button_layout.setSpacing(15)
+        button_layout.addStretch()
+
+        cancel_button = QPushButton("Cancel")
+        cancel_button.setStyleSheet("""QPushButton { background-color: #4f4a4b; color: #e0d6d1; font-weight: bold; border-radius: 8px; padding: 10px 20px; border: 1px solid #4f4a4b;}
+            QPushButton:hover { background-color: #5a5556; border: 1px solid #c89f68; }""")
+        cancel_button.clicked.connect(self.reject)
+        button_layout.addWidget(cancel_button)
+
+        save_button = QPushButton("Save")
+        save_button.setStyleSheet("""QPushButton { background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 10px 20px; }
+            QPushButton:hover { background-color: #d9b68b; }""")
+        save_button.clicked.connect(self.accept)
+        button_layout.addWidget(save_button)
+        
+        button_layout.addStretch()
+        self.content_layout.addLayout(button_layout)
+
+        self.update_preview()
+        
+        QTimer.singleShot(50, self.populate_icon_grid)
+
+    def populate_icon_grid(self):
+        icons_path = os.path.join(self.switcher.base_dir, "icons")
+        icon_files = get_icon_paths_from_folder(icons_path)
+        
+        for i, icon_path in enumerate(icon_files):
+            row, col = i // 4, i % 4
+            icon_widget = self.create_grid_icon(icon_path)
+            self.grid_layout.addWidget(icon_widget, row, col, Qt.AlignCenter)
+
+    def create_grid_icon(self, icon_path):
+        icon_button = QPushButton()
+        icon_button.setFixedSize(70, 70)
+        
+        icon = self.switcher.get_qicon_from_path(icon_path)
+        pixmap = icon.pixmap(icon.actualSize(QSize(256, 256)))
+        
+        scaled_pixmap = pixmap.scaled(60, 60, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        
+        circular_pixmap = QPixmap(60, 60)
+        circular_pixmap.fill(Qt.transparent)
+        painter = QPainter(circular_pixmap)
+        painter.setRenderHint(QPainter.Antialiasing)
+        path = QPainterPath()
+        path.addEllipse(0, 0, 60, 60)
+        painter.setClipPath(path)
+        
+        x = (60 - scaled_pixmap.width()) / 2
+        y = (60 - scaled_pixmap.height()) / 2
+        painter.drawPixmap(int(x), int(y), scaled_pixmap)
+        painter.end()
+
+        icon_button.setIcon(QIcon(circular_pixmap))
+        icon_button.setIconSize(QSize(60, 60))
+        icon_button.setStyleSheet("QPushButton { border: 2px solid transparent; border-radius: 35px; } QPushButton:hover { border-color: #c89f68; }")
+        icon_button.clicked.connect(lambda: self.set_selected_icon(icon_path))
+        return icon_button
+
+    def update_preview(self):
+        size = 120
+        if self.selected_icon_path and os.path.exists(self.selected_icon_path):
+            icon = self.switcher.get_qicon_from_path(self.selected_icon_path)
+            pixmap = icon.pixmap(icon.actualSize(QSize(256, 256)))
+            scaled_pixmap = pixmap.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            
+            circular_pixmap = QPixmap(size, size)
+            circular_pixmap.fill(Qt.transparent)
+            painter = QPainter(circular_pixmap)
+            painter.setRenderHint(QPainter.Antialiasing)
+            path = QPainterPath()
+            path.addEllipse(0, 0, size, size)
+            painter.setClipPath(path)
+            x = (size - scaled_pixmap.width()) / 2
+            y = (size - scaled_pixmap.height()) / 2
+            painter.drawPixmap(int(x), int(y), scaled_pixmap)
+            painter.end()
+
+            self.icon_preview_button.setIcon(QIcon(circular_pixmap))
+            self.icon_preview_button.setText("")
+            self.icon_preview_button.setIconSize(QSize(size, size))
+            self.icon_preview_button.setStyleSheet("""QPushButton { border: 2px solid transparent; border-radius: 60px; }
+                QPushButton:hover { border-color: #d9b68b; }""")
+            self.remove_button.setVisible(True)
+        else:
+            self.icon_preview_button.setIcon(QIcon())
+            self.icon_preview_button.setText("+")
+            self.icon_preview_button.setStyleSheet("""QPushButton {
+                    border: 2px dashed #c89f68;
+                    border-radius: 60px;
+                    color: #e0d6d1;
+                    font-size: 48px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    border-color: #d9b68b;
+                    color: #d9b68b;
+                }""")
+            self.remove_button.setVisible(False)
+
+    def set_selected_icon(self, path):
+        self.selected_icon_path = path
+        self.update_preview()
+
+    def select_icon_from_device(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Select Icon", "", "Images (*.png *.jpg *.jpeg *.ico)")
+        if path:
+            self.set_selected_icon(path)
+
+    def remove_icon(self):
+        self.selected_icon_path = None
+        self.update_preview()
+
+    def get_selected_icon_path(self):
+        return self.selected_icon_path
+
+
+class RiotClientNotFoundDialog(PopupDialog):
+    def __init__(self, parent=None):
+        super().__init__("Riot Client Not Found", parent)
+        self.setFixedSize(400, 250)
+        
+        message_label = QLabel("Could not find RiotClientServices.exe.\nPlease locate it manually.")
+        message_label.setStyleSheet("color: #e0d6d1; font-size: 16px; font-weight: bold; text-align: center;")
+        message_label.setAlignment(Qt.AlignCenter)
+        self.content_layout.addWidget(message_label)
+
+        self.path_edit = QLineEdit()
+        self.path_edit.setPlaceholderText("Path to RiotClientServices.exe")
+        self.path_edit.setStyleSheet("background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 8px; color: #e0d6d1;")
+        self.content_layout.addWidget(self.path_edit)
+
+        button_layout = QHBoxLayout()
+        browse_button = QPushButton("Browse")
+        browse_button.setStyleSheet("background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 8px;")
+        browse_button.clicked.connect(self.browse)
+        button_layout.addWidget(browse_button)
+
+        save_button = QPushButton("Save")
+        save_button.setStyleSheet("background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 8px;")
+        save_button.clicked.connect(self.accept)
+        button_layout.addWidget(save_button)
+        
+        self.content_layout.addLayout(button_layout)
+
+    def browse(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Select RiotClientServices.exe", "", "Executable Files (*.exe)")
+        if path:
+            self.path_edit.setText(path)
+
+    def get_path(self):
+        return self.path_edit.text()
 
 class ConfirmDeleteDialog(PopupDialog):
     def __init__(self, account_name, parent=None, title="Confirm Delete", message=None):
@@ -1418,7 +1649,8 @@ class ConfirmDeleteDialog(PopupDialog):
             }
             QPushButton:hover { background-color: #5a5556; border: 1px solid #c89f68; }
             QPushButton:pressed { background-color: #454142; }
-        """)
+        """
+)
         no_button.clicked.connect(self.reject)
         button_layout.addWidget(no_button)
 
@@ -1430,7 +1662,8 @@ class ConfirmDeleteDialog(PopupDialog):
             QPushButton:hover {
                 background-color: #d9b68b; /* Brighter coffee color */
             }
-        """)
+        """
+)
         yes_button.clicked.connect(self.accept)
         button_layout.addWidget(yes_button)
         
@@ -1442,7 +1675,7 @@ class AccountWidget(QWidget):
     double_clicked = pyqtSignal(str)
     context_menu_requested = pyqtSignal(str, QPoint)
 
-    def __init__(self, account_name, icon, game, rank, in_game_name, in_game_tag, current_rr, last_game_rr, parent=None, is_add_button=False):
+    def __init__(self, account_name, icon, game, rank, in_game_name, in_game_tag, current_rr, last_game_rr, parent=None, is_add_button=False, switcher_instance=None):
         super().__init__(parent)
         self.account_name = account_name
         self.game = game
@@ -1578,22 +1811,29 @@ class AccountWidget(QWidget):
     def set_icon(self, icon, size):
         self.icon = icon
         self.icon_label.setFixedSize(QSize(size, size))
-        source_pixmap = icon.pixmap(QSize(512, 512))
-        original_width, original_height = source_pixmap.width(), source_pixmap.height()
-        square_side = min(original_width, original_height)
-        crop_x, crop_y = (original_width - square_side) // 2, (original_height - square_side) // 2
-        cropped_pixmap = source_pixmap.copy(crop_x, crop_y, square_side, square_side)
-        scaled_pixmap = cropped_pixmap.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        
+        # Create a circular pixmap
         circular_pixmap = QPixmap(size, size)
         circular_pixmap.fill(Qt.transparent)
+
         painter = QPainter(circular_pixmap)
         painter.setRenderHint(QPainter.Antialiasing)
+        
+        # Define the circular path
         path = QPainterPath()
         path.addEllipse(0, 0, size, size)
         painter.setClipPath(path)
-        x, y = int((size - scaled_pixmap.width()) / 2), int((size - scaled_pixmap.height()) / 2)
-        painter.drawPixmap(x, y, scaled_pixmap)
+
+        # Get the source pixmap and scale it correctly
+        source_pixmap = icon.pixmap(icon.actualSize(QSize(256, 256))) # Get a high-res version
+        scaled_pixmap = source_pixmap.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
+        # Draw the pixmap centered in the circle
+        x = (size - scaled_pixmap.width()) / 2
+        y = (size - scaled_pixmap.height()) / 2
+        painter.drawPixmap(int(x), int(y), scaled_pixmap)
         painter.end()
+        
         self.icon_label.setPixmap(circular_pixmap)
 
     def paintEvent(self, event):
@@ -1686,6 +1926,19 @@ class AccountWidget(QWidget):
             rr_color = "#a6e3a1" if self.last_game_rr > 0 else ("#f38ba8" if self.last_game_rr < 0 else "#e0d6d1") # White for 0
             self.last_game_rr_label.setText(f"({rr_text})")
             self.last_game_rr_label.setStyleSheet(f"color: {rr_color}; font-size: 11px;")
+        
+        # Update rank icon based on new rank data
+        game_icon_size = 24 # Assuming this is consistent
+        if self.rank:
+            rank_icon_path = get_asset_path(f"{self.rank.lower().replace(" ", "_")}.png")
+            if os.path.exists(rank_icon_path):
+                pixmap = QPixmap(rank_icon_path).scaled(game_icon_size, game_icon_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                self.rank_icon_label.setPixmap(pixmap)
+            else:
+                self.rank_icon_label.clear() # Clear if path doesn't exist
+        else:
+            self.rank_icon_label.clear() # Clear if no rank
+
         self.update()
 
 class HoverButton(QPushButton):
