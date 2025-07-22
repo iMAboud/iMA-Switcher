@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="https://i.imgur.com/qEig54p.png" alt="Main User Interface" width="700"/>
+  <img src="https://i.imgur.com/5JSAMpP.png" alt="Main User Interface" width="700"/>
 </p>
 
 ## ✨ Features
