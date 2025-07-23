@@ -6,24 +6,56 @@ import ctypes
 import sys
 import threading
 from zipfile import ZipFile
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 import re
 import time
 import tempfile
+from PyQt5.QtWidgets import QApplication
+from PyQt5.QtCore import QEvent
+
+class CustomUpdateEvent(QEvent):
+    EVENT_TYPE = QEvent.Type(QEvent.registerEventType())
+
+    def __init__(self, account_name):
+        super().__init__(CustomUpdateEvent.EVENT_TYPE)
+        self.account_name = account_name
 try:
     import requests
 except ImportError:
     requests = None
-    print("Warning: 'requests' library not installed. Rank fetching will not work. Please install it with 'pip install requests'")
+    logging.warning("'requests' library not installed. Rank fetching will not work. Please install it with 'pip install requests'")
 try:
     from PIL import Image
 except ImportError:
     Image = None
-    print("Warning: Pillow not installed. Image conversion for icons will not work. Please install it with 'pip install Pillow'")
+    logging.warning("Pillow not installed. Image conversion for icons will not work. Please install it with 'pip install Pillow'")
 
 import logging
 
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
 class GameSwitcher:
+    DEFAULT_CONFIG = {
+        "output_dir": None,
+        "title": "Valorant",
+        "menu_icon_path": "",
+        "ordered_accounts": [],
+        "last_switched_account": None,
+        "riot_client_exe_path": None,
+        "ui_settings": {
+            "show_game_icons": True,
+            "show_rank_tips": True,
+            "tip_delay": 1.0,
+            "use_rank_icons": False,
+            "show_rank_icon_left": True,
+            "show_name_tag": True,
+            "auto_rank_update": True,
+            "rank_check_region": "eu",
+            "grid_size": 4,
+            "orientation": "vertical"
+        }
+    }
     def __init__(self, base_directory=None):
         logging.debug("GameSwitcher: Initializing")
         self.app_data_path = os.getenv('LOCALAPPDATA')
@@ -44,6 +76,8 @@ class GameSwitcher:
         self.config = self._load_config()
         self._account_game_configs_cache = {}
         self._icon_cache = {}
+        self.switch_counter = 0
+        self._cleanup_valorant_temp_files()
 
         self.GAMES = {
             "valorant": {
@@ -62,50 +96,60 @@ class GameSwitcher:
         self.riot_games_config = {}
         self.initialize_riot_client_paths()
         os.makedirs(self.profiles_dir, exist_ok=True) # Ensure profiles directory exists
+        self._cleanup_valorant_temp_files()
+
+    def _cleanup_valorant_temp_files(self):
+        # Clean up CrashReportClient
+        crash_report_path = os.path.join(self.app_data_path, "VALORANT", "Saved", "Config", "CrashReportClient")
+        if os.path.exists(crash_report_path):
+            try:
+                shutil.rmtree(crash_report_path)
+                logging.info(f"Successfully cleaned up {crash_report_path}")
+            except Exception as e:
+                logging.error(f"Failed to clean up {crash_report_path}: {e}")
+
+        # Clean up log files
+        logs_path = os.path.join(self.app_data_path, "VALORANT", "Saved", "Logs")
+        if os.path.exists(logs_path):
+            for filename in os.listdir(logs_path):
+                if filename.startswith("ShooterGame-backup") and filename.endswith(".log"):
+                    try:
+                        os.remove(os.path.join(logs_path, filename))
+                        logging.info(f"Successfully deleted log file: {filename}")
+                    except Exception as e:
+                        logging.error(f"Failed to delete log file {filename}: {e}")
 
     def is_admin(self):
         try: return ctypes.windll.shell32.IsUserAnAdmin()
         except: return False
 
     def _load_config(self, force_reload=False):
-        defaults = {
-            "output_dir": None,
-            "title": "Valorant",
-            "menu_icon_path": "",
-            "ordered_accounts": [],
-            "riot_client_exe_path": None,
-            "ui_settings": {
-                "show_game_icons": True,
-                "show_rank_tips": True,
-                "tip_delay": 1.0,
-                "use_rank_icons": False,
-                "show_rank_icon_left": True,
-                "show_name_tag": True,
-                "auto_rank_update": True,
-                "rank_check_region": "eu",
-                "grid_size": 4,
-                "orientation": "vertical"
-            }
-        }
+        config = self.DEFAULT_CONFIG.copy()
         if os.path.exists(self.config_path):
             try:
                 with open(self.config_path, 'r', encoding='utf-8') as f:
                     loaded_config = json.load(f)
                     
-                    # Define all possible top-level deprecated keys
-                    deprecated_keys = ["last_switched_account", "save_last_window_size", "last_window_size", "show_game_icons"]
-                    for key in deprecated_keys:
-                        if key in loaded_config:
-                            del loaded_config[key]
+                    # Recursively update config with loaded values
+                    def deep_update(target, source):
+                        for k, v in source.items():
+                            if isinstance(v, dict) and k in target and isinstance(target[k], dict):
+                                target[k] = deep_update(target[k], v)
+                            else:
+                                target[k] = v
+                        return target
+                    
+                    config = deep_update(config, loaded_config)
 
-                    # Merge ui_settings specifically to preserve new defaults
-                    if "ui_settings" in loaded_config and isinstance(loaded_config["ui_settings"], dict):
-                        defaults["ui_settings"].update(loaded_config["ui_settings"])
-                    loaded_config["ui_settings"] = defaults["ui_settings"] # Ensure ui_settings in loaded_config is the merged one
-                    defaults.update(loaded_config)
+                    # Remove deprecated keys if they somehow persist in the loaded file
+                    deprecated_keys = ["last_switched_account", "save_last_window_size", "last_window_size"]
+                    for key in deprecated_keys:
+                        if key in config:
+                            del config[key]
+
             except (json.JSONDecodeError, UnicodeDecodeError):
-                print("Warning: config.json is corrupted or has encoding issues. Using defaults.")
-        return defaults
+                logging.warning("config.json is corrupted or has encoding issues. Using defaults.")
+        return config
 
     def _save_config(self):
         with open(self.config_path, 'w', encoding='utf-8') as f:
@@ -167,17 +211,36 @@ class GameSwitcher:
         subprocess.run(['cmd', '/c', 'mklink', '/J', link_name, source], check=True, startupinfo=startupinfo, capture_output=True, text=True)
 
     def _remove_junction_or_dir(self, path):
-        if not os.path.lexists(path): return
+        logging.debug(f"Attempting to remove: {path}")
+        if not os.path.exists(path): # Use os.path.exists for general check
+            logging.debug(f"Path does not exist, no removal needed: {path}")
+            return
         try:
-            if os.path.isdir(path) and not os.path.islink(path):
-                shutil.rmtree(path)
-            else:
+            if os.path.islink(path): # Explicitly check for symbolic links first
+                logging.debug(f"Removing symbolic link/junction: {path}")
                 os.remove(path)
-        except:
-            try:
-                os.rmdir(path)
-            except OSError as e:
-                print(f"Failed to remove {path}: {e}")
+            elif os.path.isfile(path):
+                logging.debug(f"Removing file: {path}")
+                os.remove(path)
+            elif os.path.isdir(path): # If it's a directory (and not a symlink)
+                try:
+                    logging.debug(f"Attempting to remove empty directory or junction with os.rmdir: {path}")
+                    os.rmdir(path) # Try rmdir for empty directories or junctions
+                except OSError as e:
+                    # If rmdir fails (e.g., directory not empty), then use rmtree
+                    logging.debug(f"os.rmdir failed for {path} ({e}), falling back to shutil.rmtree.")
+                    logging.debug(f"Removing directory and its contents: {path}")
+                    shutil.rmtree(path)
+            logging.debug(f"Successfully removed: {path}")
+        except PermissionError as e:
+            logging.error(f"Permission denied when trying to remove {path}: {e}")
+            raise # Re-raise to ensure the error is propagated
+        except OSError as e:
+            logging.error(f"OS error when trying to remove {path}: {e}")
+            raise # Re-raise to ensure the error is propagated
+        except Exception as e:
+            logging.error(f"An unexpected error occurred when trying to remove {path}: {e}")
+            raise # Re-raise to ensure the error is propagated
 
     def _load_game_config(self, account_name):
         if account_name in self._account_game_configs_cache:
@@ -191,7 +254,7 @@ class GameSwitcher:
                     self._account_game_configs_cache[account_name] = data # Cache the loaded data
                     return data
                 except json.JSONDecodeError:
-                    print(f"Warning: game.json for {account_name} is corrupted. Starting with empty config.")
+                    logging.warning(f"game.json for {account_name} is corrupted. Starting with empty config.")
                     self._account_game_configs_cache[account_name] = {} # Cache empty config for corrupted file
                     return {}
         self._account_game_configs_cache[account_name] = {} # Cache empty config for non-existent file
@@ -206,7 +269,7 @@ class GameSwitcher:
     def get_account_game(self, account_name):
         data = self._load_game_config(account_name)
         result = (data.get('game', 'valorant'), data.get('rank', None), data.get('in_game_name', None), data.get('in_game_tag', None), data.get('current_rr', None), data.get('last_game_rr', None))
-        print(f"DEBUG: get_account_game for {account_name} returning: {result} (length: {len(result)})")
+        logging.debug(f"DEBUG: get_account_game for {account_name} returning: {result} (length: {len(result)})")
         return result
 
     def set_account_game(self, account_name, game):
@@ -262,6 +325,18 @@ class GameSwitcher:
     def switch_account(self, account_name, selected_game=None, on_update_callback=None):
         if not self.is_admin():
             return False, "Administrator rights are required to switch accounts.", None
+
+        # Backup log for the last switched account
+        last_account_name = self.config.get("last_switched_account")
+        if last_account_name and last_account_name != account_name:
+            log_path = os.path.join(self.app_data_path, "VALORANT", "Saved", "Logs", "ShooterGame.log")
+            if os.path.exists(log_path):
+                last_account_path = self._get_account_path(last_account_name)
+                try:
+                    shutil.copy2(log_path, os.path.join(last_account_path, "ShooterGame.log.bak"))
+                    logging.info(f"Backed up ShooterGame.log for {last_account_name}")
+                except Exception as e:
+                    logging.error(f"Failed to backup ShooterGame.log for {last_account_name}: {e}")
         
         account_path = self._get_account_path(account_name)
         if not os.path.exists(account_path):
@@ -275,6 +350,16 @@ class GameSwitcher:
             game = selected_game
 
         self._terminate_processes()
+
+        # Restore ShooterGame.log for the current account
+        log_backup_path = os.path.join(account_path, "ShooterGame.log.bak")
+        log_dest_path = os.path.join(self.app_data_path, "VALORANT", "Saved", "Logs", "ShooterGame.log")
+        if os.path.exists(log_backup_path):
+            try:
+                shutil.copy2(log_backup_path, log_dest_path)
+                logging.info(f"Restored ShooterGame.log for {account_name}")
+            except Exception as e:
+                logging.error(f"Failed to restore ShooterGame.log for {account_name}: {e}")
         
         for item_name in self.riot_games_config["LoginData"].keys():
             riot_item_path = os.path.join(self.riot_client_data_path, item_name)
@@ -306,6 +391,9 @@ class GameSwitcher:
                 update_thread = threading.Thread(target=self.fetch_and_update_rank_data, args=(account_name, False, on_update_callback))
                 update_thread.daemon = True
                 update_thread.start()
+
+            self.config["last_switched_account"] = account_name
+            self._save_config()
 
             return True, "Account switched successfully.", game
         except FileNotFoundError:
@@ -375,7 +463,7 @@ class GameSwitcher:
             self.update_ima_menu_if_enabled('update', account_name)
             return True
         except Exception as e:
-            print(f"Error setting account icon: {e}")
+            logging.error(f"Error setting account icon: {e}")
             return False
 
     def remove_account_icon(self, account_name):
@@ -390,7 +478,7 @@ class GameSwitcher:
                 self.update_ima_menu_if_enabled('update', account_name)
                 return True
             except Exception as e:
-                print(f"Error removing account icon: {e}")
+                logging.error(f"Error removing account icon: {e}")
                 return False
         return False
 
@@ -398,7 +486,7 @@ class GameSwitcher:
         try:
             import win32com.client
         except ImportError:
-            print("Error: pywin32 is required to create shortcuts. Please run 'pip install pywin32'.")
+            logging.error("Error: pywin32 is required to create shortcuts. Please run 'pip install pywin32'.")
             return False
 
         desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
@@ -432,7 +520,7 @@ class GameSwitcher:
             shortcut.Save()
             return True
         except Exception as e:
-            print(f"Error creating shortcut: {e}")
+            logging.error(f"Error creating shortcut: {e}")
             return False
 
     def get_icon_path_for_account(self, account_name, rank=None, use_rank_icons=False):
@@ -487,7 +575,7 @@ class GameSwitcher:
                                     root_dir=temp_dir)
             return True
         except Exception as e:
-            print(f"Backup failed: {e}")
+            logging.error(f"Backup failed: {e}")
             return False
 
     def restore_profiles(self, backup_file_path):
@@ -531,14 +619,14 @@ class GameSwitcher:
             self.update_ima_menu_if_enabled('restore', list(self.get_saved_accounts().keys()))
             return True
         except Exception as e:
-            print(f"Restore failed: {e}")
+            logging.error(f"Restore failed: {e}")
             return False
 
     def update_ima_menu_if_enabled(self, action, name=None, old_name=None):
         ima_config = self.get_ima_config()
         if not ima_config.get("output_dir"): return
         
-        print(f"iMA Auto-Update: Action='{action}', Name='{name}'")
+        logging.info(f"iMA Auto-Update: Action='{action}', Name='{name}'")
         
         current_ordered_list = ima_config.get("ordered_accounts", [])
         if action == 'add' and name and name not in current_ordered_list: current_ordered_list.append(name)
@@ -559,9 +647,9 @@ class GameSwitcher:
                 menu_icon_path=ima_config.get("menu_icon_path", ""),
                 save_config=False  
             )
-            print("Auto-update of valo.nss successful.")
+            logging.info("Auto-update of valo.nss successful.")
         except Exception as e:
-            print(f"Automatic iMA menu update failed: {e}")
+            logging.error(f"Automatic iMA menu update failed: {e}")
 
     def generate_ima_menu_script(self, output_dir, title, ordered_accounts, menu_icon_path="", save_config=False):
         if save_config:
@@ -578,7 +666,7 @@ class GameSwitcher:
                 ima_icon_path = fr"@app.dir\imports\icons\{base_icon_name}"
                 menu_icon_arg = f" icon='{ima_icon_path}'"
             except Exception as e:
-                print(f"Could not copy menu icon: {e}")
+                logging.error(f"Could not copy menu icon: {e}")
         
         script_content = [f"menu(where=sel.count>0 type='namespace|back' mode='multiple' title='{title}'{menu_icon_arg})", "{"]
         main_app_path = sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(sys.argv[0])
@@ -634,35 +722,35 @@ class GameSwitcher:
     def _find_game_user_settings_files(self):
         valorant_config_path = os.path.join(os.getenv('LOCALAPPDATA'), "VALORANT", "Saved", "Config")
         ini_files = []
-        print(f"Searching for GameUserSettings.ini in: {valorant_config_path}")
+        logging.debug(f"Searching for GameUserSettings.ini in: {valorant_config_path}")
         if not os.path.exists(valorant_config_path):
-            print(f"Valorant config path does not exist: {valorant_config_path}")
+            logging.warning(f"Valorant config path does not exist: {valorant_config_path}")
             return []
 
         for root, dirs, files in os.walk(valorant_config_path):
             if "GameUserSettings.ini" in files and os.path.basename(root) == "Windows":
                 ini_file_path = os.path.join(root, "GameUserSettings.ini")
                 ini_files.append(ini_file_path)
-                print(f"Found: {ini_file_path}")
+                logging.debug(f"Found: {ini_file_path}")
         if not ini_files:
-            print("No GameUserSettings.ini files found.")
+            logging.info("No GameUserSettings.ini files found.")
         return ini_files
 
     def _find_riot_user_settings_files(self):
         valorant_config_path = os.path.join(os.getenv('LOCALAPPDATA'), "VALORANT", "Saved", "Config")
         ini_files = []
-        print(f"Searching for RiotUserSettings.ini in: {valorant_config_path}")
+        logging.debug(f"Searching for RiotUserSettings.ini in: {valorant_config_path}")
         if not os.path.exists(valorant_config_path):
-            print(f"Valorant config path does not exist: {valorant_config_path}")
+            logging.warning(f"Valorant config path does not exist: {valorant_config_path}")
             return []
 
         for root, dirs, files in os.walk(valorant_config_path):
             if "RiotUserSettings.ini" in files and os.path.basename(root) == "Windows":
                 ini_file_path = os.path.join(root, "RiotUserSettings.ini")
                 ini_files.append(ini_file_path)
-                print(f"Found: {ini_file_path}")
+                logging.debug(f"Found: {ini_file_path}")
         if not ini_files:
-            print("No RiotUserSettings.ini files found.")
+            logging.info("No RiotUserSettings.ini files found.")
         return ini_files
 
     def get_graphics_settings(self):
@@ -731,7 +819,7 @@ class GameSwitcher:
         all_success = True
 
         if not game_user_ini_files:
-            print("No GameUserSettings.ini files found to update.")
+            logging.info("No GameUserSettings.ini files found to update.")
         else:
             display_mode = graphics_settings.get("display_mode", "Default")
             quality_settings = graphics_settings.get("quality", {})
@@ -790,12 +878,13 @@ class GameSwitcher:
                             if hdr_idx != -1: temp_lines.insert(hdr_idx + 1, f"FullscreenMode={fs_val}\n")
 
                     with open(ini_file_path, 'w', encoding='utf-8') as f: f.writelines(temp_lines)
-                    print(f"Successfully updated: {ini_file_path}")
+                    logging.info(f"Successfully updated: {ini_file_path}")
                 except Exception as e:
-                    print(f"Error updating {ini_file_path}: {e}"); all_success = False
+                    logging.error(f"Error updating {ini_file_path}: {e}")
+                    all_success = False
 
         if not riot_user_ini_files:
-            print("No RiotUserSettings.ini files found to update.")
+            logging.info("No RiotUserSettings.ini files found to update.")
         else:
             riot_settings = graphics_settings.get("riot_settings", {})
             audio_settings = graphics_settings.get("audio_settings", {})
@@ -839,11 +928,35 @@ class GameSwitcher:
                                     temp_lines.append(insert_line)
 
                     with open(ini_file_path, 'w', encoding='utf-8') as f: f.writelines(temp_lines)
-                    print(f"Successfully updated: {ini_file_path}")
+                    logging.info(f"Successfully updated: {ini_file_path}")
                 except Exception as e:
-                    print(f"Error updating {ini_file_path}: {e}"); all_success = False
+                    logging.error(f"Error updating {ini_file_path}: {e}")
+                    all_success = False
 
         return all_success, None if all_success else "One or more files failed to update."
+
+    def get_icon_from_cache(self, icon_path):
+        """Gets an icon from the cache. Returns None if not found."""
+        return self._icon_cache.get(icon_path)
+
+    def get_placeholder_qicon(self):
+        """Returns a generic placeholder QIcon for async loading."""
+        placeholder_path = "placeholder_loading"
+        if placeholder_path in self._icon_cache:
+            return self._icon_cache[placeholder_path]
+
+        from PyQt5.QtGui import QPixmap, QPainter, QColor, QFont, QIcon
+        from PyQt5.QtCore import Qt
+        pixmap = QPixmap(128, 128)
+        pixmap.fill(QColor("#3a3637"))
+        p = QPainter(pixmap)
+        p.setPen(QColor("#c89f68"))
+        p.setFont(QFont("Segoe UI", 28, QFont.Bold))
+        p.drawText(pixmap.rect(), Qt.AlignCenter, "...")
+        p.end()
+        icon = QIcon(pixmap)
+        self._icon_cache[placeholder_path] = icon
+        return icon
 
     def get_qicon_from_path(self, icon_path):
         if icon_path in self._icon_cache:
@@ -856,7 +969,7 @@ class GameSwitcher:
             from PIL import Image
         except ImportError:
             Image = None
-            print("Warning: Pillow not installed. Image conversion for icons will not work. Please install it with 'pip install Pillow'")
+            logging.warning("Pillow not installed. Image conversion for icons will not work. Please install it with 'pip install Pillow'")
 
         if icon_path and os.path.exists(icon_path):
             try:
@@ -875,18 +988,18 @@ class GameSwitcher:
                 self._icon_cache[icon_path] = icon
                 return icon
             except Exception as e:
-                print(f"Error loading icon from {icon_path}: {e}. Using default icon.")
+                logging.error(f"Error loading icon from {icon_path}: {e}. Using default icon.")
         
-        # Default icon if all else fails
+        # Default icon for errors or missing files
         pixmap = QPixmap(128, 128)
         pixmap.fill(QColor("#c89f68"))
         p = QPainter(pixmap)
         p.setPen(QColor("#2c2a2b"))
         p.setFont(QFont("Segoe UI", 56, QFont.Bold))
-        p.drawText(pixmap.rect(), Qt.AlignCenter, "?") # Use a generic placeholder
+        p.drawText(pixmap.rect(), Qt.AlignCenter, "?")
         p.end()
         icon = QIcon(pixmap)
-        self._icon_cache[icon_path] = icon
+        self._icon_cache[icon_path] = icon # Cache the error icon against the path
         return icon
 
     def _parse_rank_data(self, html_content):
@@ -983,34 +1096,38 @@ class GameSwitcher:
                     if on_update_callback:
                         logging.debug(f"Calling on_update_callback for {account_name}.")
                         on_update_callback(account_name)
-                    else:
-                        logging.debug(f"No on_update_callback for {account_name}. Writing refresh signal file.")
-                        signal_file = os.path.join(self.user_data_dir, '.refresh_ui')
-                        with open(signal_file, 'w') as f:
-                            f.write('1')
+                    
             else:
                 logging.debug(f"No significant rank data change for {account_name}.")
+        except requests.exceptions.ConnectionError as e:
+            logging.error(f"Connection error for {account_name}: {e}")
+        except requests.exceptions.Timeout as e:
+            logging.error(f"Timeout error for {account_name}: {e}")
+        except requests.exceptions.HTTPError as e:
+            logging.error(f"HTTP error for {account_name}: {e}")
         except requests.exceptions.RequestException as e:
             logging.error(f"RequestException for {account_name}: {e}")
         except Exception as e:
-            logging.error(f"Error fetching rank for {account_name}: {e}")
+            logging.error(f"An unexpected error occurred fetching rank for {account_name}: {e}")
 
     def fetch_and_update_all_accounts(self, on_update_callback=None):
         logging.debug("Fetching and updating all accounts.")
         ui_settings = self.get_ima_config().get("ui_settings", {})
         if ui_settings.get("auto_rank_update", True):
             accounts = list(self.get_saved_accounts().keys())
-            for account_name in accounts:
-                threading.Thread(target=self.fetch_and_update_rank_data, args=(account_name, False, on_update_callback)).start()
+            # Use ThreadPoolExecutor for concurrent requests with a limited number of workers
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                for account_name in accounts:
+                    executor.submit(self.fetch_and_update_rank_data, account_name, False, on_update_callback)
 
     def _run_rank_update_loop(self, on_update_callback=None):
         while True:
             ui_settings = self.get_ima_config().get("ui_settings", {})
             if ui_settings.get("auto_rank_update", True):
                 accounts = list(self.get_saved_accounts().keys())
-                for account_name in accounts:
-                    # Directly call fetch_and_update_rank_data for each account
-                    threading.Thread(target=self.fetch_and_update_rank_data, args=(account_name, False, on_update_callback)).start()
+                with ThreadPoolExecutor(max_workers=5) as executor:
+                    for account_name in accounts:
+                        executor.submit(self.fetch_and_update_rank_data, account_name, False, on_update_callback)
             time.sleep(3600) # Wait an hour before the next cycle
 
     def start_rank_update_scheduler(self, on_update_callback=None):

@@ -1,3 +1,4 @@
+import logging
 import os
 from PyQt5.QtWidgets import (
     QWidget,
@@ -1394,7 +1395,7 @@ class GameSelectionDialog(PopupDialog):
         layout.setSpacing(10)
 
         icon_path = get_asset_path(icon_filename)
-        print(f"DEBUG: _create_game_button - icon_path: {icon_path}, exists: {os.path.exists(icon_path)}")
+        logging.debug(f"_create_game_button - icon_path: {icon_path}, exists: {os.path.exists(icon_path)}")
         if self.switcher_instance and os.path.exists(icon_path):
             icon_label = QLabel()
             pixmap = self.switcher_instance.get_qicon_from_path(icon_path).pixmap(80, 80).scaled(80, 80, Qt.KeepAspectRatio, Qt.SmoothTransformation)

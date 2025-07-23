@@ -1,4 +1,6 @@
 import os
+import threading
+import logging
 from PyQt5.QtWidgets import QMessageBox, QFileDialog, QDialog
 from ui_components import SaveAccountDialog, ExportIMAMenuDialog, OptionsDialog, CustomMessageDialog, ConfirmDeleteDialog
 
@@ -12,14 +14,8 @@ class SettingsActions:
         self.switcher = parent.switcher
 
     def add_account(self):
-        if self.switcher.add_account_flow():
-            self.save_current_account()
-        else:
-            QMessageBox.critical(
-                self.parent,
-                "Error",
-                "Could not prepare for new account. Make sure Riot Client is installed correctly and you are running as an administrator.",
-            )
+        self.parent.status_label.setText("Preparing for new account...")
+        threading.Thread(target=self._add_account_thread, daemon=True).start()
 
     def save_current_account(self):
         dialog = SaveAccountDialog(self.parent, switcher_instance=self.switcher)
@@ -29,11 +25,16 @@ class SettingsActions:
                 self.parent.status_label.setText("Account name cannot be empty.")
                 return
             if name in self.switcher.get_saved_accounts():
-                QMessageBox.warning(self.parent, "Account Exists", f'An account named "{name}" already exists.')
+                logging.warning(f"Attempted to save account '{name}', but an account with that name already exists.")
+                QMessageBox.warning(self.parent, "Account Exists", f'An account named "{name}" already exists. Please choose a different name.')
                 return
             self.switcher.save_account(name, game, in_game_name=in_game_name, in_game_tag=in_game_tag)
             self.parent.status_label.setText(f"Account '{name}' saved for {game.capitalize()}. ")
             self.parent.load_accounts()
+
+    def _add_account_thread(self):
+        success = self.switcher.add_account_flow()
+        self.parent.add_account_finished.emit(success)
 
     def backup_profiles(self):
         suggested_filename = self.switcher.get_backup_filename()
@@ -42,8 +43,10 @@ class SettingsActions:
             if not path.endswith(".zip"): path += ".zip"
             if self.switcher.backup_profiles(path):
                 self.parent.status_label.setText(f"Profiles backed up successfully.")
+                logging.info(f"Profiles backed up to {path}")
             else:
                 self.parent.status_label.setText("Backup failed.")
+                logging.error(f"Failed to backup profiles to {path}")
 
     def restore_profiles(self):
         path, _ = QFileDialog.getOpenFileName(self.parent, "Select Backup", "", "ZIP Files (*.zip)")
@@ -59,8 +62,10 @@ current settings?"""
                 if self.switcher.restore_profiles(path):
                     self.parent.status_label.setText("Profiles restored successfully.")
                     self.parent.load_accounts()
+                    logging.info(f"Profiles restored from {path}")
                 else:
                     self.parent.status_label.setText("Restore failed.")
+                    logging.error(f"Failed to restore profiles from {path}")
 
     def open_profiles_folder(self):
         os.startfile(self.switcher.profiles_dir)
@@ -90,7 +95,9 @@ current settings?"""
                 msg_dialog = CustomMessageDialog("Export Successful", "Accounts added to iMA Menu", self.parent)
                 msg_dialog.exec_()
                 self.parent.load_accounts() # Refresh accounts in UI after export
+                logging.info(f"Successfully exported iMA Menu script to {output_dir}")
             except Exception as e:
+                logging.error(f"An error occurred during iMA Menu export: {e}")
                 QMessageBox.critical(self.parent, "Export Failed", f"An error occurred: {e}")
 
     def open_options_dialog(self):

@@ -5,6 +5,7 @@ import ctypes
 import shutil 
 import subprocess 
 import threading 
+import logging 
 
 if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
     sys.path.append(sys._MEIPASS)
@@ -25,7 +26,7 @@ from PyQt5.QtWidgets import (
     QDialog,
 )
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QFont, QColor, QImage
-from PyQt5.QtCore import Qt, QSize, QPoint, pyqtSignal, QTimer
+from PyQt5.QtCore import Qt, QSize, QPoint, pyqtSignal, QTimer, QObject, QRunnable, QThreadPool
 
 from game_switcher import GameSwitcher
 from ui_components import (
@@ -38,8 +39,26 @@ from ui_components import (
     GameSelectionDialog,
     RiotClientNotFoundDialog
 )
+from game_switcher import CustomUpdateEvent
 from actions_settings import SettingsActions
 from actions_context import ContextActions
+
+class IconLoaderSignals(QObject):
+    finished = pyqtSignal(str, QIcon)
+
+class IconLoader(QRunnable):
+    """Worker thread for loading icons asynchronously."""
+    def __init__(self, switcher, account_name, icon_path):
+        super().__init__()
+        self.switcher = switcher
+        self.account_name = account_name
+        self.icon_path = icon_path
+        self.signals = IconLoaderSignals()
+
+    def run(self):
+        """Load the icon and emit a signal when done."""
+        icon = self.switcher.get_qicon_from_path(self.icon_path)
+        self.signals.finished.emit(self.account_name, icon)
 
 def create_shortcut(target_path, shortcut_path):
     try:
@@ -52,12 +71,8 @@ def create_shortcut(target_path, shortcut_path):
         shortcut.save()
         return True
     except Exception as e:
-        print(f"Error creating shortcut {shortcut_path}: {e}")
+        logging.error(f"Error creating shortcut {shortcut_path}: {e}")
         return False
-
-
-
-
 
 def run_installer():
     app = QApplication(sys.argv)
@@ -65,53 +80,63 @@ def run_installer():
     if dialog.exec_() == QDialog.Accepted:
         install_path = dialog.get_install_path()
         current_exe = sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(sys.argv[0])
-        
-        try:
-            os.makedirs(install_path, exist_ok=True)
-            
-            destination_exe_path = os.path.join(install_path, "iMA Switcher.exe")
-            shutil.copy2(current_exe, destination_exe_path)
 
-            # Copy Assets folder to the permanent install location
-            source_assets_path = os.path.join(sys._MEIPASS if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__)), "Assets")
-            destination_assets_path = os.path.join(install_path, "Assets")
-            if os.path.exists(source_assets_path):
-                shutil.copytree(source_assets_path, destination_assets_path, dirs_exist_ok=True)
+        def install_thread():
+            try:
+                os.makedirs(install_path, exist_ok=True)
 
-            riot_games_exe_path = dialog.get_riot_games_path()
-            switcher_instance = GameSwitcher(base_directory=install_path) 
-            if riot_games_exe_path:
-                switcher_instance.set_riot_client_paths(riot_games_exe_path)
-            
-            # Save the permanent install path to config.json
-            switcher_instance.set_ima_config({"app_install_path": install_path})
+                destination_exe_path = os.path.join(install_path, "iMA Switcher.exe")
+                shutil.copy2(current_exe, destination_exe_path)
 
-            if dialog.should_add_desktop_shortcut():
-                desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
-                shortcut_path = os.path.join(desktop_path, "iMA Switcher.lnk")
-                create_shortcut(destination_exe_path, shortcut_path)
+                source_assets_path = os.path.join(sys._MEIPASS if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__)), "Assets")
+                destination_assets_path = os.path.join(install_path, "Assets")
+                if os.path.exists(source_assets_path):
+                    shutil.copytree(source_assets_path, destination_assets_path, dirs_exist_ok=True)
 
-            if dialog.should_add_start_menu_shortcut():
-                start_menu_path = os.path.join(os.getenv("APPDATA"), "Microsoft", "Windows", "Start Menu", "Programs")
-                shortcut_path = os.path.join(start_menu_path, "iMA Switcher.lnk")
-                create_shortcut(destination_exe_path, shortcut_path)
-            
-            subprocess.Popen([destination_exe_path])
-            sys.exit(0)
-            
-        except Exception as e:
-            QMessageBox.critical(
-                None, 
-                "Installation Error",
-                f"An error occurred during installation:\n{e}"
-            )
-            sys.exit(1)
+                riot_games_exe_path = dialog.get_riot_games_path()
+                switcher_instance = GameSwitcher(base_directory=install_path)
+                if riot_games_exe_path:
+                    switcher_instance.set_riot_client_paths(riot_games_exe_path)
+
+                switcher_instance.set_ima_config({"app_install_path": install_path})
+
+                if dialog.should_add_desktop_shortcut():
+                    desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
+                    shortcut_path = os.path.join(desktop_path, "iMA Switcher.lnk")
+                    create_shortcut(destination_exe_path, shortcut_path)
+
+                if dialog.should_add_start_menu_shortcut():
+                    start_menu_path = os.path.join(os.getenv("APPDATA"), "Microsoft", "Windows", "Start Menu", "Programs")
+                    shortcut_path = os.path.join(start_menu_path, "iMA Switcher.lnk")
+                    create_shortcut(destination_exe_path, shortcut_path)
+
+                subprocess.Popen([destination_exe_path])
+                QApplication.instance().quit()
+
+            except Exception as e:
+                logging.critical(
+                    None,
+                    "Installation Error",
+                    f"An error occurred during installation:\n{e}"
+                )
+                QApplication.instance().quit()
+
+        thread = threading.Thread(target=install_thread)
+        thread.start()
+        app.exec_()
+
     else:
-        sys.exit(0) 
+        sys.exit(0)
 
 
 class ModernValorantSwitcher(QMainWindow):
     account_updated = pyqtSignal(str) # New signal
+    status_message_requested = pyqtSignal(str)
+    
+    switch_account_finished = pyqtSignal(bool, str, str, QPixmap, str, str, str, bool)
+    
+    
+    
 
     def __init__(self):
         super().__init__()
@@ -121,6 +146,7 @@ class ModernValorantSwitcher(QMainWindow):
         self.switcher = GameSwitcher()
 
         if not self.switcher.is_admin():
+            logging.critical("Application started without administrator privileges. Exiting.")
             QMessageBox.critical(
                 self,
                 "Administrator Rights Required",
@@ -132,21 +158,29 @@ class ModernValorantSwitcher(QMainWindow):
 
         self.account_widgets = {}
         self.selected_account_name = None
+        self.thread_pool = QThreadPool()
+        self.thread_pool.setMaxThreadCount(QThreadPool.globalInstance().maxThreadCount()) # Use a reasonable number of threads
         self.init_ui()
         self.load_accounts()
         self.center_on_screen()
 
         # New: Connect signal and start scheduler
         self.account_updated.connect(self.on_account_updated)
+        self.status_message_requested.connect(self.status_label.setText)
+        
+        self.switch_account_finished.connect(self.on_switch_account_finished)
+        
+        
+        
         
         ui_settings = self.switcher.get_ima_config().get("ui_settings", {})
         if ui_settings.get("auto_rank_update", True):
             self.switcher.start_rank_update_scheduler(on_update_callback=self.account_updated.emit)
             QTimer.singleShot(100, self.initial_rank_fetch)
 
-        self.refresh_timer = QTimer(self)
-        self.refresh_timer.timeout.connect(self.check_for_refresh_signal)
-        self.refresh_timer.start(2000) # Check every 2 seconds
+        
+
+        
 
 
     def init_ui(self):
@@ -253,7 +287,15 @@ class ModernValorantSwitcher(QMainWindow):
         for name in account_names_in_order:
             icon_path, game, rank, in_game_name, in_game_tag, current_rr, last_game_rr = accounts[name]
             icon_path_to_use = self.switcher.get_icon_path_for_account(name, rank, use_rank_icons)
-            icon = self.switcher.get_qicon_from_path(icon_path_to_use)
+            
+            # Check cache first, otherwise load async
+            cached_icon = self.switcher.get_icon_from_cache(icon_path_to_use)
+            if cached_icon:
+                icon = cached_icon
+            else:
+                icon = self.switcher.get_placeholder_qicon()
+                self.load_icon_async(name, icon_path_to_use)
+
             widget = AccountWidget(name, icon, game, rank, in_game_name, in_game_tag, current_rr, last_game_rr, self.grid_container, switcher_instance=self.switcher)
             widget.selected.connect(self.on_account_selected)
             widget.double_clicked.connect(self.on_account_double_clicked)
@@ -318,6 +360,17 @@ class ModernValorantSwitcher(QMainWindow):
         self.setFixedSize(grid_width + 20, grid_height + T_B + B_B)
         self.scroll_area.widget().setMinimumSize(grid_width, grid_height) # Ensure scroll area content is large enough
 
+    def load_icon_async(self, account_name, icon_path):
+        """Creates and runs an IconLoader task in the thread pool."""
+        worker = IconLoader(self.switcher, account_name, icon_path)
+        worker.signals.finished.connect(self.on_icon_loaded)
+        self.thread_pool.start(worker)
+
+    def on_icon_loaded(self, account_name, icon):
+        """Slot to handle the finished signal from the IconLoader."""
+        if account_name in self.account_widgets:
+            self.account_widgets[account_name].set_icon(icon, 70) # Assuming 70 is the default size
+
     def show_settings_dialog(self):
         actions = self.get_settings_actions()
         dialog = SettingsDialog(actions, self)
@@ -354,9 +407,9 @@ class ModernValorantSwitcher(QMainWindow):
                     menu_icon_path=ima_config.get("menu_icon_path", ""),
                     save_config=False  # Already saved by OptionsDialog or other actions
                 )
-                print("iMA menu script updated on application close.")
+                logging.info("iMA menu script updated on application close.")
             except Exception as e:
-                print(f"Error updating iMA menu script on close: {e}")
+                logging.error(f"Error updating iMA menu script on close: {e}")
         event.accept()
     
     def create_gear_icon(self, color):
@@ -400,7 +453,15 @@ class ModernValorantSwitcher(QMainWindow):
                 ui_settings = self.switcher.get_ima_config().get("ui_settings", {})
                 use_rank_icons = ui_settings.get("use_rank_icons", False)
                 icon_path_to_use = self.switcher.get_icon_path_for_account(account_name, rank, use_rank_icons)
-                icon = self.switcher.get_qicon_from_path(icon_path_to_use)
+                
+                # Asynchronously load the new icon
+                cached_icon = self.switcher.get_icon_from_cache(icon_path_to_use)
+                if cached_icon:
+                    icon = cached_icon
+                else:
+                    icon = self.switcher.get_placeholder_qicon()
+                    self.load_icon_async(account_name, icon_path_to_use)
+
                 self.account_widgets[account_name].update_data(account_name, icon, game, rank, in_game_name, in_game_tag, current_rr, last_game_rr, ui_settings)
                 self.update_window_size() # Recalculate window size if visibility of elements changed
             else:
@@ -412,6 +473,8 @@ class ModernValorantSwitcher(QMainWindow):
                 self.rearrange_grid() # Re-arrange the grid after removal
                 self.update_window_size() # Update window size after removal
 
+    
+
     def initial_rank_fetch(self):
         """
         Fetches ranks for all accounts in separate threads after UI is shown,
@@ -419,32 +482,31 @@ class ModernValorantSwitcher(QMainWindow):
         """
         ui_settings = self.switcher.get_ima_config().get("ui_settings", {})
         if ui_settings.get("auto_rank_update", True):
-            self.refresh_accounts()
+            self.status_label.setText("Fetching all ranks...")
+            threading.Thread(target=self.switcher.fetch_and_update_all_accounts, args=(self.account_updated.emit,), daemon=True).start()
         else:
-            print("Initial rank fetch skipped: Auto rank update is disabled.")
+            logging.info("Initial rank fetch skipped: Auto rank update is disabled.")
 
-    def check_for_refresh_signal(self):
-        signal_file = os.path.join(self.switcher.user_data_dir, '.refresh_ui')
-        if os.path.exists(signal_file):
-            try:
-                os.remove(signal_file)
-                accounts = self.switcher.get_saved_accounts()
-                for name in accounts:
-                    self.on_account_updated(name)
-            except OSError as e:
-                print(f"Error removing signal file: {e}")
+    
+
+    
 
     def refresh_accounts(self):
-        """        Fetches ranks for all accounts and updates the UI.
+        """
+        Fetches ranks for all accounts and updates the UI.
         """
         self.status_label.setText("Refreshing ranks...")
-        accounts = self.switcher.get_saved_accounts()
-        for name in accounts:
-            threading.Thread(
-                target=self.switcher.fetch_and_update_rank_data,
-                args=(name, True, self.account_updated.emit),
-                daemon=True
-            ).start()
+        threading.Thread(
+            target=self.switcher.fetch_and_update_all_accounts,
+            args=(self.account_updated.emit,),
+            daemon=True
+        ).start()
+
+    def event(self, event):
+        if event.type() == CustomUpdateEvent.EVENT_TYPE:
+            self.on_account_updated(event.account_name)
+            return True
+        return super().event(event)
 
     def show_context_menu(self, name, pos):
         self.on_account_selected(name)
@@ -537,48 +599,14 @@ class ModernValorantSwitcher(QMainWindow):
         name = self.get_selected_account_name()
         if not name: return
 
-        # Get account data to pass to GameSelectionDialog if needed
-        account_data = self.switcher.get_saved_accounts().get(name)
-        account_icon_path, game, rank, in_game_name, in_game_tag, current_rr, last_game_rr = account_data if account_data else (None, None, None, None, None, None, None)
-        
-        ui_settings = self.switcher.get_ima_config().get("ui_settings", {})
-        use_rank_icons = ui_settings.get("use_rank_icons", False)
-
-        account_icon_path_str = self.switcher.get_icon_path_for_account(name, rank, use_rank_icons)
-        account_icon = self.switcher.get_qicon_from_path(account_icon_path_str)
-        account_icon_pixmap = account_icon.pixmap(account_icon.actualSize(QSize(180, 180)))
-
         self.status_label.setText(f"Switching to '{name}'...")
         QApplication.processEvents()
 
-        result, message, game_type_or_selected_game = self.switcher.switch_account(name, selected_game=selected_game, on_update_callback=self.account_updated.emit)
+        threading.Thread(target=self._switch_account_thread, args=(name, selected_game), daemon=True).start()
 
-        if game_type_or_selected_game == "both":
-            # If game is 'both', show selection dialog
-            selection_dialog = GameSelectionDialog(name, account_icon_pixmap, self, switcher_instance=self.switcher)
-            selection_dialog.game_selected.connect(lambda game: self._handle_game_selection(name, game))
-            selection_dialog.exec_()
+    
 
-        elif not result:
-            if "Riot Client not found" in message:
-                dialog = RiotClientNotFoundDialog(self)
-                if dialog.exec_() == QDialog.Accepted:
-                    new_path = dialog.get_path()
-                    if new_path and os.path.exists(new_path):
-                        self.switcher.set_riot_client_paths(new_path)
-                        self.switch_to_selected_account(selected_game) # Retry switching
-            else:
-                self.status_label.setText(f"Failed to switch to '{name}'.")
-                QMessageBox.critical(self, "Switch Failed", message)
-            if hasattr(self, "launch_notification"): self.launch_notification.close()
-        else:
-            # If a game was directly launched (not 'both'), show the 6-second notification
-            try:
-                self.launch_notification = LaunchNotificationWidget(name, account_icon_pixmap, in_game_name=in_game_name, in_game_tag=in_game_tag, rank=rank, use_rank_icons=use_rank_icons, switcher_instance=self.switcher)
-                self.launch_notification.show()
-                QApplication.processEvents()
-            except Exception as e: print(f"Could not create notification: {e}")
-        self.refresh_accounts() # Refresh after any switch attempt
+    
 
     def _handle_game_selection(self, account_name, game):
         # This method is called when a game is selected from the GameSelectionDialog
@@ -605,8 +633,55 @@ class ModernValorantSwitcher(QMainWindow):
                     self.launch_notification.show()
                     QApplication.processEvents()
                 except Exception as e:
-                    print(f"Could not create notification: {e}")
+                    logging.error(f"Could not create notification: {e}")
         self.refresh_accounts()
+
+    def _switch_account_thread(self, account_name, selected_game):
+        success, message, game_type = self.switcher.switch_account(account_name, selected_game=selected_game, on_update_callback=self.account_updated.emit)
+        
+        account_data = self.switcher.get_saved_accounts().get(account_name)
+        account_icon_path, game, rank, in_game_name, in_game_tag, current_rr, last_game_rr = account_data if account_data else (None, None, None, None, None, None, None)
+        ui_settings = self.switcher.get_ima_config().get("ui_settings", {})
+        use_rank_icons = ui_settings.get("use_rank_icons", False)
+        account_icon_path_str = self.switcher.get_icon_path_for_account(account_name, rank, use_rank_icons)
+        account_icon = self.switcher.get_qicon_from_path(account_icon_path_str)
+        account_icon_pixmap = account_icon.pixmap(account_icon.actualSize(QSize(180, 180)))
+
+        self.switch_account_finished.emit(success, message, game_type, account_icon_pixmap, in_game_name, in_game_tag, rank, use_rank_icons)
+
+    def on_switch_account_finished(self, success, message, game_type, account_icon_pixmap, in_game_name, in_game_tag, rank, use_rank_icons):
+        name = self.get_selected_account_name()
+        if not name: return
+
+        if game_type == "both":
+            selection_dialog = GameSelectionDialog(name, account_icon_pixmap, self, switcher_instance=self.switcher)
+            selection_dialog.game_selected.connect(lambda game: self._handle_game_selection(name, game))
+            selection_dialog.exec_()
+
+        elif not success:
+            if "Riot Client not found" in message:
+                dialog = RiotClientNotFoundDialog(self)
+                if dialog.exec_() == QDialog.Accepted:
+                    new_path = dialog.get_path()
+                    if new_path and os.path.exists(new_path):
+                        self.switcher.set_riot_client_paths(new_path)
+                        self.switch_to_selected_account() # Retry switching
+            else:
+                self.status_label.setText(f"Failed to switch to '{name}'.")
+                QMessageBox.critical(self, "Switch Failed", message)
+            if hasattr(self, "launch_notification"): self.launch_notification.close()
+        else:
+            try:
+                self.launch_notification = LaunchNotificationWidget(name, account_icon_pixmap, in_game_name=in_game_name, in_game_tag=in_game_tag, rank=rank, use_rank_icons=use_rank_icons, switcher_instance=self.switcher)
+                self.launch_notification.show()
+                QApplication.processEvents()
+            except Exception as e:
+                logging.error(f"Could not create notification: {e}")
+        self.refresh_accounts() # Refresh after any switch attempt
+
+    
+
+    
 
 def _handle_game_selection_standalone(switcher, account_name, game, pixmap):
     # This method is called when a game is selected from the GameSelectionDialog in standalone mode
@@ -615,7 +690,13 @@ def _handle_game_selection_standalone(switcher, account_name, game, pixmap):
         ui_settings = switcher.get_ima_config().get("ui_settings", {})
         if ui_settings.get("auto_rank_update", True):
             switcher.fetch_and_update_all_accounts()
-        notification = LaunchNotificationWidget(account_name, pixmap, standalone=True, switcher_instance=switcher)
+        
+        account_data = switcher.get_saved_accounts().get(account_name)
+        _, _, rank, in_game_name, in_game_tag, _, _ = account_data if account_data else (None, None, None, None, None, None, None)
+        ui_settings = switcher.get_ima_config().get("ui_settings", {})
+        use_rank_icons = ui_settings.get("use_rank_icons", False)
+
+        notification = LaunchNotificationWidget(account_name, pixmap, in_game_name=in_game_name, in_game_tag=in_game_tag, rank=rank, use_rank_icons=use_rank_icons, standalone=True, switcher_instance=switcher)
         notification.show()
     else:
         sys.exit(1)
@@ -656,6 +737,11 @@ def main():
         else:
             result, _, _ = switcher.switch_account(account_name, on_update_callback=None)
             if result:
+                account_data = switcher.get_saved_accounts().get(account_name)
+                _, _, rank, in_game_name, in_game_tag, _, _ = account_data if account_data else (None, None, None, None, None, None, None)
+                ui_settings = switcher.get_ima_config().get("ui_settings", {})
+                use_rank_icons = ui_settings.get("use_rank_icons", False)
+
                 notification = LaunchNotificationWidget(account_name, pixmap, in_game_name=in_game_name, in_game_tag=in_game_tag, rank=rank, use_rank_icons=use_rank_icons, standalone=True, switcher_instance=switcher)
                 notification.show()
                 
@@ -663,8 +749,7 @@ def main():
                 if ui_settings.get("auto_rank_update", True):
                     # Defer the rank update check slightly to not block the notification
                     QTimer.singleShot(100, lambda: switcher.fetch_and_update_all_accounts())
-                    with open(os.path.join(switcher.user_data_dir, '.refresh_ui'), 'w') as f:
-                        f.write('1')
+                    
 
                 sys.exit(app.exec_())
             else:
@@ -678,4 +763,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
