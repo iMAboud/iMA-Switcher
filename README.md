@@ -20,6 +20,8 @@
 - **Desktop Shortcuts**: Create desktop shortcuts for accounts.
 - **iMA Menu Integration**: Export accounts to the iMA Menu (Context Menu).
 - **Backup & Restore**: Backup and restore account profiles.
+- **Fetch Rank**: Fetch and update "Rank, current RR and last game's RR" in real time.
+- **Customizations**: Customize and show/hide anything you want in the UI or even in the iMA Menu's context menu.
 
 ## 🚀 Getting Started
 
