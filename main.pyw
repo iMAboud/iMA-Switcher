@@ -113,7 +113,7 @@ def run_installer():
                 subprocess.Popen([destination_exe_path])
                 # Give the launched application a moment to start before the installer quits
                 time.sleep(2) 
-                QApplication.instance().quit()
+                sys.exit(0)
 
             except Exception as e:
                 logging.critical(
