@@ -111,6 +111,8 @@ def run_installer():
                     create_shortcut(destination_exe_path, shortcut_path)
 
                 subprocess.Popen([destination_exe_path])
+                # Give the launched application a moment to start before the installer quits
+                time.sleep(2) 
                 QApplication.instance().quit()
 
             except Exception as e:
