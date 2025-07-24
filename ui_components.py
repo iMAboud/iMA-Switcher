@@ -1210,7 +1210,7 @@ class OptionsDialog(PopupDialog):
         self.check_for_update_button.setEnabled(False)
 
         assets = release_data.get("assets", [])
-        installer_asset = next((asset for asset in assets if asset["name"] == "iMA.Switcher.Installer.exe"), None)
+        installer_asset = next((asset for asset in assets if "Installer.exe" in asset["name"]), None)
 
         if not installer_asset:
             self.update_status_label.setText("<font color='red'>Installer not found in release.</font>")
