@@ -1,5 +1,8 @@
 import logging
 import os
+import requests
+import tempfile
+import subprocess
 from PyQt5.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -833,6 +836,47 @@ class OptionsDialog(PopupDialog):
         rank_update_layout.addWidget(self.rank_check_region_combo, 1, 1)
         main_layout.addWidget(rank_update_group)
 
+        update_group = QGroupBox("iMA Switcher Update")
+        update_group.setStyleSheet("""
+            QGroupBox {
+                color: #FFFFFF;
+                font-size: 14px;
+                font-weight: bold;
+                border: 1px solid #c89f68;
+                border-radius: 8px;
+                margin-top: 10px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                padding: 0 10px;
+                left: 10px;
+                color: #FFFFFF;
+            }
+        """)
+        update_layout = QGridLayout(update_group)
+        update_layout.setSpacing(10)
+
+        self.current_version_label = QLabel(f"Current Version: {self.switcher.VERSION}")
+        update_layout.addWidget(self.current_version_label, 0, 0)
+
+        self.update_status_label = QLabel("")
+        update_layout.addWidget(self.update_status_label, 0, 1)
+
+        self.check_for_update_button = QPushButton("Check for Update")
+        preset_style = """
+            QPushButton {
+                background-color: #c89f68; color: #2c2a2b; font-weight: bold; 
+                border-radius: 8px; padding: 8px; border: 1px solid #c89f68;
+            }
+            QPushButton:hover { background-color: #d9b68b; }
+            QPushButton:pressed { background-color: #b88f58; }
+        """
+        self.check_for_update_button.setStyleSheet(preset_style)
+        self.check_for_update_button.clicked.connect(self.check_for_updates)
+        update_layout.addWidget(self.check_for_update_button, 1, 0, 1, 2)
+        main_layout.addWidget(update_group)
+
         main_layout.addStretch()
         self.tab_widget.addTab(account_tab, QIcon(get_asset_path("Settings.png")), "Account")
 
@@ -1112,6 +1156,95 @@ class OptionsDialog(PopupDialog):
 
     def eventFilter(self, obj, event):
         return super().eventFilter(obj, event)
+
+    def check_for_updates(self):
+        self.check_for_update_button.setText("Checking...")
+        self.check_for_update_button.setEnabled(False)
+        self.update_status_label.setText("")
+
+        try:
+            response = requests.get("https://api.github.com/repos/iMAboud/iMA-Switcher/releases")
+            response.raise_for_status()
+            releases = response.json()
+
+            if not releases:
+                self.update_status_label.setText("No releases found.")
+                self.check_for_update_button.setText("Check for Update")
+                self.check_for_update_button.setEnabled(True)
+                return
+
+            # Find the latest non-prerelease version
+            latest_release = None
+            for release in releases:
+                if not release["prerelease"]:
+                    latest_release = release
+                    break
+            
+            if latest_release is None:
+                self.update_status_label.setText("No stable releases found.")
+                self.check_for_update_button.setText("Check for Update")
+                self.check_for_update_button.setEnabled(True)
+                return
+
+            latest_version = latest_release["tag_name"].lstrip('v')
+            current_version = self.switcher.VERSION
+
+            if latest_version > current_version:
+                self.update_status_label.setText(f"<font color='green'>New version available: {latest_version}</font>")
+                self.check_for_update_button.setText("Update")
+                self.check_for_update_button.setEnabled(True)
+                self.check_for_update_button.clicked.disconnect()
+                self.check_for_update_button.clicked.connect(lambda: self.install_update(latest_release))
+            else:
+                self.update_status_label.setText("Up to date.")
+                self.check_for_update_button.setText("Check for Update")
+                self.check_for_update_button.setEnabled(True)
+
+        except requests.exceptions.RequestException as e:
+            self.update_status_label.setText(f"<font color='red'>Error: {e}</font>")
+            self.check_for_update_button.setText("Check for Update")
+            self.check_for_update_button.setEnabled(True)
+
+    def install_update(self, release_data):
+        self.check_for_update_button.setText("Downloading...")
+        self.check_for_update_button.setEnabled(False)
+
+        assets = release_data.get("assets", [])
+        installer_asset = next((asset for asset in assets if asset["name"] == "iMA_Switcher_Installer.exe"), None)
+
+        if not installer_asset:
+            self.update_status_label.setText("<font color='red'>Installer not found in release.</font>")
+            self.check_for_update_button.setText("Update")
+            self.check_for_update_button.setEnabled(True)
+            return
+
+        download_url = installer_asset["browser_download_url"]
+        
+        try:
+            response = requests.get(download_url, stream=True)
+            response.raise_for_status()
+
+            temp_dir = tempfile.gettempdir()
+            installer_path = os.path.join(temp_dir, "iMA_Switcher_Installer.exe")
+
+            with open(installer_path, "wb") as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            
+            self.check_for_update_button.setText("Installing...")
+            
+            # Close the current application and run the installer
+            subprocess.Popen([installer_path])
+            QApplication.instance().quit()
+
+        except requests.exceptions.RequestException as e:
+            self.update_status_label.setText(f"<font color='red'>Download failed: {e}</font>")
+            self.check_for_update_button.setText("Update")
+            self.check_for_update_button.setEnabled(True)
+        except Exception as e:
+            self.update_status_label.setText(f"<font color='red'>Installation failed: {e}</font>")
+            self.check_for_update_button.setText("Update")
+            self.check_for_update_button.setEnabled(True)
 
     def on_tab_changed(self, index):
         # When the tab is changed by clicking, restore all icons to their original state

@@ -36,6 +36,7 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class GameSwitcher:
+    VERSION = "1.0.7"
     DEFAULT_CONFIG = {
         "output_dir": None,
         "title": "Valorant",
@@ -81,12 +82,12 @@ class GameSwitcher:
 
         self.GAMES = {
             "valorant": {
-                "launch_args": "--launch-product=valorant --launch-patchline=live",
+                "launch_args": "--launch-product=valorant --launch-patchline=live --disable-gpu-sandbox",
                 "processes_to_kill": ["VALORANT.exe", "RiotClientServices.exe", "VALORANT-Win64-Shipping.exe"],
                 "executable_name": "RiotClientServices.exe"
             },
             "lol": {
-                "launch_args": "--launch-product=league_of_legends --launch-patchline=live",
+                "launch_args": "--launch-product=league_of_legends --launch-patchline=live --disable-gpu-sandbox",
                 "processes_to_kill": ["LeagueClient.exe", "RiotClientServices.exe", "LeagueClientUx.exe"],
                 "executable_name": "LeagueClientUx.exe"
             }
@@ -99,25 +100,32 @@ class GameSwitcher:
         self._cleanup_valorant_temp_files()
 
     def _cleanup_valorant_temp_files(self):
-        # Clean up CrashReportClient
-        crash_report_path = os.path.join(self.app_data_path, "VALORANT", "Saved", "Config", "CrashReportClient")
-        if os.path.exists(crash_report_path):
-            try:
-                shutil.rmtree(crash_report_path)
-                logging.info(f"Successfully cleaned up {crash_report_path}")
-            except Exception as e:
-                logging.error(f"Failed to clean up {crash_report_path}: {e}")
+        # Paths to clean
+        paths_to_clean = [
+            os.path.join(self.app_data_path, "VALORANT", "Saved", "Config", "CrashReportClient"),
+            os.path.join(self.app_data_path, "VALORANT", "Saved", "Logs"),
+            os.path.join(self.app_data_path, "Riot Games", "Riot Client", "Logs"),
+            os.path.join(self.app_data_path, "Riot Games", "Riot Client", "Cache"),
+        ]
 
-        # Clean up log files
-        logs_path = os.path.join(self.app_data_path, "VALORANT", "Saved", "Logs")
-        if os.path.exists(logs_path):
-            for filename in os.listdir(logs_path):
-                if filename.startswith("ShooterGame-backup") and filename.endswith(".log"):
-                    try:
-                        os.remove(os.path.join(logs_path, filename))
-                        logging.info(f"Successfully deleted log file: {filename}")
-                    except Exception as e:
-                        logging.error(f"Failed to delete log file {filename}: {e}")
+        for path in paths_to_clean:
+            if os.path.exists(path):
+                try:
+                    if os.path.isdir(path):
+                        shutil.rmtree(path)
+                        logging.info(f"Successfully cleaned up directory: {path}")
+                    else:
+                        os.remove(path)
+                        logging.info(f"Successfully cleaned up file: {path}")
+                except Exception as e:
+                    logging.error(f"Failed to clean up {path}: {e}")
+        
+        # Flush DNS
+        try:
+            subprocess.run(["ipconfig", "/flushdns"], capture_output=True, text=True, check=True, creationflags=0x08000000)
+            logging.info("Successfully flushed DNS cache.")
+        except Exception as e:
+            logging.error(f"Failed to flush DNS cache: {e}")
 
     def is_admin(self):
         try: return ctypes.windll.shell32.IsUserAnAdmin()
@@ -203,7 +211,7 @@ class GameSwitcher:
     def _terminate_processes(self):
         all_processes = self.GAMES['valorant']["processes_to_kill"] + self.GAMES['lol']["processes_to_kill"]
         for exe in all_processes:
-            subprocess.run(f"taskkill /f /im {exe}", shell=True, capture_output=True, text=True)
+            subprocess.run(f"taskkill /f /im {exe}", shell=True, capture_output=True, text=True, creationflags=0x08000000)
 
     def _create_junction(self, source, link_name):
         startupinfo = subprocess.STARTUPINFO()
@@ -322,6 +330,21 @@ class GameSwitcher:
         self.update_ima_menu_if_enabled('add', account_name)
         return True
 
+    def _set_valorant_high_priority(self):
+        """Waits for Valorant to start and then sets its process priority to high."""
+        time.sleep(15)  # Wait for VALORANT.exe to likely start
+        try:
+            import psutil
+            for p in psutil.process_iter(['name', 'pid']):
+                if p.info['name'] == "VALORANT-Win64-Shipping.exe":
+                    psutil.Process(p.info['pid']).nice(psutil.HIGH_PRIORITY_CLASS)
+                    logging.info(f"Set VALORANT-Win64-Shipping.exe to high priority.")
+                    break
+        except ImportError:
+            logging.warning("psutil not found, cannot set high priority on VALORANT-Win64-Shipping.exe. Run 'pip install psutil' to enable.")
+        except Exception as e:
+            logging.error(f"Could not set high priority for Valorant: {e}")
+
     def switch_account(self, account_name, selected_game=None, on_update_callback=None):
         if not self.is_admin():
             return False, "Administrator rights are required to switch accounts.", None
@@ -375,10 +398,15 @@ class GameSwitcher:
             launch_args = self.GAMES[game]["launch_args"].split()
             command = [self.riot_games_config["ExeLocationDefault"]] + launch_args
             
-            creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
-            subprocess.Popen(command, creationflags=creationflags, close_fds=True)
+            # Start the Riot Client with high priority
+            subprocess.Popen(command, creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | 0x00000080, close_fds=True)
             
             if game == 'valorant':
+                # Run the priority setter in a separate, non-blocking thread
+                priority_thread = threading.Thread(target=self._set_valorant_high_priority)
+                priority_thread.daemon = True
+                priority_thread.start()
+
                 graphics_settings = self.get_graphics_settings()
                 update_thread = threading.Thread(target=self.update_all_game_user_settings, args=(graphics_settings,))
                 update_thread.daemon = True
