@@ -388,11 +388,11 @@ class ModernValorantSwitcher(QMainWindow):
     def get_settings_actions(self):
         return {
             "Add Account": (self.settings_handler.add_account, "Add.png"),
-            "Save Current Account": (self.settings_handler.save_current_account, "Save.png"),
+            "Save Account": (self.settings_handler.save_current_account, "Save.png"),
             "Backup": (self.settings_handler.backup_profiles, "Backup.png"),
             "Restore": (self.settings_handler.restore_profiles, "Restore.png"),
-            "Open Profiles Folder": (self.settings_handler.open_profiles_folder, "Open.png"),
-            "Export to iMA Menu": (self.settings_handler.export_ima_menu, "ima.png"),
+            "Open Folder": (self.settings_handler.open_profiles_folder, "Open.png"),
+            "iMA Menu": (self.settings_handler.export_ima_menu, "ima.png"),
             "Options": (self.settings_handler.open_options_dialog, "Options.png"),
         }
 
