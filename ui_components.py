@@ -1186,7 +1186,7 @@ class OptionsDialog(PopupDialog):
                 self.check_for_update_button.setEnabled(True)
                 return
 
-            latest_version = latest_release["tag_name"].lstrip('v')
+            latest_version = latest_release["tag_name"].lstrip('vV') # Strip both 'v' and 'V'
             current_version = self.switcher.VERSION
 
             if latest_version > current_version:
