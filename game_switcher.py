@@ -36,7 +36,7 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class GameSwitcher:
-    VERSION = "1.0.7"
+    VERSION = "1.0.8"
     DEFAULT_CONFIG = {
         "output_dir": None,
         "title": "Valorant",

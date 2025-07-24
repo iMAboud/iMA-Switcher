@@ -2092,83 +2092,107 @@ class HoverButton(QPushButton):
 
 class InstallerDialog(PopupDialog):
     def __init__(self, parent=None):
-        super().__init__("Install iMA Switcher", parent)
-        self.setFixedSize(500, 400)
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window) 
+        super().__init__("iMA Switcher Installer", parent)
+        self.setFixedSize(450, 450)
         
-        self.content_layout.setContentsMargins(20, 10, 20, 20)
         self.content_layout.setSpacing(15)
+        self.content_layout.setAlignment(Qt.AlignTop)
 
-        self.content_layout.addWidget(QLabel("Choose Installation Folder:"))
-        
+        logo_label = QLabel()
+        pixmap = QPixmap(get_asset_path("app_icon.png"))
+        logo_label.setPixmap(pixmap.scaled(100, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        logo_label.setAlignment(Qt.AlignCenter)
+        self.content_layout.addWidget(logo_label)
+
+        welcome_label = QLabel("Welcome to iMA Switcher")
+        welcome_label.setStyleSheet("color: #e0d6d1; font-size: 22px; font-weight: bold;")
+        welcome_label.setAlignment(Qt.AlignCenter)
+        self.content_layout.addWidget(welcome_label)
+
+        info_label = QLabel("This will install iMA Switcher on your computer.")
+        info_label.setStyleSheet("color: #b0a8a8; font-size: 14px;")
+        info_label.setAlignment(Qt.AlignCenter)
+        self.content_layout.addWidget(info_label)
+
+        # Installation Path
         path_layout = QHBoxLayout()
-        self.path_edit = QLineEdit()
-        default_path = os.path.join(os.getenv('LOCALAPPDATA'), "iMA Switcher")
-        self.path_edit.setText(default_path)
+        self.path_edit = QLineEdit(self.get_default_install_path())
         self.path_edit.setStyleSheet("background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 8px; color: #e0d6d1;")
-        path_layout.addWidget(self.path_edit)
-        
-        browse_button = QPushButton("Browse")
+        browse_button = QPushButton("Browse...")
         browse_button.setStyleSheet("background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 8px;")
-        browse_button.clicked.connect(self.select_folder)
+        browse_button.clicked.connect(self.browse_path)
+        path_layout.addWidget(self.path_edit)
         path_layout.addWidget(browse_button)
         self.content_layout.addLayout(path_layout)
-        
-        self.content_layout.addWidget(QLabel("Riot Client Executable Path:"))
+
+        # Riot Games Path
         riot_path_layout = QHBoxLayout()
-        self.riot_path_edit = QLineEdit()
+        self.riot_path_edit = QLineEdit(self.find_riot_client_path() or "")
+        self.riot_path_edit.setPlaceholderText("Path to RiotClientServices.exe (optional)")
         self.riot_path_edit.setStyleSheet("background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 8px; color: #e0d6d1;")
-        riot_path_layout.addWidget(self.riot_path_edit)
-        
-        riot_browse_button = QPushButton("Browse")
+        riot_browse_button = QPushButton("Browse...")
         riot_browse_button.setStyleSheet("background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 8px;")
-        riot_browse_button.clicked.connect(self.select_riot_games_folder)
+        riot_browse_button.clicked.connect(self.browse_riot_path)
+        riot_path_layout.addWidget(self.riot_path_edit)
         riot_path_layout.addWidget(riot_browse_button)
         self.content_layout.addLayout(riot_path_layout)
 
-        self.riot_path_warning_label = QLabel("")
-        self.riot_path_warning_label.setStyleSheet("color: red; font-size: 10px;")
-        self.content_layout.addWidget(self.riot_path_warning_label)
-
-        from game_switcher import GameSwitcher
-        switcher = GameSwitcher()
-        switcher.initialize_riot_client_paths() 
-        found_riot_path = switcher.riot_games_config.get("ExeLocationDefault")
-        if found_riot_path and os.path.exists(found_riot_path):
-            self.riot_path_edit.setText(found_riot_path)
-            self.riot_path_warning_label.setText("")
-        else:
-            self.riot_path_edit.setText("")
-            self.riot_path_warning_label.setText("Please select 'RiotClientServices.exe'.")
-
-        self.desktop_shortcut_checkbox = QCheckBox("Add shortcut to Desktop")
+        # Options
+        self.desktop_shortcut_checkbox = QCheckBox("Add a shortcut to the desktop")
         self.desktop_shortcut_checkbox.setChecked(True)
-        self.desktop_shortcut_checkbox.setStyleSheet("color: #FFFFFF;")
+        self.desktop_shortcut_checkbox.setStyleSheet("QCheckBox { color: #e0d6d1; }")
         self.content_layout.addWidget(self.desktop_shortcut_checkbox)
 
-        self.start_menu_shortcut_checkbox = QCheckBox("Add shortcut to Start Menu (Optional)")
-        self.start_menu_shortcut_checkbox.setChecked(True)
-        self.start_menu_shortcut_checkbox.setStyleSheet("color: #FFFFFF;")
-        self.content_layout.addWidget(self.start_menu_shortcut_checkbox)
+        self.start_menu_checkbox = QCheckBox("Add a shortcut to the Start Menu")
+        self.start_menu_checkbox.setChecked(True)
+        self.start_menu_checkbox.setStyleSheet("QCheckBox { color: #e0d6d1; }")
+        self.content_layout.addWidget(self.start_menu_checkbox)
 
-        self.content_layout.addStretch()
-        
-        install_button = QPushButton("Install")
-        install_button.setStyleSheet("""
-            QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 10px 20px;
-            }
-            QPushButton:hover {
-                background-color: #d9b68b; /* Brighter coffee color */
-            }
-        """)
-        install_button.clicked.connect(self.accept);
-        
+        # Install Button
         button_layout = QHBoxLayout()
         button_layout.addStretch()
+        install_button = QPushButton("Install")
+        install_button.setStyleSheet("background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 10px 30px;")
+        install_button.clicked.connect(self.accept)
         button_layout.addWidget(install_button)
         button_layout.addStretch()
         self.content_layout.addLayout(button_layout)
+
+    def get_default_install_path(self):
+        return os.path.join(os.getenv("ProgramFiles"), "iMA-Switcher")
+
+    def find_riot_client_path(self):
+        common_paths = [
+            os.path.join("C:", os.sep, "Riot Games", "Riot Client", "RiotClientServices.exe"),
+            os.path.join(os.getenv('PROGRAMFILES'), "Riot Games", "Riot Client", "RiotClientServices.exe"),
+            os.path.join(os.getenv('PROGRAMFILES(X86)'), "Riot Games", "Riot Client", "RiotClientServices.exe"),
+        ]
+        for path in common_paths:
+            if os.path.exists(path):
+                return path
+        return None
+
+    def browse_path(self):
+        path = QFileDialog.getExistingDirectory(self, "Select Installation Folder")
+        if path:
+            self.path_edit.setText(path)
+
+    def browse_riot_path(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Select RiotClientServices.exe", "", "Executable Files (*.exe)")
+        if path:
+            self.riot_path_edit.setText(path)
+
+    def get_install_path(self):
+        return self.path_edit.text()
+
+    def get_riot_games_path(self):
+        return self.riot_path_edit.text()
+
+    def should_add_desktop_shortcut(self):
+        return self.desktop_shortcut_checkbox.isChecked()
+
+    def should_add_start_menu_shortcut(self):
+        return self.start_menu_checkbox.isChecked()
 
     def select_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Installation Folder", self.path_edit.text())
