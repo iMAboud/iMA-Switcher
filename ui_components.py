@@ -1,8 +1,6 @@
 import logging
 import os
-import requests
-import tempfile
-import subprocess
+
 from PyQt5.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -836,46 +834,7 @@ class OptionsDialog(PopupDialog):
         rank_update_layout.addWidget(self.rank_check_region_combo, 1, 1)
         main_layout.addWidget(rank_update_group)
 
-        update_group = QGroupBox("iMA Switcher Update")
-        update_group.setStyleSheet("""
-            QGroupBox {
-                color: #FFFFFF;
-                font-size: 14px;
-                font-weight: bold;
-                border: 1px solid #c89f68;
-                border-radius: 8px;
-                margin-top: 10px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                padding: 0 10px;
-                left: 10px;
-                color: #FFFFFF;
-            }
-        """)
-        update_layout = QGridLayout(update_group)
-        update_layout.setSpacing(10)
-
-        self.current_version_label = QLabel(f"Current Version: {self.switcher.VERSION}")
-        update_layout.addWidget(self.current_version_label, 0, 0)
-
-        self.update_status_label = QLabel("")
-        update_layout.addWidget(self.update_status_label, 0, 1)
-
-        self.check_for_update_button = QPushButton("Check for Update")
-        preset_style = """
-            QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold; 
-                border-radius: 8px; padding: 8px; border: 1px solid #c89f68;
-            }
-            QPushButton:hover { background-color: #d9b68b; }
-            QPushButton:pressed { background-color: #b88f58; }
-        """
-        self.check_for_update_button.setStyleSheet(preset_style)
-        self.check_for_update_button.clicked.connect(self.check_for_updates)
-        update_layout.addWidget(self.check_for_update_button, 1, 0, 1, 2)
-        main_layout.addWidget(update_group)
+        
 
         main_layout.addStretch()
         self.tab_widget.addTab(account_tab, QIcon(get_asset_path("Settings.png")), "Account")
@@ -1157,94 +1116,7 @@ class OptionsDialog(PopupDialog):
     def eventFilter(self, obj, event):
         return super().eventFilter(obj, event)
 
-    def check_for_updates(self):
-        self.check_for_update_button.setText("Checking...")
-        self.check_for_update_button.setEnabled(False)
-        self.update_status_label.setText("")
-
-        try:
-            response = requests.get("https://api.github.com/repos/iMAboud/iMA-Switcher/releases")
-            response.raise_for_status()
-            releases = response.json()
-
-            if not releases:
-                self.update_status_label.setText("No releases found.")
-                self.check_for_update_button.setText("Check for Update")
-                self.check_for_update_button.setEnabled(True)
-                return
-
-            # Find the latest non-prerelease version
-            latest_release = None
-            for release in releases:
-                if not release["prerelease"]:
-                    latest_release = release
-                    break
-            
-            if latest_release is None:
-                self.update_status_label.setText("No stable releases found.")
-                self.check_for_update_button.setText("Check for Update")
-                self.check_for_update_button.setEnabled(True)
-                return
-
-            latest_version = latest_release["tag_name"].lstrip('vV') # Strip both 'v' and 'V'
-            current_version = self.switcher.VERSION
-
-            if latest_version > current_version:
-                self.update_status_label.setText(f"<font color='green'>New version available: {latest_version}</font>")
-                self.check_for_update_button.setText("Update")
-                self.check_for_update_button.setEnabled(True)
-                self.check_for_update_button.clicked.disconnect()
-                self.check_for_update_button.clicked.connect(lambda: self.install_update(latest_release))
-            else:
-                self.update_status_label.setText("Up to date.")
-                self.check_for_update_button.setText("Check for Update")
-                self.check_for_update_button.setEnabled(True)
-
-        except requests.exceptions.RequestException as e:
-            self.update_status_label.setText(f"<font color='red'>Error: {e}</font>")
-            self.check_for_update_button.setText("Check for Update")
-            self.check_for_update_button.setEnabled(True)
-
-    def install_update(self, release_data):
-        self.check_for_update_button.setText("Downloading...")
-        self.check_for_update_button.setEnabled(False)
-
-        assets = release_data.get("assets", [])
-        installer_asset = next((asset for asset in assets if "Installer.exe" in asset["name"]), None)
-
-        if not installer_asset:
-            self.update_status_label.setText("<font color='red'>Installer not found in release.</font>")
-            self.check_for_update_button.setText("Update")
-            self.check_for_update_button.setEnabled(True)
-            return
-
-        download_url = installer_asset["browser_download_url"]
-        
-        try:
-            response = requests.get(download_url, stream=True)
-            response.raise_for_status()
-
-            temp_dir = tempfile.gettempdir()
-            installer_path = os.path.join(temp_dir, "iMA_Switcher_Installer.exe")
-
-            with open(installer_path, "wb") as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            
-            self.check_for_update_button.setText("Installing...")
-            
-            # Close the current application and run the installer
-            subprocess.Popen([installer_path])
-            QApplication.instance().quit()
-
-        except requests.exceptions.RequestException as e:
-            self.update_status_label.setText(f"<font color='red'>Download failed: {e}</font>")
-            self.check_for_update_button.setText("Update")
-            self.check_for_update_button.setEnabled(True)
-        except Exception as e:
-            self.update_status_label.setText(f"<font color='red'>Installation failed: {e}</font>")
-            self.check_for_update_button.setText("Update")
-            self.check_for_update_button.setEnabled(True)
+    
 
     def on_tab_changed(self, index):
         # When the tab is changed by clicking, restore all icons to their original state
@@ -2092,107 +1964,83 @@ class HoverButton(QPushButton):
 
 class InstallerDialog(PopupDialog):
     def __init__(self, parent=None):
-        super().__init__("iMA Switcher Installer", parent)
-        self.setFixedSize(450, 450)
+        super().__init__("Install iMA Switcher", parent)
+        self.setFixedSize(500, 400)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window) 
         
+        self.content_layout.setContentsMargins(20, 10, 20, 20)
         self.content_layout.setSpacing(15)
-        self.content_layout.setAlignment(Qt.AlignTop)
 
-        logo_label = QLabel()
-        pixmap = QPixmap(get_asset_path("app_icon.png"))
-        logo_label.setPixmap(pixmap.scaled(100, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-        logo_label.setAlignment(Qt.AlignCenter)
-        self.content_layout.addWidget(logo_label)
-
-        welcome_label = QLabel("Welcome to iMA Switcher")
-        welcome_label.setStyleSheet("color: #e0d6d1; font-size: 22px; font-weight: bold;")
-        welcome_label.setAlignment(Qt.AlignCenter)
-        self.content_layout.addWidget(welcome_label)
-
-        info_label = QLabel("This will install iMA Switcher on your computer.")
-        info_label.setStyleSheet("color: #b0a8a8; font-size: 14px;")
-        info_label.setAlignment(Qt.AlignCenter)
-        self.content_layout.addWidget(info_label)
-
-        # Installation Path
+        self.content_layout.addWidget(QLabel("Choose Installation Folder:"))
+        
         path_layout = QHBoxLayout()
-        self.path_edit = QLineEdit(self.get_default_install_path())
+        self.path_edit = QLineEdit()
+        default_path = os.path.join(os.getenv('LOCALAPPDATA'), "iMA Switcher")
+        self.path_edit.setText(default_path)
         self.path_edit.setStyleSheet("background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 8px; color: #e0d6d1;")
-        browse_button = QPushButton("Browse...")
-        browse_button.setStyleSheet("background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 8px;")
-        browse_button.clicked.connect(self.browse_path)
         path_layout.addWidget(self.path_edit)
+        
+        browse_button = QPushButton("Browse")
+        browse_button.setStyleSheet("background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 8px;")
+        browse_button.clicked.connect(self.select_folder)
         path_layout.addWidget(browse_button)
         self.content_layout.addLayout(path_layout)
-
-        # Riot Games Path
+        
+        self.content_layout.addWidget(QLabel("Riot Client Executable Path:"))
         riot_path_layout = QHBoxLayout()
-        self.riot_path_edit = QLineEdit(self.find_riot_client_path() or "")
-        self.riot_path_edit.setPlaceholderText("Path to RiotClientServices.exe (optional)")
+        self.riot_path_edit = QLineEdit()
         self.riot_path_edit.setStyleSheet("background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 8px; color: #e0d6d1;")
-        riot_browse_button = QPushButton("Browse...")
-        riot_browse_button.setStyleSheet("background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 8px;")
-        riot_browse_button.clicked.connect(self.browse_riot_path)
         riot_path_layout.addWidget(self.riot_path_edit)
+        
+        riot_browse_button = QPushButton("Browse")
+        riot_browse_button.setStyleSheet("background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 8px;")
+        riot_browse_button.clicked.connect(self.select_riot_games_folder)
         riot_path_layout.addWidget(riot_browse_button)
         self.content_layout.addLayout(riot_path_layout)
 
-        # Options
-        self.desktop_shortcut_checkbox = QCheckBox("Add a shortcut to the desktop")
+        self.riot_path_warning_label = QLabel("")
+        self.riot_path_warning_label.setStyleSheet("color: red; font-size: 10px;")
+        self.content_layout.addWidget(self.riot_path_warning_label)
+
+        from game_switcher import GameSwitcher
+        switcher = GameSwitcher()
+        switcher.initialize_riot_client_paths() 
+        found_riot_path = switcher.riot_games_config.get("ExeLocationDefault")
+        if found_riot_path and os.path.exists(found_riot_path):
+            self.riot_path_edit.setText(found_riot_path)
+            self.riot_path_warning_label.setText("")
+        else:
+            self.riot_path_edit.setText("")
+            self.riot_path_warning_label.setText("Please select 'RiotClientServices.exe'.")
+
+        self.desktop_shortcut_checkbox = QCheckBox("Add shortcut to Desktop")
         self.desktop_shortcut_checkbox.setChecked(True)
-        self.desktop_shortcut_checkbox.setStyleSheet("QCheckBox { color: #e0d6d1; }")
+        self.desktop_shortcut_checkbox.setStyleSheet("color: #FFFFFF;")
         self.content_layout.addWidget(self.desktop_shortcut_checkbox)
 
-        self.start_menu_checkbox = QCheckBox("Add a shortcut to the Start Menu")
-        self.start_menu_checkbox.setChecked(True)
-        self.start_menu_checkbox.setStyleSheet("QCheckBox { color: #e0d6d1; }")
-        self.content_layout.addWidget(self.start_menu_checkbox)
+        self.start_menu_shortcut_checkbox = QCheckBox("Add shortcut to Start Menu (Optional)")
+        self.start_menu_shortcut_checkbox.setChecked(True)
+        self.start_menu_shortcut_checkbox.setStyleSheet("color: #FFFFFF;")
+        self.content_layout.addWidget(self.start_menu_shortcut_checkbox)
 
-        # Install Button
+        self.content_layout.addStretch()
+        
+        install_button = QPushButton("Install")
+        install_button.setStyleSheet("""
+            QPushButton {
+                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 10px 20px;
+            }
+            QPushButton:hover {
+                background-color: #d9b68b; /* Brighter coffee color */
+            }
+        """)
+        install_button.clicked.connect(self.accept);
+        
         button_layout = QHBoxLayout()
         button_layout.addStretch()
-        install_button = QPushButton("Install")
-        install_button.setStyleSheet("background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 10px 30px;")
-        install_button.clicked.connect(self.accept)
         button_layout.addWidget(install_button)
         button_layout.addStretch()
         self.content_layout.addLayout(button_layout)
-
-    def get_default_install_path(self):
-        return os.path.join(os.getenv("ProgramFiles"), "iMA-Switcher")
-
-    def find_riot_client_path(self):
-        common_paths = [
-            os.path.join("C:", os.sep, "Riot Games", "Riot Client", "RiotClientServices.exe"),
-            os.path.join(os.getenv('PROGRAMFILES'), "Riot Games", "Riot Client", "RiotClientServices.exe"),
-            os.path.join(os.getenv('PROGRAMFILES(X86)'), "Riot Games", "Riot Client", "RiotClientServices.exe"),
-        ]
-        for path in common_paths:
-            if os.path.exists(path):
-                return path
-        return None
-
-    def browse_path(self):
-        path = QFileDialog.getExistingDirectory(self, "Select Installation Folder")
-        if path:
-            self.path_edit.setText(path)
-
-    def browse_riot_path(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Select RiotClientServices.exe", "", "Executable Files (*.exe)")
-        if path:
-            self.riot_path_edit.setText(path)
-
-    def get_install_path(self):
-        return self.path_edit.text()
-
-    def get_riot_games_path(self):
-        return self.riot_path_edit.text()
-
-    def should_add_desktop_shortcut(self):
-        return self.desktop_shortcut_checkbox.isChecked()
-
-    def should_add_start_menu_shortcut(self):
-        return self.start_menu_checkbox.isChecked()
 
     def select_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Installation Folder", self.path_edit.text())

@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 import re
 import time
-import tempfile
+
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import QEvent
 
@@ -20,11 +20,7 @@ class CustomUpdateEvent(QEvent):
     def __init__(self, account_name):
         super().__init__(CustomUpdateEvent.EVENT_TYPE)
         self.account_name = account_name
-try:
-    import requests
-except ImportError:
-    requests = None
-    logging.warning("'requests' library not installed. Rank fetching will not work. Please install it with 'pip install requests'")
+
 try:
     from PIL import Image
 except ImportError:
@@ -36,7 +32,7 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class GameSwitcher:
-    VERSION = "1.0.7"
+    
     DEFAULT_CONFIG = {
         "output_dir": None,
         "title": "Valorant",
@@ -1030,135 +1026,5 @@ class GameSwitcher:
         self._icon_cache[icon_path] = icon # Cache the error icon against the path
         return icon
 
-    def _parse_rank_data(self, html_content):
-        # A more robust parsing method to handle variations in the source HTML
-        rank = None
-        current_rr = None
-        last_game_rr = None
-
-        # Try to find rank, which is typically in brackets. E.g., "[Diamond 1]"
-        rank_match = re.search(r'\[(.*?)\]', html_content)
-        if rank_match:
-            rank = rank_match.group(1).strip()
-        elif "unrated" in html_content.lower() or "unranked" in html_content.lower():
-            rank = 'Unranked'
-
-        # If a rank was found, look for RR values.
-        if rank:
-            # Look for current RR, e.g., ": 10 RR" or "55 RR"
-            rr_match = re.search(r':?\s*(\d+)\s*RR', html_content)
-            if rr_match:
-                current_rr = int(rr_match.group(1))
-            elif rank.lower() in ['unranked', 'unrated']:
-                current_rr = 0
-
-            # Look for last game's RR change, e.g., "[-12]" or "[+25]"
-            last_rr_match = re.search(r'\[([+-]?\d+)\]', html_content)
-            if last_rr_match:
-                last_game_rr = int(last_rr_match.group(1))
-            elif rank.lower() in ['unranked', 'unrated']:
-                last_game_rr = 0
-        
-        # Return the found data. Some values might be None if not found.
-        return rank, current_rr, last_game_rr
-
-    def fetch_and_update_rank_data(self, account_name, is_manual_refresh=False, on_update_callback=None):
-        logging.debug(f"fetch_and_update_rank_data called for {account_name}. Manual refresh: {is_manual_refresh}")
-        ui_settings = self.get_ima_config().get("ui_settings", {})
-        auto_rank_update_enabled = ui_settings.get("auto_rank_update", True)
-
-        if not auto_rank_update_enabled and not is_manual_refresh:
-            logging.debug(f"Rank update skipped for {account_name}: auto_rank_update disabled and not manual refresh.")
-            return
-
-        account_data = self.get_saved_accounts().get(account_name)
-        if not account_data:
-            logging.debug(f"Account data not found for {account_name}.")
-            return
-
-        _, _, rank, in_game_name, in_game_tag, current_rr, last_game_rr = account_data
-
-        if not in_game_name or not in_game_tag:
-            logging.debug(f"Skipping rank fetch for {account_name}: missing in-game name or tag.")
-            return
-
-        ui_settings = self.get_ima_config().get("ui_settings", {})
-        raw_region = ui_settings.get("rank_check_region", "eu")
-
-        # Map full region names to their two-letter codes for URL construction
-        region_map = {
-            "Europe (eu)": "eu",
-            "Asia Pacific (ap)": "ap",
-            "Brazil (br)": "br",
-            "Korea (kr)": "kr",
-            "Latin America (latam)": "latam",
-            "North America (na)": "na",
-            "eu": "eu",
-            "ap": "ap",
-            "br": "br",
-            "kr": "kr",
-            "latam": "latam",
-            "na": "na"
-        }
-        region = region_map.get(raw_region, "eu") # Default to 'eu' if not found
-
-        url = f"https://valorantrank.chat/{region}/{in_game_name}/{in_game_tag}?mmrChange=true"
-        logging.debug(f"Fetching rank from URL: {url}")
-
-        try:
-            response = requests.get(url, timeout=10)
-            response.raise_for_status()
-            html_content = response.text
-            logging.debug(f"Successfully fetched HTML for {account_name}.")
-
-            new_rank, new_current_rr, new_last_game_rr = self._parse_rank_data(html_content)
-            logging.debug(f"Parsed rank data for {account_name}: Rank={new_rank}, CurrentRR={new_current_rr}, LastGameRR={new_last_game_rr}")
-
-            if new_rank and new_current_rr is not None and new_last_game_rr is not None:
-                if new_rank.lower() == 'unrated':
-                    new_rank = 'Unranked'
-                if new_rank != rank or new_current_rr != current_rr or new_last_game_rr != last_game_rr:
-                    logging.debug(f"Rank data changed for {account_name}. Updating...")
-                    self.set_account_in_game_name_tag(account_name, in_game_name, in_game_tag, new_current_rr, new_last_game_rr)
-                    self.set_account_rank(account_name, new_rank)
-                    if on_update_callback:
-                        logging.debug(f"Calling on_update_callback for {account_name}.")
-                        on_update_callback(account_name)
-                    
-            else:
-                logging.debug(f"No significant rank data change for {account_name}.")
-        except requests.exceptions.ConnectionError as e:
-            logging.error(f"Connection error for {account_name}: {e}")
-        except requests.exceptions.Timeout as e:
-            logging.error(f"Timeout error for {account_name}: {e}")
-        except requests.exceptions.HTTPError as e:
-            logging.error(f"HTTP error for {account_name}: {e}")
-        except requests.exceptions.RequestException as e:
-            logging.error(f"RequestException for {account_name}: {e}")
-        except Exception as e:
-            logging.error(f"An unexpected error occurred fetching rank for {account_name}: {e}")
-
-    def fetch_and_update_all_accounts(self, on_update_callback=None):
-        logging.debug("Fetching and updating all accounts.")
-        ui_settings = self.get_ima_config().get("ui_settings", {})
-        if ui_settings.get("auto_rank_update", True):
-            accounts = list(self.get_saved_accounts().keys())
-            # Use ThreadPoolExecutor for concurrent requests with a limited number of workers
-            with ThreadPoolExecutor(max_workers=5) as executor:
-                for account_name in accounts:
-                    executor.submit(self.fetch_and_update_rank_data, account_name, False, on_update_callback)
-
-    def _run_rank_update_loop(self, on_update_callback=None):
-        while True:
-            ui_settings = self.get_ima_config().get("ui_settings", {})
-            if ui_settings.get("auto_rank_update", True):
-                accounts = list(self.get_saved_accounts().keys())
-                with ThreadPoolExecutor(max_workers=5) as executor:
-                    for account_name in accounts:
-                        executor.submit(self.fetch_and_update_rank_data, account_name, False, on_update_callback)
-            time.sleep(3600) # Wait an hour before the next cycle
-
-    def start_rank_update_scheduler(self, on_update_callback=None):
-        scheduler_thread = threading.Thread(target=self._run_rank_update_loop, args=(on_update_callback,), daemon=True)
-        scheduler_thread.start()
+    
 
