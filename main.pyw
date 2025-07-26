@@ -606,37 +606,6 @@ class ModernValorantSwitcher(QMainWindow):
         self.status_label.setText(f"Switching to '{name}'...")
         QApplication.processEvents()
 
-        # --- NEW: Show notification immediately ---
-        account_data = self.switcher.get_saved_accounts().get(name)
-        if account_data:
-            _, game, rank, in_game_name, in_game_tag, _, _ = account_data
-            ui_settings = self.switcher.get_ima_config().get("ui_settings", {})
-            use_rank_icons = ui_settings.get("use_rank_icons", False)
-            
-            # If the game is 'both' and we don't have a selection yet, handle it
-            if game == 'both' and selected_game is None:
-                account_icon_path_str = self.switcher.get_icon_path_for_account(name, rank, use_rank_icons)
-                account_icon = self.switcher.get_qicon_from_path(account_icon_path_str)
-                pixmap = account_icon.pixmap(account_icon.actualSize(QSize(180, 180)))
-                
-                selection_dialog = GameSelectionDialog(name, pixmap, self, switcher_instance=self.switcher)
-                # The selection dialog will re-call this method with the selected_game
-                selection_dialog.game_selected.connect(lambda game: self.switch_to_selected_account(selected_game=game))
-                selection_dialog.exec_()
-                return # Stop execution here, the dialog will trigger the next step
-
-            # If we have a game (or one was just selected), show the notification and launch
-            try:
-                account_icon_path_str = self.switcher.get_icon_path_for_account(name, rank, use_rank_icons)
-                account_icon = self.switcher.get_qicon_from_path(account_icon_path_str)
-                account_icon_pixmap = account_icon.pixmap(account_icon.actualSize(QSize(180, 180)))
-                self.launch_notification = LaunchNotificationWidget(name, account_icon_pixmap, in_game_name=in_game_name, in_game_tag=in_game_tag, rank=rank, use_rank_icons=use_rank_icons, switcher_instance=self.switcher)
-                self.launch_notification.show()
-                QApplication.processEvents()
-            except Exception as e:
-                logging.error(f"Could not create notification: {e}")
-        # --- End of new section ---
-
         threading.Thread(target=self._switch_account_thread, args=(name, selected_game), daemon=True).start()
 
     

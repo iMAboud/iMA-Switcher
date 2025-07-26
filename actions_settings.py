@@ -3,7 +3,6 @@ import threading
 import logging
 from PyQt5.QtWidgets import QMessageBox, QFileDialog, QDialog
 from ui_components import SaveAccountDialog, ExportIMAMenuDialog, OptionsDialog, CustomMessageDialog, ConfirmDeleteDialog
-from PyQt5.QtCore import QTimer
 
 class SettingsActions:
     def __init__(self, parent):
@@ -16,8 +15,7 @@ class SettingsActions:
 
     def add_account(self):
         self.parent.status_label.setText("Preparing for new account...")
-        threading.Thread(target=self.switcher.add_account_flow, daemon=True).start()
-        QTimer.singleShot(1000, self.save_current_account)
+        threading.Thread(target=self._add_account_thread, daemon=True).start()
 
     def save_current_account(self):
         dialog = SaveAccountDialog(self.parent, switcher_instance=self.switcher)
@@ -33,6 +31,10 @@ class SettingsActions:
             self.switcher.save_account(name, game, in_game_name=in_game_name, in_game_tag=in_game_tag)
             self.parent.status_label.setText(f"Account '{name}' saved for {game.capitalize()}. ")
             self.parent.load_accounts()
+
+    def _add_account_thread(self):
+        success = self.switcher.add_account_flow()
+        self.parent.add_account_finished.emit(success)
 
     def backup_profiles(self):
         suggested_filename = self.switcher.get_backup_filename()

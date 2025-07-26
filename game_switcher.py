@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 import re
 import time
-
+import tempfile
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import QEvent
 
@@ -20,7 +20,11 @@ class CustomUpdateEvent(QEvent):
     def __init__(self, account_name):
         super().__init__(CustomUpdateEvent.EVENT_TYPE)
         self.account_name = account_name
-
+try:
+    import requests
+except ImportError:
+    requests = None
+    logging.warning("'requests' library not installed. Rank fetching will not work. Please install it with 'pip install requests'")
 try:
     from PIL import Image
 except ImportError:
@@ -32,7 +36,6 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class GameSwitcher:
-    
     DEFAULT_CONFIG = {
         "output_dir": None,
         "title": "Valorant",
@@ -78,12 +81,12 @@ class GameSwitcher:
 
         self.GAMES = {
             "valorant": {
-                "launch_args": "--launch-product=valorant --launch-patchline=live --disable-gpu-sandbox",
+                "launch_args": "--launch-product=valorant --launch-patchline=live",
                 "processes_to_kill": ["VALORANT.exe", "RiotClientServices.exe", "VALORANT-Win64-Shipping.exe"],
                 "executable_name": "RiotClientServices.exe"
             },
             "lol": {
-                "launch_args": "--launch-product=league_of_legends --launch-patchline=live --disable-gpu-sandbox",
+                "launch_args": "--launch-product=league_of_legends --launch-patchline=live",
                 "processes_to_kill": ["LeagueClient.exe", "RiotClientServices.exe", "LeagueClientUx.exe"],
                 "executable_name": "LeagueClientUx.exe"
             }
@@ -96,32 +99,25 @@ class GameSwitcher:
         self._cleanup_valorant_temp_files()
 
     def _cleanup_valorant_temp_files(self):
-        # Paths to clean
-        paths_to_clean = [
-            os.path.join(self.app_data_path, "VALORANT", "Saved", "Config", "CrashReportClient"),
-            os.path.join(self.app_data_path, "VALORANT", "Saved", "Logs"),
-            os.path.join(self.app_data_path, "Riot Games", "Riot Client", "Logs"),
-            os.path.join(self.app_data_path, "Riot Games", "Riot Client", "Cache"),
-        ]
+        # Clean up CrashReportClient
+        crash_report_path = os.path.join(self.app_data_path, "VALORANT", "Saved", "Config", "CrashReportClient")
+        if os.path.exists(crash_report_path):
+            try:
+                shutil.rmtree(crash_report_path)
+                logging.info(f"Successfully cleaned up {crash_report_path}")
+            except Exception as e:
+                logging.error(f"Failed to clean up {crash_report_path}: {e}")
 
-        for path in paths_to_clean:
-            if os.path.exists(path):
-                try:
-                    if os.path.isdir(path):
-                        shutil.rmtree(path)
-                        logging.info(f"Successfully cleaned up directory: {path}")
-                    else:
-                        os.remove(path)
-                        logging.info(f"Successfully cleaned up file: {path}")
-                except Exception as e:
-                    logging.error(f"Failed to clean up {path}: {e}")
-        
-        # Flush DNS
-        try:
-            subprocess.run(["ipconfig", "/flushdns"], capture_output=True, text=True, check=True, creationflags=0x08000000)
-            logging.info("Successfully flushed DNS cache.")
-        except Exception as e:
-            logging.error(f"Failed to flush DNS cache: {e}")
+        # Clean up log files
+        logs_path = os.path.join(self.app_data_path, "VALORANT", "Saved", "Logs")
+        if os.path.exists(logs_path):
+            for filename in os.listdir(logs_path):
+                if filename.startswith("ShooterGame-backup") and filename.endswith(".log"):
+                    try:
+                        os.remove(os.path.join(logs_path, filename))
+                        logging.info(f"Successfully deleted log file: {filename}")
+                    except Exception as e:
+                        logging.error(f"Failed to delete log file {filename}: {e}")
 
     def is_admin(self):
         try: return ctypes.windll.shell32.IsUserAnAdmin()
@@ -207,7 +203,7 @@ class GameSwitcher:
     def _terminate_processes(self):
         all_processes = self.GAMES['valorant']["processes_to_kill"] + self.GAMES['lol']["processes_to_kill"]
         for exe in all_processes:
-            subprocess.run(f"taskkill /f /im {exe}", shell=True, capture_output=True, text=True, creationflags=0x08000000)
+            subprocess.run(f"taskkill /f /im {exe}", shell=True, capture_output=True, text=True)
 
     def _create_junction(self, source, link_name):
         startupinfo = subprocess.STARTUPINFO()
@@ -326,26 +322,12 @@ class GameSwitcher:
         self.update_ima_menu_if_enabled('add', account_name)
         return True
 
-    def _set_valorant_high_priority(self):
-        """Waits for Valorant to start and then sets its process priority to high."""
-        time.sleep(15)  # Wait for VALORANT.exe to likely start
-        try:
-            import psutil
-            for p in psutil.process_iter(['name', 'pid']):
-                if p.info['name'] == "VALORANT-Win64-Shipping.exe":
-                    psutil.Process(p.info['pid']).nice(psutil.HIGH_PRIORITY_CLASS)
-                    logging.info(f"Set VALORANT-Win64-Shipping.exe to high priority.")
-                    break
-        except ImportError:
-            logging.warning("psutil not found, cannot set high priority on VALORANT-Win64-Shipping.exe. Run 'pip install psutil' to enable.")
-        except Exception as e:
-            logging.error(f"Could not set high priority for Valorant: {e}")
-
-    def switch_account(self, account_name, selected_game=None, on_update_callback=None):
-        if not self.is_admin():
-            return False, "Administrator rights are required to switch accounts.", None
-
-        # Backup log for the last switched account
+    def _perform_post_switch_tasks(self, account_name, game, on_update_callback):
+        """
+        Handles tasks that can be performed after the game has been launched,
+        to avoid delaying the game launch itself.
+        """
+        # Backup log for the previously switched account
         last_account_name = self.config.get("last_switched_account")
         if last_account_name and last_account_name != account_name:
             log_path = os.path.join(self.app_data_path, "VALORANT", "Saved", "Logs", "ShooterGame.log")
@@ -356,21 +338,9 @@ class GameSwitcher:
                     logging.info(f"Backed up ShooterGame.log for {last_account_name}")
                 except Exception as e:
                     logging.error(f"Failed to backup ShooterGame.log for {last_account_name}: {e}")
-        
-        account_path = self._get_account_path(account_name)
-        if not os.path.exists(account_path):
-            return False, f"Profile for '{account_name}' not found.", None
-        
-        game, rank, in_game_name, in_game_tag, current_rr, last_game_rr = self.get_account_game(account_name)
-
-        if game == 'both' and selected_game is None:
-            return True, "Game selection required.", "both"
-        elif game == 'both' and selected_game is not None:
-            game = selected_game
-
-        self._terminate_processes()
 
         # Restore ShooterGame.log for the current account
+        account_path = self._get_account_path(account_name)
         log_backup_path = os.path.join(account_path, "ShooterGame.log.bak")
         log_dest_path = os.path.join(self.app_data_path, "VALORANT", "Saved", "Logs", "ShooterGame.log")
         if os.path.exists(log_backup_path):
@@ -379,7 +349,38 @@ class GameSwitcher:
                 logging.info(f"Restored ShooterGame.log for {account_name}")
             except Exception as e:
                 logging.error(f"Failed to restore ShooterGame.log for {account_name}: {e}")
-        
+
+        # Update graphics settings if Valorant was launched
+        if game == 'valorant':
+            graphics_settings = self.get_graphics_settings()
+            self.update_all_game_user_settings(graphics_settings)
+
+        # Fetch rank data if enabled
+        ui_settings = self.get_ima_config().get("ui_settings", {})
+        if ui_settings.get("auto_rank_update", True):
+            self.fetch_and_update_rank_data(account_name, False, on_update_callback)
+
+        # Update the last switched account in the config
+        self.config["last_switched_account"] = account_name
+        self._save_config()
+
+    def switch_account(self, account_name, selected_game=None, on_update_callback=None):
+        if not self.is_admin():
+            return False, "Administrator rights are required to switch accounts.", None
+
+        account_path = self._get_account_path(account_name)
+        if not os.path.exists(account_path):
+            return False, f"Profile for '{account_name}' not found.", None
+
+        game, _, _, _, _, _ = self.get_account_game(account_name)
+
+        if game == 'both' and selected_game is None:
+            return True, "Game selection required.", "both"
+        elif game == 'both' and selected_game is not None:
+            game = selected_game
+
+        self._terminate_processes()
+
         for item_name in self.riot_games_config["LoginData"].keys():
             riot_item_path = os.path.join(self.riot_client_data_path, item_name)
             profile_item_path = os.path.join(account_path, item_name)
@@ -394,30 +395,16 @@ class GameSwitcher:
             launch_args = self.GAMES[game]["launch_args"].split()
             command = [self.riot_games_config["ExeLocationDefault"]] + launch_args
             
-            # Start the Riot Client with high priority
-            subprocess.Popen(command, creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | 0x00000080, close_fds=True)
-            
-            if game == 'valorant':
-                # Run the priority setter in a separate, non-blocking thread
-                priority_thread = threading.Thread(target=self._set_valorant_high_priority)
-                priority_thread.daemon = True
-                priority_thread.start()
+            creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
+            subprocess.Popen(command, creationflags=creationflags, close_fds=True)
 
-                graphics_settings = self.get_graphics_settings()
-                update_thread = threading.Thread(target=self.update_all_game_user_settings, args=(graphics_settings,))
-                update_thread.daemon = True
-                update_thread.start()
-            
-            # Fetch rank data after a successful switch, only if enabled
-            ui_settings = self.get_ima_config().get("ui_settings", {})
-            if ui_settings.get("auto_rank_update", True):
-                # Run the rank update for the switched account in a separate thread
-                update_thread = threading.Thread(target=self.fetch_and_update_rank_data, args=(account_name, False, on_update_callback))
-                update_thread.daemon = True
-                update_thread.start()
-
-            self.config["last_switched_account"] = account_name
-            self._save_config()
+            # Run post-switch tasks in a background thread
+            post_switch_thread = threading.Thread(
+                target=self._perform_post_switch_tasks,
+                args=(account_name, game, on_update_callback),
+                daemon=True
+            )
+            post_switch_thread.start()
 
             return True, "Account switched successfully.", game
         except FileNotFoundError:
@@ -1026,5 +1013,135 @@ class GameSwitcher:
         self._icon_cache[icon_path] = icon # Cache the error icon against the path
         return icon
 
-    
+    def _parse_rank_data(self, html_content):
+        # A more robust parsing method to handle variations in the source HTML
+        rank = None
+        current_rr = None
+        last_game_rr = None
+
+        # Try to find rank, which is typically in brackets. E.g., "[Diamond 1]"
+        rank_match = re.search(r'\[(.*?)\]', html_content)
+        if rank_match:
+            rank = rank_match.group(1).strip()
+        elif "unrated" in html_content.lower() or "unranked" in html_content.lower():
+            rank = 'Unranked'
+
+        # If a rank was found, look for RR values.
+        if rank:
+            # Look for current RR, e.g., ": 10 RR" or "55 RR"
+            rr_match = re.search(r':?\s*(\d+)\s*RR', html_content)
+            if rr_match:
+                current_rr = int(rr_match.group(1))
+            elif rank.lower() in ['unranked', 'unrated']:
+                current_rr = 0
+
+            # Look for last game's RR change, e.g., "[-12]" or "[+25]"
+            last_rr_match = re.search(r'\[([+-]?\d+)\]', html_content)
+            if last_rr_match:
+                last_game_rr = int(last_rr_match.group(1))
+            elif rank.lower() in ['unranked', 'unrated']:
+                last_game_rr = 0
+        
+        # Return the found data. Some values might be None if not found.
+        return rank, current_rr, last_game_rr
+
+    def fetch_and_update_rank_data(self, account_name, is_manual_refresh=False, on_update_callback=None):
+        logging.debug(f"fetch_and_update_rank_data called for {account_name}. Manual refresh: {is_manual_refresh}")
+        ui_settings = self.get_ima_config().get("ui_settings", {})
+        auto_rank_update_enabled = ui_settings.get("auto_rank_update", True)
+
+        if not auto_rank_update_enabled and not is_manual_refresh:
+            logging.debug(f"Rank update skipped for {account_name}: auto_rank_update disabled and not manual refresh.")
+            return
+
+        account_data = self.get_saved_accounts().get(account_name)
+        if not account_data:
+            logging.debug(f"Account data not found for {account_name}.")
+            return
+
+        _, _, rank, in_game_name, in_game_tag, current_rr, last_game_rr = account_data
+
+        if not in_game_name or not in_game_tag:
+            logging.debug(f"Skipping rank fetch for {account_name}: missing in-game name or tag.")
+            return
+
+        ui_settings = self.get_ima_config().get("ui_settings", {})
+        raw_region = ui_settings.get("rank_check_region", "eu")
+
+        # Map full region names to their two-letter codes for URL construction
+        region_map = {
+            "Europe (eu)": "eu",
+            "Asia Pacific (ap)": "ap",
+            "Brazil (br)": "br",
+            "Korea (kr)": "kr",
+            "Latin America (latam)": "latam",
+            "North America (na)": "na",
+            "eu": "eu",
+            "ap": "ap",
+            "br": "br",
+            "kr": "kr",
+            "latam": "latam",
+            "na": "na"
+        }
+        region = region_map.get(raw_region, "eu") # Default to 'eu' if not found
+
+        url = f"https://valorantrank.chat/{region}/{in_game_name}/{in_game_tag}?mmrChange=true"
+        logging.debug(f"Fetching rank from URL: {url}")
+
+        try:
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            html_content = response.text
+            logging.debug(f"Successfully fetched HTML for {account_name}.")
+
+            new_rank, new_current_rr, new_last_game_rr = self._parse_rank_data(html_content)
+            logging.debug(f"Parsed rank data for {account_name}: Rank={new_rank}, CurrentRR={new_current_rr}, LastGameRR={new_last_game_rr}")
+
+            if new_rank and new_current_rr is not None and new_last_game_rr is not None:
+                if new_rank.lower() == 'unrated':
+                    new_rank = 'Unranked'
+                if new_rank != rank or new_current_rr != current_rr or new_last_game_rr != last_game_rr:
+                    logging.debug(f"Rank data changed for {account_name}. Updating...")
+                    self.set_account_in_game_name_tag(account_name, in_game_name, in_game_tag, new_current_rr, new_last_game_rr)
+                    self.set_account_rank(account_name, new_rank)
+                    if on_update_callback:
+                        logging.debug(f"Calling on_update_callback for {account_name}.")
+                        on_update_callback(account_name)
+                    
+            else:
+                logging.debug(f"No significant rank data change for {account_name}.")
+        except requests.exceptions.ConnectionError as e:
+            logging.error(f"Connection error for {account_name}: {e}")
+        except requests.exceptions.Timeout as e:
+            logging.error(f"Timeout error for {account_name}: {e}")
+        except requests.exceptions.HTTPError as e:
+            logging.error(f"HTTP error for {account_name}: {e}")
+        except requests.exceptions.RequestException as e:
+            logging.error(f"RequestException for {account_name}: {e}")
+        except Exception as e:
+            logging.error(f"An unexpected error occurred fetching rank for {account_name}: {e}")
+
+    def fetch_and_update_all_accounts(self, on_update_callback=None):
+        logging.debug("Fetching and updating all accounts.")
+        ui_settings = self.get_ima_config().get("ui_settings", {})
+        if ui_settings.get("auto_rank_update", True):
+            accounts = list(self.get_saved_accounts().keys())
+            # Use ThreadPoolExecutor for concurrent requests with a limited number of workers
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                for account_name in accounts:
+                    executor.submit(self.fetch_and_update_rank_data, account_name, False, on_update_callback)
+
+    def _run_rank_update_loop(self, on_update_callback=None):
+        while True:
+            ui_settings = self.get_ima_config().get("ui_settings", {})
+            if ui_settings.get("auto_rank_update", True):
+                accounts = list(self.get_saved_accounts().keys())
+                with ThreadPoolExecutor(max_workers=5) as executor:
+                    for account_name in accounts:
+                        executor.submit(self.fetch_and_update_rank_data, account_name, False, on_update_callback)
+            time.sleep(3600) # Wait an hour before the next cycle
+
+    def start_rank_update_scheduler(self, on_update_callback=None):
+        scheduler_thread = threading.Thread(target=self._run_rank_update_loop, args=(on_update_callback,), daemon=True)
+        scheduler_thread.start()
 

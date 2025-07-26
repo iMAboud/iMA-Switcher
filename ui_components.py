@@ -1,6 +1,5 @@
 import logging
 import os
-
 from PyQt5.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -834,8 +833,6 @@ class OptionsDialog(PopupDialog):
         rank_update_layout.addWidget(self.rank_check_region_combo, 1, 1)
         main_layout.addWidget(rank_update_group)
 
-        
-
         main_layout.addStretch()
         self.tab_widget.addTab(account_tab, QIcon(get_asset_path("Settings.png")), "Account")
 
@@ -1115,8 +1112,6 @@ class OptionsDialog(PopupDialog):
 
     def eventFilter(self, obj, event):
         return super().eventFilter(obj, event)
-
-    
 
     def on_tab_changed(self, index):
         # When the tab is changed by clicking, restore all icons to their original state
