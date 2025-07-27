@@ -2036,21 +2036,37 @@ class InstallerDialog(PopupDialog):
         button_layout.addWidget(install_button)
         button_layout.addStretch()
         self.content_layout.addLayout(button_layout)
-
+        
     def select_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "Select Installation Folder", self.path_edit.text())
-        if folder:
-            self.path_edit.setText(folder)
+        folder_path = QFileDialog.getExistingDirectory(self, "Select Installation Folder")
+        if folder_path:
+            self.path_edit.setText(folder_path)
 
     def select_riot_games_folder(self):
-        file_path, _ = QFileDialog.getOpenFileName(self, "Select RiotClientServices.exe", "", "RiotClientServices.exe (RiotClientServices.exe)")
+        file_path, _ = QFileDialog.getOpenFileName(self, "Select RiotClientServices.exe", "", "Executable Files (*.exe)")
         if file_path:
-            if os.path.basename(file_path).lower() == "riotclientservices.exe":
-                self.riot_path_edit.setText(file_path)
-                self.riot_path_warning_label.setText("")
-            else:
-                self.riot_path_warning_label.setText("Please select 'RiotClientServices.exe'.")
-                self.riot_path_edit.setText("")
+            self.riot_path_edit.setText(file_path)
+            self.riot_path_warning_label.setText("") # Clear warning if user manually selects
+
+    def find_riot_client_path(self):
+        common_paths = [
+            os.path.join("C:", os.sep, "Riot Games", "Riot Client", "RiotClientServices.exe"),
+            os.path.join(os.getenv('PROGRAMFILES'), "Riot Games", "Riot Client", "RiotClientServices.exe"),
+            os.path.join(os.getenv('PROGRAMFILES(X86)'), "Riot Games", "Riot Client", "RiotClientServices.exe"),
+        ]
+        
+        found_path = None
+        for path in common_paths:
+            if os.path.exists(path):
+                found_path = path
+                break
+        
+        if found_path:
+            self.riot_path_edit.setText(found_path)
+            self.riot_path_warning_label.setText("")
+        else:
+            self.riot_path_edit.setText("")
+            self.riot_path_warning_label.setText("RiotClientServices.exe not found. Please locate it manually.")
 
     def get_install_path(self):
         return self.path_edit.text()
@@ -2063,3 +2079,83 @@ class InstallerDialog(PopupDialog):
 
     def should_add_start_menu_shortcut(self):
         return self.start_menu_shortcut_checkbox.isChecked()
+        self.desktop_shortcut_checkbox.setChecked(True)
+        self.desktop_shortcut_checkbox.setStyleSheet("color: #FFFFFF;")
+        self.content_layout.addWidget(self.desktop_shortcut_checkbox)
+
+        self.start_menu_shortcut_checkbox = QCheckBox("Add shortcut to Start Menu (Optional)")
+        self.start_menu_shortcut_checkbox.setChecked(True)
+        self.start_menu_shortcut_checkbox.setStyleSheet("color: #FFFFFF;")
+        self.content_layout.addWidget(self.start_menu_shortcut_checkbox)
+
+        self.content_layout.addStretch()
+        
+        install_button = QPushButton("Install")
+        install_button.setStyleSheet("""
+            QPushButton {
+                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 10px 20px;
+            }
+            QPushButton:hover {
+                background-color: #d9b68b; /* Brighter coffee color */
+            }
+        """)
+        install_button.clicked.connect(self.accept);
+        
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        button_layout.addWidget(install_button)
+        button_layout.addStretch()
+        self.content_layout.addLayout(button_layout)
+
+    
+
+
+
+from game_switcher import GameSwitcher
+
+class BackupRestoreDialog(PopupDialog):
+    def __init__(self, parent=None, mode=None):
+        title = "Backup Profiles" if mode == "backup" else "Restore Profiles"
+        super().__init__(title, parent)
+        self.setFixedSize(350, 200)
+        self.selection = None
+
+        label_text = "Choose backup location:" if mode == "backup" else "Choose restore location:"
+        message_label = QLabel(label_text)
+        message_label.setAlignment(Qt.AlignCenter)
+        message_label.setStyleSheet("font-weight: bold; font-size: 16px;")
+        self.content_layout.addWidget(message_label)
+
+        button_layout = QHBoxLayout()
+        button_layout.setSpacing(15)
+
+        local_button = QPushButton("Local")
+        local_button.setStyleSheet("""
+            QPushButton {
+                background-color: #c89f68; color: #2c2a2b; font-weight: bold; 
+                border-radius: 8px; padding: 10px 20px;
+            }
+            QPushButton:hover { background-color: #d9b68b; }
+        """)
+        local_button.clicked.connect(lambda: self.set_selection("local"))
+        button_layout.addWidget(local_button)
+
+        drive_button = QPushButton("Google Drive")
+        drive_button.setStyleSheet("""
+            QPushButton {
+                background-color: #c89f68; color: #2c2a2b; font-weight: bold; 
+                border-radius: 8px; padding: 10px 20px;
+            }
+            QPushButton:hover { background-color: #d9b68b; }
+        """)
+        drive_button.clicked.connect(lambda: self.set_selection("google_drive"))
+        button_layout.addWidget(drive_button)
+
+        self.content_layout.addLayout(button_layout)
+
+    def set_selection(self, selection):
+        self.selection = selection
+        self.accept()
+
+    def get_selection(self):
+        return self.selection

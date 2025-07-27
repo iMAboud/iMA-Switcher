@@ -2,7 +2,9 @@ import os
 import threading
 import logging
 from PyQt5.QtWidgets import QMessageBox, QFileDialog, QDialog
-from ui_components import SaveAccountDialog, ExportIMAMenuDialog, OptionsDialog, CustomMessageDialog, ConfirmDeleteDialog
+from ui_components import SaveAccountDialog, ExportIMAMenuDialog, OptionsDialog, CustomMessageDialog, ConfirmDeleteDialog, BackupRestoreDialog
+from google_drive_api import GoogleDriveAPI
+import tempfile
 
 class SettingsActions:
     def __init__(self, parent):
@@ -37,6 +39,15 @@ class SettingsActions:
         self.parent.add_account_finished.emit(success)
 
     def backup_profiles(self):
+        dialog = BackupRestoreDialog(self.parent, mode='backup')
+        if dialog.exec_() == QDialog.Accepted:
+            backup_type = dialog.get_selection()
+            if backup_type == "local":
+                self._backup_local()
+            elif backup_type == "google_drive":
+                self._backup_google_drive()
+
+    def _backup_local(self):
         suggested_filename = self.switcher.get_backup_filename()
         path, _ = QFileDialog.getSaveFileName(self.parent, "Save Backup", suggested_filename, "ZIP Files (*.zip)")
         if path:
@@ -48,24 +59,96 @@ class SettingsActions:
                 self.parent.status_label.setText("Backup failed.")
                 logging.error(f"Failed to backup profiles to {path}")
 
+    def _backup_google_drive(self):
+        temp_file_path = None
+        try:
+            drive_api = GoogleDriveAPI(self.switcher.user_data_dir)
+            # Delete all old backups
+            for old_backup in drive_api.find_all_backups("iMA-Switcher_"):
+                drive_api.delete_file(old_backup['id'])
+
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as temp_file:
+                temp_file_path = temp_file.name
+
+            if self.switcher.backup_profiles(temp_file_path):
+                file_name = os.path.basename(self.switcher.get_backup_filename()) + ".zip"
+                drive_api.upload_file(temp_file_path, file_name)
+                msg_dialog = CustomMessageDialog("Backup Successful", "Profiles backed up to Google Drive.", self.parent)
+                msg_dialog.exec_()
+                logging.info("Profiles backed up to Google Drive.")
+            else:
+                self.parent.status_label.setText("Backup failed.")
+        except Exception as e:
+            self.parent.status_label.setText("Google Drive backup failed.")
+            logging.error(f"Google Drive backup failed: {e}")
+            QMessageBox.critical(self.parent, "Google Drive Error", str(e))
+        finally:
+            if temp_file_path and os.path.exists(temp_file_path):
+                try:
+                    os.remove(temp_file_path)
+                    logging.info(f"Successfully cleaned up temp file: {temp_file_path}")
+                except Exception as e:
+                    logging.error(f"Failed to clean up temp file {temp_file_path}: {e}")
+
     def restore_profiles(self):
+        dialog = BackupRestoreDialog(self.parent, mode='restore')
+        if dialog.exec_() == QDialog.Accepted:
+            restore_type = dialog.get_selection()
+            if restore_type == "local":
+                self._restore_local()
+            elif restore_type == "google_drive":
+                self._restore_google_drive()
+
+    def _restore_local(self):
         path, _ = QFileDialog.getOpenFileName(self.parent, "Select Backup", "", "ZIP Files (*.zip)")
         if path:
-            dialog = ConfirmDeleteDialog(
-                account_name="", 
-                parent=self.parent,
-                title="Confirm Restore",
-                message="""Are you sure you want to overwrite
-current settings?"""
-            )
-            if dialog.exec_() == QDialog.Accepted:
-                if self.switcher.restore_profiles(path):
-                    self.parent.status_label.setText("Profiles restored successfully.")
-                    self.parent.load_accounts()
-                    logging.info(f"Profiles restored from {path}")
-                else:
-                    self.parent.status_label.setText("Restore failed.")
-                    logging.error(f"Failed to restore profiles from {path}")
+            self._confirm_and_restore(path)
+
+    def _restore_google_drive(self):
+        temp_file_path = None
+        try:
+            drive_api = GoogleDriveAPI(self.switcher.user_data_dir)
+            backup_file = drive_api.find_latest_backup("iMA-Switcher_")
+            if backup_file:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as temp_file:
+                    temp_file_path = temp_file.name
+                
+                drive_api.download_file(backup_file['id'], temp_file_path)
+                self._confirm_and_restore(temp_file_path, backup_file['modifiedTime'])
+            else:
+                QMessageBox.warning(self.parent, "No Backup Found", "No backup file found on your Google Drive.")
+        except Exception as e:
+            self.parent.status_label.setText("Google Drive restore failed.")
+            logging.error(f"Google Drive restore failed: {e}")
+            QMessageBox.critical(self.parent, "Google Drive Error", str(e))
+        finally:
+            if temp_file_path and os.path.exists(temp_file_path):
+                try:
+                    os.remove(temp_file_path)
+                    logging.info(f"Successfully cleaned up temp file: {temp_file_path}")
+                except Exception as e:
+                    logging.error(f"Failed to clean up temp file {temp_file_path}: {e}")
+
+    def _confirm_and_restore(self, path, modified_time=None):
+        message = "Are you sure you want to overwrite\ncurrent settings?"
+        if modified_time:
+            message = f"Restore from backup created on\n{modified_time}?"
+        
+        dialog = ConfirmDeleteDialog(
+            account_name="", 
+            parent=self.parent,
+            title="Confirm Restore",
+            message=message
+        )
+        if dialog.exec_() == QDialog.Accepted:
+            if self.switcher.restore_profiles(path):
+                msg_dialog = CustomMessageDialog("Restore Successful", "Profiles restored successfully.", self.parent)
+                msg_dialog.exec_()
+                self.parent.load_accounts()
+                logging.info(f"Profiles restored from {path}")
+            else:
+                self.parent.status_label.setText("Restore failed.")
+                logging.error(f"Failed to restore profiles from {path}")
 
     def open_profiles_folder(self):
         os.startfile(self.switcher.profiles_dir)

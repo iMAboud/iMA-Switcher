@@ -556,7 +556,7 @@ class GameSwitcher:
 
     def get_backup_filename(self):
         now = datetime.now()
-        timestamp = now.strftime("iMASwitcher_%M-%H_%d-%m-%y")
+        timestamp = now.strftime("iMA-Switcher_%M-%H_%d-%m-%y")
         return timestamp
 
     def backup_profiles(self, backup_file_path):
@@ -626,6 +626,9 @@ class GameSwitcher:
                     if os.path.exists(valorant_dest):
                         shutil.rmtree(valorant_dest)
                     shutil.move(os.path.join(riot_data_source, "VALORANT"), valorant_dest)
+            
+            # Clear the icon cache to force UI to reload icons from disk
+            self._icon_cache.clear()
 
             self.update_ima_menu_if_enabled('restore', list(self.get_saved_accounts().keys()))
             return True
