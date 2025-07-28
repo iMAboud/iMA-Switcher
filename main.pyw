@@ -126,7 +126,7 @@ def run_installer():
 
 
 class ModernValorantSwitcher(QMainWindow):
-    __version__ = "1.0.9"
+    __version__ = "1.0.7"
     account_updated = pyqtSignal(str) # New signal
     status_message_requested = pyqtSignal(str)
     
@@ -719,7 +719,7 @@ class ModernValorantSwitcher(QMainWindow):
             
             latest_version_str = release_data['tag_name'].lstrip('v') # Remove 'v' prefix if it exists
             latest_version = parse_version(latest_version_str)
-            current_version = parse_version(__version__)
+            current_version = parse_version(self.__version__)
 
             if latest_version > current_version:
                 # Found a new version, pass info back to the main thread
@@ -793,29 +793,42 @@ class ModernValorantSwitcher(QMainWindow):
         
         # Create a batch script to perform the update
         script_content = f"""
- @echo off
-echo Waiting for iMA Switcher to close...
-timeout /t 2 /nobreak > NUL
+@echo on
 
-echo Replacing application files...
-move /Y "{new_exe_path}" "{current_exe_path}"
+echo Waiting for iMA Switcher to close...
+ping -n 5 127.0.0.1 > NUL
+
+echo Attempting to replace application files...
+move /Y "{new_exe_path}" "{current_exe_path}" 2>&1
+IF %ERRORLEVEL% NEQ 0 (
+    echo ERROR: Failed to move new executable. Errorlevel: %ERRORLEVEL%
+    echo This might be due to permissions or the file being in use.
+    pause
+    exit /b %ERRORLEVEL%
+)
 
 echo Relaunching iMA Switcher...
 start "" "{current_exe_path}"
 
-echo Cleaning up...
+echo Cleaning up update script...
 del "%~f0"
+
+exit /b 0
 """
         
         script_path = Path(tempfile.gettempdir()) / "update_ima.bat"
-        with open(script_path, "w") as f:
-            f.write(script_content)
+        try:
+            with open(script_path, "w") as f:
+                f.write(script_content)
             
-        # Launch the script in a new process, completely detached
-        subprocess.Popen([script_path], creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP, close_fds=True)
-        
-        # Close the current application
-        QApplication.instance().quit()
+            # Launch the script in a new process, completely detached
+            subprocess.Popen(["cmd.exe", "/c", str(script_path)], creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP, close_fds=True)
+            
+            # Close the current application
+            QApplication.instance().quit()
+        except Exception as e:
+            logging.error(f"Failed to launch update script: {e}")
+            self.no_update_found.emit("Error launching update process.")
 
     
 
