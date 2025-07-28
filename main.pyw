@@ -48,7 +48,8 @@ from ui_components import (
     LaunchNotificationWidget,
     InstallerDialog, 
     GameSelectionDialog,
-    RiotClientNotFoundDialog
+    RiotClientNotFoundDialog,
+    OptionsDialog
 )
 from game_switcher import CustomUpdateEvent
 from actions_settings import SettingsActions
