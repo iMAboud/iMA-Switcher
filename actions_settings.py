@@ -186,7 +186,7 @@ class SettingsActions:
                 QMessageBox.critical(self.parent, "Export Failed", f"An error occurred: {e}")
 
     def open_options_dialog(self):
-        self.options_dialog = OptionsDialog(self.switcher, self.parent)
+        self.options_dialog = OptionsDialog(self.switcher, self.parent, main_window=self.parent)
         self.options_dialog.settings_applied.connect(self.parent.load_accounts)
         self.options_dialog.show()
 

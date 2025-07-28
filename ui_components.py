@@ -649,9 +649,10 @@ class SettingsDialog(PopupDialog):
 class OptionsDialog(PopupDialog):
     settings_applied = pyqtSignal() # New signal
 
-    def __init__(self, switcher_instance, parent=None):
+    def __init__(self, switcher_instance, parent=None, main_window=None):
         super().__init__("Options", parent)
         self.switcher = switcher_instance
+        self.main_window = main_window # Store it
         self.setFixedSize(600, 700)
 
         self.quality_settings_map = {
@@ -1106,6 +1107,39 @@ class OptionsDialog(PopupDialog):
         main_layout.addWidget(top_group)
         main_layout.addWidget(bottom_group)
         
+        # --- Updater Group ---
+        updater_group = QGroupBox("Application Updates")
+        updater_group.setStyleSheet("""
+            QGroupBox { color: #FFFFFF;
+                font-size: 14px;
+                font-weight: bold;
+                border: 1px solid #c89f68;
+                border-radius: 8px;
+                margin-top: 10px; }
+            QGroupBox::title { subcontrol-origin: margin;
+                subcontrol-position: top left;
+                padding: 0 10px;
+                left: 10px;
+                color: #FFFFFF; }
+        """)
+        updater_layout = QGridLayout(updater_group)
+        
+        self.update_status_label = QLabel(f"Current Version: {self.main_window.__version__}")
+        self.update_status_label.setStyleSheet("color: #e0d6d1;")
+        updater_layout.addWidget(self.update_status_label, 0, 0)
+
+        self.check_for_update_button = QPushButton("Check for Update")
+        self.check_for_update_button.setStyleSheet("""
+            QPushButton {
+                background-color: #4f4a4b; color: #e0d6d1; font-weight: bold; 
+                border-radius: 8px; padding: 10px 20px; border: 1px solid #4f4a4b;
+            }
+            QPushButton:hover { background-color: #5a5556; border: 1px solid #c89f68; }
+        """)
+        self.check_for_update_button.clicked.connect(self.main_window.check_for_updates)
+        updater_layout.addWidget(self.check_for_update_button, 0, 1, Qt.AlignRight)
+
+        main_layout.addWidget(updater_group)
         main_layout.addStretch()
 
         self.tab_widget.setIconSize(QSize(32, 32))

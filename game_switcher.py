@@ -46,55 +46,9 @@ except ImportError:
     Image = None
     logging.warning("Pillow not installed. Image conversion for icons will not work. Please install it with 'pip install Pillow'")
 
+from config_manager import ConfigManager
+
 class GameSwitcher:
-    CONFIG_SCHEMA = {
-        "type": "object",
-        "properties": {
-            "output_dir": {"type": ["string", "null"]},
-            "title": {"type": "string"},
-            "menu_icon_path": {"type": "string"},
-            "ordered_accounts": {"type": "array", "items": {"type": "string"}},
-            "riot_client_exe_path": {"type": ["string", "null"]},
-            "last_graphics_settings_hash": {"type": ["string", "null"]},
-            "ui_settings": {
-                "type": "object",
-                "properties": {
-                    "show_game_icons": {"type": "boolean"},
-                    "show_rank_tips": {"type": "boolean"},
-                    "tip_delay": {"type": "number", "minimum": 0},
-                    "use_rank_icons": {"type": "boolean"},
-                    "show_rank_icon_left": {"type": "boolean"},
-                    "show_name_tag": {"type": "boolean"},
-                    "auto_rank_update": {"type": "boolean"},
-                    "rank_check_region": {"type": "string"},
-                    "grid_size": {"type": "integer", "minimum": 1},
-                    "orientation": {"type": "string", "enum": ["vertical", "horizontal"]},
-                }
-            },
-            "graphics_settings": {"type": "object"},
-            "app_install_path": {"type": "string"}
-        }
-    }
-    DEFAULT_CONFIG = {
-        "output_dir": None,
-        "title": "Valorant",
-        "menu_icon_path": "",
-        "ordered_accounts": [],
-        "riot_client_exe_path": None,
-        "last_graphics_settings_hash": None,
-        "ui_settings": {
-            "show_game_icons": True,
-            "show_rank_tips": True,
-            "tip_delay": 1.0,
-            "use_rank_icons": False,
-            "show_rank_icon_left": True,
-            "show_name_tag": True,
-            "auto_rank_update": True,
-            "rank_check_region": "eu",
-            "grid_size": 4,
-            "orientation": "vertical"
-        }
-    }
     def __init__(self, base_directory=None):
         logging.debug("GameSwitcher: Initializing")
         self.app_data_path = os.getenv('LOCALAPPDATA')
@@ -107,12 +61,11 @@ class GameSwitcher:
         
         # Persistent directory for user profiles and configuration
         self.user_data_dir = Path(self.app_data_path) / "iMA Switcher"
+        self.config_manager = ConfigManager(self.user_data_dir)
+        self.config = self.config_manager.get_config()
         
         self.profiles_dir = self.user_data_dir / "profiles"
-        self.config_path = self.user_data_dir / "config.json"
         
-        # Initialize config once at startup
-        self.config = self._load_config()
         self._account_game_configs_cache = {}
         self._icon_cache = {}
         self.switch_counter = 0
@@ -162,51 +115,12 @@ class GameSwitcher:
         try: return ctypes.windll.shell32.IsUserAnAdmin()
         except: return False
 
-    def _load_config(self, force_reload=False):
-        config = self.DEFAULT_CONFIG.copy()
-        if self.config_path.exists():
-            try:
-                with open(self.config_path, 'r', encoding='utf-8') as f:
-                    loaded_config = json.load(f)
-                    
-                    if validate and ValidationError:
-                        try:
-                            validate(instance=loaded_config, schema=self.CONFIG_SCHEMA)
-                        except ValidationError as e:
-                            logging.warning(f"Config validation error: {e.message}. Using default values for invalid keys.")
-                            pass
-
-                    # Recursively update config with loaded values
-                    def deep_update(target, source):
-                        for k, v in source.items():
-                            if isinstance(v, dict) and k in target and isinstance(target[k], dict):
-                                target[k] = deep_update(target[k], v)
-                            else:
-                                target[k] = v
-                        return target
-                    
-                    config = deep_update(config, loaded_config)
-
-                    # Remove deprecated keys if they somehow persist in the loaded file
-                    deprecated_keys = ["last_switched_account", "save_last_window_size", "last_window_size"]
-                    for key in deprecated_keys:
-                        if key in config:
-                            del config[key]
-
-            except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                logging.warning(f"config.json is corrupted or has encoding issues: {e}. Using defaults.")
-        return config
-
-    def _save_config(self):
-        with self.config_path.open('w', encoding='utf-8') as f:
-            json.dump(self.config, f, indent=4, ensure_ascii=False)
-
     def get_ima_config(self):
-        return self.config
+        return self.config_manager.get_config()
 
     def set_ima_config(self, settings):
-        self.config.update(settings)
-        self._save_config()
+        self.config_manager.update_config(settings)
+        self.config = self.config_manager.get_config()
 
     def initialize_riot_client_paths(self, riot_client_exe_path=None):
 
@@ -274,10 +188,7 @@ class GameSwitcher:
 
     def set_riot_client_paths(self, exe_path):
         self.initialize_riot_client_paths(exe_path)
-        if self.config is None:
-            self.config = self._load_config() 
-        self.config["riot_client_exe_path"] = exe_path
-        self._save_config()
+        self.set_ima_config({"riot_client_exe_path": exe_path})
 
     def _get_account_path(self, account_name): return self.profiles_dir / account_name
 
@@ -440,8 +351,7 @@ class GameSwitcher:
             self.fetch_and_update_rank_data(account_name, False, on_update_callback)
 
         # Update the last switched account in the config
-        self.config["last_switched_account"] = account_name
-        self._save_config()
+        self.set_ima_config({"last_switched_account": account_name})
 
     def switch_account(self, account_name, selected_game=None, on_update_callback=None):
         if not self.is_admin():
@@ -751,8 +661,9 @@ class GameSwitcher:
                     # Restore config.json, overwriting if it exists
                     backup_config_path = user_data_source / "config.json"
                     if backup_config_path.exists():
-                        shutil.copy2(backup_config_path, self.config_path)
-                        self.config = self._load_config(force_reload=True)
+                        with open(backup_config_path, 'r') as f:
+                            new_config_data = json.load(f)
+                        self.set_ima_config(new_config_data)
 
                     # Restore profiles by merging
                     backup_profiles_dir = user_data_source / "profiles"
@@ -941,12 +852,7 @@ class GameSwitcher:
         return self.config["graphics_settings"]
 
     def save_graphics_settings(self, settings):
-        # Extract ui_settings if present
-        ui_settings = settings.pop("ui_settings", None)
-        if ui_settings is not None:
-            self.config["ui_settings"] = ui_settings
-        self.config["graphics_settings"] = settings
-        self._save_config()
+        self.set_ima_config(settings)
 
     def _get_global_game_user_settings_from_file(self):
         ini_files = self._find_game_user_settings_files()
@@ -1106,8 +1012,7 @@ class GameSwitcher:
                     all_success = False
         
         if all_success:
-            self.config["last_graphics_settings_hash"] = current_hash
-            self._save_config()
+            self.set_ima_config({"last_graphics_settings_hash": current_hash})
 
         return all_success, None if all_success else "One or more files failed to update."
 

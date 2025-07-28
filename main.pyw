@@ -1,3 +1,9 @@
+# At the top of main.pyw
+__version__ = "1.0.8" # Use semantic versioning (Major.Minor.Patch)
+
+# At the top of main.pyw
+__version__ = "1.0.8" # Use semantic versioning (Major.Minor.Patch)
+
 import sys
 import os
 from pathlib import Path
@@ -7,6 +13,10 @@ import shutil
 import subprocess 
 import threading 
 import logging 
+import requests
+from packaging.version import parse as parse_version
+
+import tempfile
 
 if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
     sys.path.append(str(Path(sys._MEIPASS)))
@@ -120,10 +130,13 @@ def run_installer():
 
 
 class ModernValorantSwitcher(QMainWindow):
+    __version__ = "1.0.8"
     account_updated = pyqtSignal(str) # New signal
     status_message_requested = pyqtSignal(str)
     
     switch_account_finished = pyqtSignal(bool, str, str, QPixmap, str, str, str, bool)
+    update_available = pyqtSignal(str, str)
+    no_update_found = pyqtSignal(str)
     
     
     
@@ -159,6 +172,8 @@ class ModernValorantSwitcher(QMainWindow):
         self.status_message_requested.connect(self.status_label.setText)
         
         self.switch_account_finished.connect(self.on_switch_account_finished)
+        self.update_available.connect(self.on_update_available)
+        self.no_update_found.connect(self.on_no_update_found)
         
         
         
@@ -371,7 +386,7 @@ class ModernValorantSwitcher(QMainWindow):
         dialog.exec_()
 
     def open_options_dialog(self):
-        dialog = OptionsDialog(self.switcher, self)
+        dialog = OptionsDialog(self.switcher, self, main_window=self) 
         dialog.settings_applied.connect(self.load_accounts)
         dialog.exec_()
 
@@ -685,6 +700,127 @@ class ModernValorantSwitcher(QMainWindow):
             except Exception as e:
                 logging.error(f"Could not create notification: {e}")
         self.refresh_accounts() # Refresh after any switch attempt
+
+    def check_for_updates(self):
+        """Checks GitHub for the latest release."""
+        self.status_label.setText("Checking for updates...")
+        # Show status in the options dialog as well
+        options_dialog = self.findChild(OptionsDialog)
+        if options_dialog:
+            options_dialog.check_for_update_button.setText("Checking...")
+            options_dialog.check_for_update_button.setEnabled(False)
+
+        # Run the check in a background thread
+        threading.Thread(target=self._update_check_thread, daemon=True).start()
+
+    def _update_check_thread(self):
+        try:
+            # IMPORTANT: Replace with your actual GitHub username and repository name
+            repo_url = "https://api.github.com/repos/iMAboud/iMA-Switcher/releases/latest"
+            
+            response = requests.get(repo_url, timeout=10)
+            response.raise_for_status()
+            release_data = response.json()
+            
+            latest_version_str = release_data['tag_name'].lstrip('v') # Remove 'v' prefix if it exists
+            latest_version = parse_version(latest_version_str)
+            current_version = parse_version(__version__)
+
+            if latest_version > current_version:
+                # Found a new version, pass info back to the main thread
+                download_url = None
+                for asset in release_data.get('assets', []):
+                    if asset['name'].endswith('.exe'): # Find the installer/app executable
+                        download_url = asset['browser_download_url']
+                        break
+                if download_url:
+                    self.update_available.emit(latest_version_str, download_url)
+                else:
+                    self.no_update_found.emit("Update found, but no .exe asset available.")
+            else:
+                self.no_update_found.emit("You have the latest version.")
+
+        except Exception as e:
+            logging.error(f"Update check failed: {e}")
+            self.no_update_found.emit("Error checking for updates.")
+
+    def on_update_available(self, version, url):
+        self.status_label.setText(f"Update {version} available!")
+        options_dialog = self.findChild(OptionsDialog)
+        if options_dialog:
+            options_dialog.update_status_label.setText(f"New version available: {version}")
+            options_dialog.check_for_update_button.setText(f"Update to {version}")
+            options_dialog.check_for_update_button.setEnabled(True)
+            # Disconnect the old check function and connect the download function
+            options_dialog.check_for_update_button.clicked.disconnect()
+            options_dialog.check_for_update_button.clicked.connect(lambda: self.download_and_apply_update(url))
+
+    def on_no_update_found(self, message):
+        self.status_label.setText(message)
+        options_dialog = self.findChild(OptionsDialog)
+        if options_dialog:
+            options_dialog.update_status_label.setText(message)
+            options_dialog.check_for_update_button.setText("Check for Update")
+            options_dialog.check_for_update_button.setEnabled(True)
+
+    def download_and_apply_update(self, url):
+        options_dialog = self.findChild(OptionsDialog)
+        if options_dialog:
+            options_dialog.check_for_update_button.setText("Downloading...")
+            options_dialog.check_for_update_button.setEnabled(False)
+        
+        # Run download in a background thread
+        threading.Thread(target=self._download_thread, args=(url,), daemon=True).start()
+
+    def _download_thread(self, url):
+        try:
+            # Download the new exe to a temporary file
+            response = requests.get(url, stream=True, timeout=300)
+            response.raise_for_status()
+            
+            temp_dir = tempfile.gettempdir()
+            new_exe_path = Path(temp_dir) / "iMA-Switcher.new.exe"
+
+            with open(new_exe_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+
+            # Now, create and run the update script
+            self.run_update_script(new_exe_path)
+
+        except Exception as e:
+            logging.error(f"Download failed: {e}")
+            self.no_update_found.emit("Error downloading update.") # Reuse signal to reset button
+
+    def run_update_script(self, new_exe_path):
+        current_exe_path = Path(sys.executable)
+        install_dir = current_exe_path.parent
+        
+        # Create a batch script to perform the update
+        script_content = f"""
+ @echo off
+echo Waiting for iMA Switcher to close...
+timeout /t 2 /nobreak > NUL
+
+echo Replacing application files...
+move /Y "{new_exe_path}" "{current_exe_path}"
+
+echo Relaunching iMA Switcher...
+start "" "{current_exe_path}"
+
+echo Cleaning up...
+del "%~f0"
+"""
+        
+        script_path = Path(tempfile.gettempdir()) / "update_ima.bat"
+        with open(script_path, "w") as f:
+            f.write(script_content)
+            
+        # Launch the script in a new process, completely detached
+        subprocess.Popen([script_path], creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP, close_fds=True)
+        
+        # Close the current application
+        QApplication.instance().quit()
 
     
 
