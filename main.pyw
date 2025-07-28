@@ -126,7 +126,7 @@ def run_installer():
 
 
 class ModernValorantSwitcher(QMainWindow):
-    __version__ = "1.0.7"
+    __version__ = "1.0.8"
     account_updated = pyqtSignal(str) # New signal
     status_message_requested = pyqtSignal(str)
     
