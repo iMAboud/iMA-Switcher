@@ -1706,6 +1706,100 @@ class ConfirmDeleteDialog(PopupDialog):
         button_layout.addStretch()
         self.content_layout.addLayout(button_layout)
 
+class ConfirmDeleteDialog(PopupDialog):
+    def __init__(self, account_name, parent=None, title="Confirm Delete", message=None):
+        super().__init__(title, parent)
+        self.setFixedSize(350, 180)
+        
+        if message is None:
+            message = f"Delete '{account_name}'?"
+
+        message_label = QLabel(message)
+        message_label.setStyleSheet("color: #e0d6d1; font-size: 16px; font-weight: bold; text-align: center;")
+        message_label.setAlignment(Qt.AlignCenter)
+        self.content_layout.addWidget(message_label)
+        
+        button_layout = QHBoxLayout()
+        button_layout.setSpacing(15) # Increased spacing between buttons
+        button_layout.addStretch()
+
+        no_button = QPushButton("No")
+        no_button.setStyleSheet("""
+            QPushButton {
+                background-color: #4f4a4b; color: #e0d6d1; font-weight: bold; 
+                border-radius: 8px; padding: 10px 20px; border: 1px solid #4f4a4b; /* Increased padding */
+            }
+            QPushButton:hover { background-color: #5a5556; border: 1px solid #c89f68; }
+            QPushButton:pressed { background-color: #454142; }
+        """
+)
+        no_button.clicked.connect(self.reject)
+        button_layout.addWidget(no_button)
+
+        yes_button = QPushButton("Yes")
+        yes_button.setStyleSheet("""
+            QPushButton {
+                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 10px 20px;
+            }
+            QPushButton:hover {
+                background-color: #d9b68b; /* Brighter coffee color */
+            }
+        """
+)
+        yes_button.clicked.connect(self.accept)
+        button_layout.addWidget(yes_button)
+        
+        button_layout.addStretch()
+        self.content_layout.addLayout(button_layout)
+
+class BackupRestoreMenuDialog(PopupDialog):
+    def __init__(self, parent=None):
+        super().__init__("Backup & Restore", parent)
+        self.setFixedSize(300, 200)
+
+        self.content_layout.setSpacing(10) # Add spacing between buttons
+
+        backup_button = QPushButton("Backup")
+        backup_button.setIcon(QIcon(get_asset_path("Backup.png")))
+        backup_button.setIconSize(QSize(24, 24))
+        backup_button.setStyleSheet("""
+            QPushButton {
+                background-color: #c89f68; color: #2c2a2b; font-weight: bold; 
+                border-radius: 8px; padding: 10px 20px; border: 1px solid #c89f68;
+            }
+            QPushButton:hover { background-color: #d9b68b; border: 1px solid #d9b68b; }
+        """
+)
+        backup_button.clicked.connect(lambda: (self.accept(), self.parent().settings_handler.backup_profiles()))
+        self.content_layout.addWidget(backup_button)
+
+        restore_button = QPushButton("Restore")
+        restore_button.setIcon(QIcon(get_asset_path("Restore.png")))
+        restore_button.setIconSize(QSize(24, 24))
+        restore_button.setStyleSheet("""
+            QPushButton {
+                background-color: #c89f68; color: #2c2a2b; font-weight: bold; 
+                border-radius: 8px; padding: 10px 20px; border: 1px solid #c89f68;
+            }
+            QPushButton:hover { background-color: #d9b68b; border: 1px solid #d9b68b; }
+        """
+)
+        restore_button.clicked.connect(lambda: (self.accept(), self.parent().settings_handler.restore_profiles()))
+        self.content_layout.addWidget(restore_button)
+
+        close_button = QPushButton("Close")
+        close_button.setStyleSheet("""
+            QPushButton {
+                background-color: #4f4a4b; color: #e0d6d1; font-weight: bold; 
+                border-radius: 8px; padding: 10px 20px; border: 1px solid #4f4a4b;
+            }
+            QPushButton:hover { background-color: #5a5556; border: 1px solid #c89f68; }
+        """
+)
+        close_button.clicked.connect(self.reject)
+        self.content_layout.addWidget(close_button)
+
+
 class AccountWidget(QWidget):
     selected = pyqtSignal(str)
     double_clicked = pyqtSignal(str)

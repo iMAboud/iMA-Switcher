@@ -625,7 +625,7 @@ class GameSwitcher:
                 user_data_backup_path = temp_dir_path / "UserData"
                 user_data_backup_path.mkdir()
                 shutil.copytree(self.profiles_dir, user_data_backup_path / "profiles")
-                shutil.copy2(self.config_path, user_data_backup_path / "config.json")
+                shutil.copy2(self.config_manager.config_path, user_data_backup_path / "config.json")
 
                 # 2. Copy Riot Games and VALORANT data to a 'RiotData' folder in temp_dir
                 riot_data_backup_path = temp_dir_path / "RiotData"

@@ -1,9 +1,3 @@
-# At the top of main.pyw
-__version__ = "1.0.8" # Use semantic versioning (Major.Minor.Patch)
-
-# At the top of main.pyw
-__version__ = "1.0.8" # Use semantic versioning (Major.Minor.Patch)
-
 import sys
 import os
 from pathlib import Path
@@ -49,7 +43,8 @@ from ui_components import (
     InstallerDialog, 
     GameSelectionDialog,
     RiotClientNotFoundDialog,
-    OptionsDialog
+    OptionsDialog,
+    BackupRestoreMenuDialog
 )
 from game_switcher import CustomUpdateEvent
 from actions_settings import SettingsActions
@@ -131,7 +126,7 @@ def run_installer():
 
 
 class ModernValorantSwitcher(QMainWindow):
-    __version__ = "1.0.8"
+    __version__ = "1.0.9"
     account_updated = pyqtSignal(str) # New signal
     status_message_requested = pyqtSignal(str)
     
@@ -394,11 +389,10 @@ class ModernValorantSwitcher(QMainWindow):
     def get_settings_actions(self):
         return {
             "Add Account": (self.settings_handler.add_account, "Add.png"),
-            "Save Current Account": (self.settings_handler.save_current_account, "Save.png"),
-            "Backup": (self.settings_handler.backup_profiles, "Backup.png"),
-            "Restore": (self.settings_handler.restore_profiles, "Restore.png"),
-            "Open Profiles Folder": (self.settings_handler.open_profiles_folder, "Open.png"),
-            "Export to iMA Menu": (self.settings_handler.export_ima_menu, "ima.png"),
+            "Save Account": (self.settings_handler.save_current_account, "Save.png"),
+            "Backup & Restore": (lambda: BackupRestoreMenuDialog(self).exec_(), "Backup.png"),
+            "Open Folder": (self.settings_handler.open_profiles_folder, "Open.png"),
+            "iMA Menu": (self.settings_handler.export_ima_menu, "ima.png"),
             "Options": (self.settings_handler.open_options_dialog, "Options.png"),
         }
 
