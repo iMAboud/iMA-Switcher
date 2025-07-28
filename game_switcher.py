@@ -16,6 +16,18 @@ import winreg
 from pathlib import Path
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import QEvent
+import logging
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+try:
+    from jsonschema import validate
+    from jsonschema.exceptions import ValidationError
+except ImportError:
+    validate = None
+    ValidationError = None
+    logging.warning("jsonschema not installed. Configuration validation will be skipped. Please install it with 'pip install jsonschema'")
+
 
 class CustomUpdateEvent(QEvent):
     EVENT_TYPE = QEvent.Type(QEvent.registerEventType())
@@ -34,17 +46,40 @@ except ImportError:
     Image = None
     logging.warning("Pillow not installed. Image conversion for icons will not work. Please install it with 'pip install Pillow'")
 
-import logging
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
 class GameSwitcher:
+    CONFIG_SCHEMA = {
+        "type": "object",
+        "properties": {
+            "output_dir": {"type": ["string", "null"]},
+            "title": {"type": "string"},
+            "menu_icon_path": {"type": "string"},
+            "ordered_accounts": {"type": "array", "items": {"type": "string"}},
+            "riot_client_exe_path": {"type": ["string", "null"]},
+            "last_graphics_settings_hash": {"type": ["string", "null"]},
+            "ui_settings": {
+                "type": "object",
+                "properties": {
+                    "show_game_icons": {"type": "boolean"},
+                    "show_rank_tips": {"type": "boolean"},
+                    "tip_delay": {"type": "number", "minimum": 0},
+                    "use_rank_icons": {"type": "boolean"},
+                    "show_rank_icon_left": {"type": "boolean"},
+                    "show_name_tag": {"type": "boolean"},
+                    "auto_rank_update": {"type": "boolean"},
+                    "rank_check_region": {"type": "string"},
+                    "grid_size": {"type": "integer", "minimum": 1},
+                    "orientation": {"type": "string", "enum": ["vertical", "horizontal"]},
+                }
+            },
+            "graphics_settings": {"type": "object"},
+            "app_install_path": {"type": "string"}
+        }
+    }
     DEFAULT_CONFIG = {
         "output_dir": None,
         "title": "Valorant",
         "menu_icon_path": "",
         "ordered_accounts": [],
-        "last_switched_account": None,
         "riot_client_exe_path": None,
         "last_graphics_settings_hash": None,
         "ui_settings": {
@@ -134,6 +169,13 @@ class GameSwitcher:
                 with open(self.config_path, 'r', encoding='utf-8') as f:
                     loaded_config = json.load(f)
                     
+                    if validate and ValidationError:
+                        try:
+                            validate(instance=loaded_config, schema=self.CONFIG_SCHEMA)
+                        except ValidationError as e:
+                            logging.warning(f"Config validation error: {e.message}. Using default values for invalid keys.")
+                            pass
+
                     # Recursively update config with loaded values
                     def deep_update(target, source):
                         for k, v in source.items():
@@ -151,8 +193,8 @@ class GameSwitcher:
                         if key in config:
                             del config[key]
 
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                logging.warning("config.json is corrupted or has encoding issues. Using defaults.")
+            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                logging.warning(f"config.json is corrupted or has encoding issues: {e}. Using defaults.")
         return config
 
     def _save_config(self):
@@ -178,35 +220,6 @@ class GameSwitcher:
         self.riot_games_config["ExeLocationDefault"] = str(exe_path) if exe_path and Path(exe_path).exists() else ""
         self.riot_client_data_path = Path(self.app_data_path) / "Riot Games" / "Riot Client"
         self.riot_games_config.update(self._load_riot_games_config_defaults())
-
-    def _find_riot_client_from_registry(self):
-        try:
-            # Check the uninstall information
-            uninstall_key_path = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Riot Game valorant.live"
-            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, uninstall_key_path) as key:
-                install_location, _ = winreg.QueryValueEx(key, "InstallLocation")
-                if install_location and os.path.isdir(install_location):
-                    exe_path = os.path.join(install_location, "RiotClientServices.exe")
-                    if os.path.exists(exe_path):
-                        return exe_path
-        except FileNotFoundError:
-            pass  # Key not found, continue
-        except Exception as e:
-            logging.error(f"Error reading registry for uninstall info: {e}")
-
-        try:
-            # Check the Riot Games key
-            riot_games_key_path = r"SOFTWARE\Riot Games\Riot Client"
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, riot_games_key_path) as key:
-                exe_path, _ = winreg.QueryValueEx(key, "ExecutablePath")
-                if exe_path and os.path.exists(exe_path):
-                    return exe_path
-        except FileNotFoundError:
-            pass  # Key not found, continue
-        except Exception as e:
-            logging.error(f"Error reading registry for Riot Games info: {e}")
-
-        return None
 
     def _find_riot_client_from_registry(self):
         try:
@@ -447,15 +460,45 @@ class GameSwitcher:
 
         self._terminate_processes()
 
-        for item_name in self.riot_games_config["LoginData"].keys():
-            riot_item_path = self.riot_client_data_path / item_name
-            profile_item_path = account_path / item_name
-            self._remove_junction_or_dir(riot_item_path)
-            if profile_item_path.exists():
-                try:
+        backup_paths = {}
+        created_junctions = []
+
+        try:
+            # Backup phase
+            for item_name in self.riot_games_config["LoginData"].keys():
+                riot_item_path = self.riot_client_data_path / item_name
+                riot_item_backup_path = self.riot_client_data_path / f"{item_name}.bak"
+                
+                if riot_item_backup_path.exists():
+                    self._remove_junction_or_dir(riot_item_backup_path)
+
+                if riot_item_path.exists():
+                    riot_item_path.rename(riot_item_backup_path)
+                    backup_paths[item_name] = riot_item_backup_path
+
+            # Attempt phase
+            for item_name in self.riot_games_config["LoginData"].keys():
+                riot_item_path = self.riot_client_data_path / item_name
+                profile_item_path = account_path / item_name
+                if profile_item_path.exists():
                     self._create_junction(str(profile_item_path), str(riot_item_path))
-                except Exception as e:
-                    return False, f"Failed to create junction for '{item_name}': {e}\nEnsure you are running as Administrator.", None
+                    created_junctions.append(riot_item_path)
+
+            # Commit phase: If successful, delete backups
+            for bak_path in backup_paths.values():
+                self._remove_junction_or_dir(bak_path)
+
+        except Exception as e:
+            # Rollback phase
+            for junction_path in created_junctions:
+                self._remove_junction_or_dir(junction_path)
+            
+            for bak_path in backup_paths.values():
+                original_path = Path(str(bak_path).replace(".bak", ""))
+                if bak_path.exists():
+                    bak_path.rename(original_path)
+            
+            return False, f"Failed to switch account: {e}\nChanges have been rolled back.", None
 
         try:
             launch_args = self.GAMES[game]["launch_args"].split()
@@ -622,9 +665,9 @@ class GameSwitcher:
             if os.path.exists(pythonw_path):
                 target_path = pythonw_path
             main_script_path = os.path.abspath(os.path.join(self.base_dir, "main.pyw"))
-            arguments = f'"{main_script_path}" --switch "{account_name}"'
+            arguments = f'"""{main_script_path}""" --switch """{account_name}"""'
         else:
-            arguments = f'--switch "{account_name}"'
+            arguments = f'--switch """{account_name}"""'
 
         _game, _rank, _in_game_name, _in_game_tag, _current_rr, _last_game_rr = self.get_account_game(account_name)
         description = f"Launch {_game.capitalize()} with {account_name} account"
@@ -830,8 +873,8 @@ class GameSwitcher:
                 rank_index = rank_order.index(rank) if rank in rank_order else 0
                 tip_arg = f" tip=['{rank}', tip.info, {tip_delay}]"
             
-            cmd_executable = f'"{main_app_path}"'
-            cmd_args = f'--switch "{account_name}"'
+            cmd_executable = f'"""{main_app_path}"""'
+            cmd_args = f'--switch """{account_name}"""'
             item_line = f"    item(title='{account_name}'{tip_arg} cmd='{cmd_executable}' args='{cmd_args}'{item_icon_arg})"
             script_content.append(item_line)
             

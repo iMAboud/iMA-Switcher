@@ -654,12 +654,25 @@ class ModernValorantSwitcher(QMainWindow):
 
         elif not success:
             if "Riot Client not found" in message:
-                dialog = RiotClientNotFoundDialog(self)
-                if dialog.exec_() == QDialog.Accepted:
-                    new_path = dialog.get_path()
-                    if new_path and os.path.exists(new_path):
-                        self.switcher.set_riot_client_paths(new_path)
-                        self.switch_to_selected_account() # Retry switching
+                # Attempt automatic recovery first
+                self.status_label.setText("Riot Client not found. Attempting automatic recovery...")
+                QApplication.processEvents()
+                new_path = self.switcher._find_riot_client_path()
+                
+                if new_path and os.path.exists(new_path):
+                    self.status_label.setText(f"Found Riot Client at: {new_path}. Retrying switch...")
+                    QApplication.processEvents()
+                    self.switcher.set_riot_client_paths(new_path)
+                    self.switch_to_selected_account()  # Retry the switch
+                else:
+                    # If automatic recovery fails, show the dialog
+                    self.status_label.setText("Automatic recovery failed. Please locate Riot Client manually.")
+                    dialog = RiotClientNotFoundDialog(self)
+                    if dialog.exec_() == QDialog.Accepted:
+                        manual_path = dialog.get_path()
+                        if manual_path and os.path.exists(manual_path):
+                            self.switcher.set_riot_client_paths(manual_path)
+                            self.switch_to_selected_account() # Retry switching
             else:
                 self.status_label.setText(f"Failed to switch to '{name}'.")
                 QMessageBox.critical(self, "Switch Failed", message)
