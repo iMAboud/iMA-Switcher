@@ -1,6 +1,7 @@
 from PyQt5.QtWidgets import QMessageBox, QDialog
 from ui_components import InputDialog, ConfirmDeleteDialog, IconPickerDialog
 import logging
+from pathlib import Path
 
 class ContextActions:
     def __init__(self, parent):
@@ -79,7 +80,7 @@ class ContextActions:
         if dialog.exec_() == QDialog.Accepted:
             new_icon_path = dialog.get_selected_icon_path()
             if new_icon_path:
-                if self.switcher.set_account_icon(name, new_icon_path):
+                if self.switcher.set_account_icon(name, Path(new_icon_path)):
                     self.parent.status_label.setText(f"Icon updated for '{name}'.")
                     self.parent.on_account_updated(name)
                 else:

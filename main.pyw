@@ -1,5 +1,6 @@
 import sys
 import os
+from pathlib import Path
 import math
 import ctypes
 import shutil 
@@ -8,7 +9,7 @@ import threading
 import logging 
 
 if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
-    sys.path.append(sys._MEIPASS)
+    sys.path.append(str(Path(sys._MEIPASS)))
 
 from PyQt5.QtWidgets import (
     QApplication,
@@ -60,37 +61,26 @@ class IconLoader(QRunnable):
         icon = self.switcher.get_qicon_from_path(self.icon_path)
         self.signals.finished.emit(self.account_name, icon)
 
-def create_shortcut(target_path, shortcut_path):
-    try:
-        import win32com.client
-        shell = win32com.client.Dispatch("WScript.Shell")
-        shortcut = shell.CreateShortCut(shortcut_path)
-        shortcut.Targetpath = target_path
-        shortcut.WorkingDirectory = os.path.dirname(target_path)
-        shortcut.IconLocation = target_path 
-        shortcut.save()
-        return True
-    except Exception as e:
-        logging.error(f"Error creating shortcut {shortcut_path}: {e}")
-        return False
+
 
 def run_installer():
     app = QApplication(sys.argv)
     dialog = InstallerDialog()
     if dialog.exec_() == QDialog.Accepted:
         install_path = dialog.get_install_path()
-        current_exe = sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(sys.argv[0])
+        current_exe = Path(sys.executable) if getattr(sys, 'frozen', False) else Path(sys.argv[0]).resolve()
 
         def install_thread():
             try:
-                os.makedirs(install_path, exist_ok=True)
+                install_path_p = Path(install_path)
+                install_path_p.mkdir(exist_ok=True)
 
-                destination_exe_path = os.path.join(install_path, "iMA Switcher.exe")
+                destination_exe_path = install_path_p / "iMA Switcher.exe"
                 shutil.copy2(current_exe, destination_exe_path)
 
-                source_assets_path = os.path.join(sys._MEIPASS if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__)), "Assets")
-                destination_assets_path = os.path.join(install_path, "Assets")
-                if os.path.exists(source_assets_path):
+                source_assets_path = Path(sys._MEIPASS if getattr(sys, 'frozen', False) else Path(__file__).parent) / "Assets"
+                destination_assets_path = install_path_p / "Assets"
+                if source_assets_path.exists():
                     shutil.copytree(source_assets_path, destination_assets_path, dirs_exist_ok=True)
 
                 riot_games_exe_path = dialog.get_riot_games_path()
@@ -101,14 +91,14 @@ def run_installer():
                 switcher_instance.set_ima_config({"app_install_path": install_path})
 
                 if dialog.should_add_desktop_shortcut():
-                    desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
-                    shortcut_path = os.path.join(desktop_path, "iMA Switcher.lnk")
-                    create_shortcut(destination_exe_path, shortcut_path)
+                    desktop_path = Path.home() / "Desktop"
+                    shortcut_path = desktop_path / "iMA Switcher.lnk"
+                    switcher_instance._create_shortcut(str(shortcut_path), str(destination_exe_path))
 
                 if dialog.should_add_start_menu_shortcut():
-                    start_menu_path = os.path.join(os.getenv("APPDATA"), "Microsoft", "Windows", "Start Menu", "Programs")
-                    shortcut_path = os.path.join(start_menu_path, "iMA Switcher.lnk")
-                    create_shortcut(destination_exe_path, shortcut_path)
+                    start_menu_path = Path(os.getenv("APPDATA")) / "Microsoft" / "Windows" / "Start Menu" / "Programs"
+                    shortcut_path = start_menu_path / "iMA Switcher.lnk"
+                    switcher_instance._create_shortcut(str(shortcut_path), str(destination_exe_path))
 
                 subprocess.Popen([destination_exe_path])
                 QApplication.instance().quit()
@@ -185,7 +175,7 @@ class ModernValorantSwitcher(QMainWindow):
 
     def init_ui(self):
         self.setWindowTitle("iMA Switcher")
-        self.setWindowIcon(self.switcher.get_qicon_from_path(os.path.join(self.switcher.base_dir, "logo.png")))
+        self.setWindowIcon(self.switcher.get_qicon_from_path(str(self.switcher.base_dir / "logo.png")))
         self.setStyleSheet(
             """#main_widget { background-color: #2c2a2b; border-radius: 15px; border: 1px solid #4f4a4b; } 
                QScrollArea { border: none; background-color: transparent; } 
@@ -524,13 +514,13 @@ class ModernValorantSwitcher(QMainWindow):
         actions["Create Desktop Shortcut"] = (self.context_handler.create_shortcut, "Create.png")
         
         set_rank_menu = QMenu("Set Rank", self)
-        set_rank_menu.setIcon(self.switcher.get_qicon_from_path(os.path.join(os.path.dirname(__file__), "Assets", "radiant.png"))) # Set Radiant icon for the main "Set Rank" menu
+        set_rank_menu.setIcon(self.switcher.get_qicon_from_path(str(Path(__file__).parent / "Assets" / "radiant.png"))) # Set Radiant icon for the main "Set Rank" menu
 
         # Add Unranked as a direct option
-        unranked_icon_path = os.path.join(os.path.dirname(__file__), "Assets", "unranked.png")
+        unranked_icon_path = Path(__file__).parent / "Assets" / "unranked.png"
         unranked_action = QAction("Unranked", self)
-        if os.path.exists(unranked_icon_path):
-            unranked_action.setIcon(self.switcher.get_qicon_from_path(unranked_icon_path))
+        if unranked_icon_path.exists():
+            unranked_action.setIcon(self.switcher.get_qicon_from_path(str(unranked_icon_path)))
         unranked_action.triggered.connect(lambda checked, r="Unranked": self.context_handler.set_rank(r))
         set_rank_menu.addAction(unranked_action)
 
@@ -538,26 +528,26 @@ class ModernValorantSwitcher(QMainWindow):
         for rank_name in ranks_with_tiers:
             rank_tier_menu = QMenu(rank_name, self)
             # Use the first tier icon for the submenu
-            first_tier_icon_path = os.path.join(os.path.dirname(__file__), "Assets", f"{rank_name.lower()}_1.png")
-            if os.path.exists(first_tier_icon_path):
-                rank_tier_menu.setIcon(self.switcher.get_qicon_from_path(first_tier_icon_path))
+            first_tier_icon_path = Path(__file__).parent / "Assets" / f"{rank_name.lower()}_1.png"
+            if first_tier_icon_path.exists():
+                rank_tier_menu.setIcon(self.switcher.get_qicon_from_path(str(first_tier_icon_path)))
             
             for i in range(1, 4): # Tiers 1, 2, 3
                 full_rank_name = f"{rank_name} {i}"
-                rank_icon_path = os.path.join(os.path.dirname(__file__), "Assets", f"{rank_name.lower()}_{i}.png")
+                rank_icon_path = Path(__file__).parent / "Assets" / f"{rank_name.lower()}_{i}.png"
                 
                 action = QAction(full_rank_name, self)
-                if os.path.exists(rank_icon_path):
-                    action.setIcon(self.switcher.get_qicon_from_path(rank_icon_path))
+                if rank_icon_path.exists():
+                    action.setIcon(self.switcher.get_qicon_from_path(str(rank_icon_path)))
                 action.triggered.connect(lambda checked, r=full_rank_name: self.context_handler.set_rank(r))
                 rank_tier_menu.addAction(action)
             set_rank_menu.addMenu(rank_tier_menu)
 
         # Add Radiant as a direct option
-        radiant_icon_path = os.path.join(os.path.dirname(__file__), "Assets", "radiant.png")
+        radiant_icon_path = Path(__file__).parent / "Assets" / "radiant.png"
         radiant_action = QAction("Radiant", self)
-        if os.path.exists(radiant_icon_path):
-            radiant_action.setIcon(self.switcher.get_qicon_from_path(radiant_icon_path))
+        if radiant_icon_path.exists():
+            radiant_action.setIcon(self.switcher.get_qicon_from_path(str(radiant_icon_path)))
         radiant_action.triggered.connect(lambda checked, r="Radiant": self.context_handler.set_rank(r))
         set_rank_menu.addAction(radiant_action)
 
@@ -566,19 +556,19 @@ class ModernValorantSwitcher(QMainWindow):
         menu.addMenu(set_rank_menu)
         
         change_game_menu = QMenu("Change Game", self)
-        change_game_menu.setIcon(self.switcher.get_qicon_from_path(os.path.join(os.path.dirname(__file__), "Assets", "Riot.png")))
-        valorant_icon_path = os.path.join(os.path.dirname(__file__), "Assets", "valorant.png")
-        lol_icon_path = os.path.join(os.path.dirname(__file__), "Assets", "lol.png")
+        change_game_menu.setIcon(self.switcher.get_qicon_from_path(str(Path(__file__).parent / "Assets" / "Riot.png")))
+        valorant_icon_path = Path(__file__).parent / "Assets" / "valorant.png"
+        lol_icon_path = Path(__file__).parent / "Assets" / "lol.png"
         
-        if os.path.exists(valorant_icon_path):
-            change_game_menu.addAction(QAction(self.switcher.get_qicon_from_path(valorant_icon_path), "Valorant", self, triggered=lambda: self.context_handler.change_game('valorant')))
+        if valorant_icon_path.exists():
+            change_game_menu.addAction(QAction(self.switcher.get_qicon_from_path(str(valorant_icon_path)), "Valorant", self, triggered=lambda: self.context_handler.change_game('valorant')))
 
-        if os.path.exists(lol_icon_path):
-            change_game_menu.addAction(QAction(self.switcher.get_qicon_from_path(lol_icon_path), "League of Legends", self, triggered=lambda: self.context_handler.change_game('lol')))
+        if lol_icon_path.exists():
+            change_game_menu.addAction(QAction(self.switcher.get_qicon_from_path(str(lol_icon_path)), "League of Legends", self, triggered=lambda: self.context_handler.change_game('lol')))
 
-        riot_icon_path = os.path.join(os.path.dirname(__file__), "Assets", "Riot.png")
-        if os.path.exists(riot_icon_path):
-            change_game_menu.addAction(QAction(self.switcher.get_qicon_from_path(riot_icon_path), "Both", self, triggered=lambda: self.context_handler.change_game('both')))
+        riot_icon_path = Path(__file__).parent / "Assets" / "Riot.png"
+        if riot_icon_path.exists():
+            change_game_menu.addAction(QAction(self.switcher.get_qicon_from_path(str(riot_icon_path)), "Both", self, triggered=lambda: self.context_handler.change_game('both')))
 
         menu.addMenu(change_game_menu)
         menu.addSeparator()
@@ -587,9 +577,9 @@ class ModernValorantSwitcher(QMainWindow):
         for text, data in actions.items():
             if text:
                 func, icon_name = data
-                icon_path = os.path.join(os.path.dirname(__file__), "Assets", icon_name)
-                if os.path.exists(icon_path):
-                    menu.addAction(QAction(self.switcher.get_qicon_from_path(icon_path), text, self, triggered=func))
+                icon_path = Path(__file__).parent / "Assets" / icon_name
+                if icon_path.exists():
+                    menu.addAction(QAction(self.switcher.get_qicon_from_path(str(icon_path)), text, self, triggered=func))
                 else:
                     menu.addAction(QAction(text, self, triggered=func))
         menu.exec_(pos)

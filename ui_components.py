@@ -1,5 +1,6 @@
 import logging
 import os
+from pathlib import Path
 from PyQt5.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -45,21 +46,21 @@ from PyQt5.QtCore import (
 
 
 def get_asset_path(filename):
-    return os.path.join(os.path.dirname(__file__), "Assets", filename)
+    return str(Path(__file__).parent / "Assets" / filename)
 
 def get_icon_path(filename):
-    return os.path.join(os.path.dirname(__file__), "icons", filename)
+    return str(Path(__file__).parent / "icons" / filename)
 
 def get_icon_paths_from_folder(folder_path):
     """
     Retrieves all image file paths from the specified folder.
     """
     icon_paths = []
-    if os.path.exists(folder_path) and os.path.isdir(folder_path):
+    if Path(folder_path).is_dir():
         for filename in os.listdir(folder_path):
-            file_path = os.path.join(folder_path, filename)
-            if os.path.isfile(file_path) and filename.lower().endswith(('.png', '.jpg', '.jpeg', '.ico')):
-                icon_paths.append(file_path)
+            file_path = Path(folder_path) / filename
+            if file_path.is_file() and file_path.suffix.lower() in ('.png', '.jpg', '.jpeg', '.ico'):
+                icon_paths.append(str(file_path))
     return icon_paths
 
 
@@ -102,8 +103,8 @@ class LaunchNotificationWidget(QWidget):
 
         # Rank icon next to name
         if rank and not use_rank_icons: # Only show if not already using rank icon as main icon
-            rank_icon_path = get_asset_path(f"{rank.lower().replace(" ", "_")}.png")
-            if os.path.exists(rank_icon_path):
+            rank_icon_path = Path(get_asset_path(f"{rank.lower().replace(" ", "_")}.png"))
+            if rank_icon_path.exists():
                 rank_pixmap = self.switcher_instance.get_qicon_from_path(rank_icon_path).pixmap(24, 24)
                 rank_label = QLabel(self)
                 rank_label.setPixmap(rank_pixmap)
@@ -575,22 +576,22 @@ class SaveAccountDialog(PopupDialog):
             }
         """)
         
-        valorant_icon_path = get_asset_path("valorant.png")
-        lol_icon_path = get_asset_path("lol.png")
+        valorant_icon_path = Path(get_asset_path("valorant.png"))
+        lol_icon_path = Path(get_asset_path("lol.png"))
 
-        if os.path.exists(valorant_icon_path):
-            self.game_combo.addItem(self.switcher_instance.get_qicon_from_path(valorant_icon_path), "Valorant", "valorant")
+        if valorant_icon_path.exists():
+            self.game_combo.addItem(self.switcher_instance.get_qicon_from_path(str(valorant_icon_path)), "Valorant", "valorant")
         else:
             self.game_combo.addItem("Valorant", "valorant")
 
-        if os.path.exists(lol_icon_path):
-            self.game_combo.addItem(self.switcher_instance.get_qicon_from_path(lol_icon_path), "League of Legends", "lol")
+        if lol_icon_path.exists():
+            self.game_combo.addItem(self.switcher_instance.get_qicon_from_path(str(lol_icon_path)), "League of Legends", "lol")
         else:
             self.game_combo.addItem("League of Legends", "lol")
 
-        riot_icon_path = get_asset_path("Riot.png")
-        if os.path.exists(riot_icon_path):
-            self.game_combo.addItem(self.switcher_instance.get_qicon_from_path(riot_icon_path), "Both", "both")
+        riot_icon_path = Path(get_asset_path("Riot.png"))
+        if riot_icon_path.exists():
+            self.game_combo.addItem(self.switcher_instance.get_qicon_from_path(str(riot_icon_path)), "Both", "both")
         else:
             self.game_combo.addItem("Both", "both")
             
@@ -637,11 +638,11 @@ class SettingsDialog(PopupDialog):
         self.content_layout.setSpacing(10)
         button_style = """QPushButton { background-color: #c89f68; color: #2c2a2b; font-size: 15px; font-weight: bold; border: none; border-radius: 12px; padding: 8px 15px; text-align: left; } QPushButton:hover { background-color: #d9b68b; } QPushButton::icon { width: 24px; height: 24px; } """
         for text, (action_func, icon_name) in actions.items():
-            icon_path = get_asset_path(icon_name)
+            icon_path = Path(get_asset_path(icon_name))
             button = QPushButton(text)
             button.setStyleSheet(button_style) # Apply style directly to each button
-            if os.path.exists(icon_path):
-                button.setIcon(QIcon(icon_path))
+            if icon_path.exists():
+                button.setIcon(QIcon(str(icon_path)))
             button.clicked.connect(lambda _, func=action_func: (self.close(), func()))
             self.content_layout.addWidget(button)
 
@@ -1396,7 +1397,7 @@ class GameSelectionDialog(PopupDialog):
 
         icon_path = get_asset_path(icon_filename)
         logging.debug(f"_create_game_button - icon_path: {icon_path}, exists: {os.path.exists(icon_path)}")
-        if self.switcher_instance and os.path.exists(icon_path):
+        if self.switcher_instance and Path(icon_path).exists():
             icon_label = QLabel()
             pixmap = self.switcher_instance.get_qicon_from_path(icon_path).pixmap(80, 80).scaled(80, 80, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             icon_label.setPixmap(pixmap)
@@ -1495,8 +1496,8 @@ class IconPickerDialog(PopupDialog):
         QTimer.singleShot(50, self.populate_icon_grid)
 
     def populate_icon_grid(self):
-        icons_path = os.path.join(self.switcher.base_dir, "icons")
-        icon_files = get_icon_paths_from_folder(icons_path)
+        icons_path = Path(self.switcher.base_dir) / "icons"
+        icon_files = get_icon_paths_from_folder(str(icons_path))
         
         for i, icon_path in enumerate(icon_files):
             row, col = i // 4, i % 4
@@ -1533,7 +1534,7 @@ class IconPickerDialog(PopupDialog):
 
     def update_preview(self):
         size = 120
-        if self.selected_icon_path and os.path.exists(self.selected_icon_path):
+        if self.selected_icon_path and Path(self.selected_icon_path).exists():
             icon = self.switcher.get_qicon_from_path(self.selected_icon_path)
             pixmap = icon.pixmap(icon.actualSize(QSize(256, 256)))
             scaled_pixmap = pixmap.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
@@ -1579,7 +1580,7 @@ class IconPickerDialog(PopupDialog):
     def select_icon_from_device(self):
         path, _ = QFileDialog.getOpenFileName(self, "Select Icon", "", "Images (*.png *.jpg *.jpeg *.ico)")
         if path:
-            self.set_selected_icon(path)
+            self.set_selected_icon(Path(path))
 
     def remove_icon(self):
         self.selected_icon_path = None
@@ -1620,7 +1621,7 @@ class RiotClientNotFoundDialog(PopupDialog):
     def browse(self):
         path, _ = QFileDialog.getOpenFileName(self, "Select RiotClientServices.exe", "", "Executable Files (*.exe)")
         if path:
-            self.path_edit.setText(path)
+            self.path_edit.setText(str(Path(path)))
 
     def get_path(self):
         return self.path_edit.text()
@@ -1759,14 +1760,14 @@ class AccountWidget(QWidget):
             riot_icon_path = get_asset_path("Riot.png")
 
             self.game_icon_label.setVisible(False) # Hide by default, will be set by load_accounts
-            if self.game == 'valorant' and os.path.exists(valorant_icon_path):
-                pixmap = QPixmap(valorant_icon_path).scaled(game_icon_size, game_icon_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            if self.game == 'valorant' and Path(valorant_icon_path).exists():
+                pixmap = QPixmap(str(valorant_icon_path)).scaled(game_icon_size, game_icon_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 self.game_icon_label.setPixmap(pixmap)
-            elif self.game == 'lol' and os.path.exists(lol_icon_path):
-                pixmap = QPixmap(lol_icon_path).scaled(game_icon_size, game_icon_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            elif self.game == 'lol' and Path(lol_icon_path).exists():
+                pixmap = QPixmap(str(lol_icon_path)).scaled(game_icon_size, game_icon_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 self.game_icon_label.setPixmap(pixmap)
-            elif self.game == 'both' and os.path.exists(riot_icon_path):
-                pixmap = QPixmap(riot_icon_path).scaled(game_icon_size, game_icon_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            elif self.game == 'both' and Path(riot_icon_path).exists():
+                pixmap = QPixmap(str(riot_icon_path)).scaled(game_icon_size, game_icon_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 self.game_icon_label.setPixmap(pixmap)
 
             self.rank_icon_label = QLabel(self)
@@ -1931,9 +1932,9 @@ class AccountWidget(QWidget):
         # Update rank icon based on new rank data
         game_icon_size = 24 # Assuming this is consistent
         if self.rank:
-            rank_icon_path = get_asset_path(f"{self.rank.lower().replace(" ", "_")}.png")
-            if os.path.exists(rank_icon_path):
-                pixmap = QPixmap(rank_icon_path).scaled(game_icon_size, game_icon_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            rank_icon_path = Path(get_asset_path(f"{self.rank.lower().replace(" ", "_")}.png"))
+            if rank_icon_path.exists():
+                pixmap = QPixmap(str(rank_icon_path)).scaled(game_icon_size, game_icon_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 self.rank_icon_label.setPixmap(pixmap)
             else:
                 self.rank_icon_label.clear() # Clear if path doesn't exist
@@ -1970,8 +1971,8 @@ class InstallerDialog(PopupDialog):
         
         path_layout = QHBoxLayout()
         self.path_edit = QLineEdit()
-        default_path = os.path.join(os.getenv('LOCALAPPDATA'), "iMA Switcher")
-        self.path_edit.setText(default_path)
+        default_path = Path(os.getenv('LOCALAPPDATA')) / "iMA Switcher"
+        self.path_edit.setText(str(default_path))
         self.path_edit.setStyleSheet("background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 8px; color: #e0d6d1;")
         path_layout.addWidget(self.path_edit)
         

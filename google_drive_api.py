@@ -6,22 +6,23 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
+from pathlib import Path
 
 class GoogleDriveAPI:
     def __init__(self, user_data_dir):
         self.user_data_dir = user_data_dir
         if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
-            self.credentials_file = os.path.join(sys._MEIPASS, 'credentials.json')
+            self.credentials_file = Path(sys._MEIPASS) / 'credentials.json'
         else:
-            self.credentials_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'credentials.json')
-        self.token_file = os.path.join(self.user_data_dir, 'token.pickle')
+            self.credentials_file = Path(__file__).parent / 'credentials.json'
+        self.token_file = Path(self.user_data_dir) / 'token.pickle'
         self.scopes = ['https://www.googleapis.com/auth/drive.file']
         self.service = self._get_service()
 
     def _get_service(self):
         creds = None
-        if os.path.exists(self.token_file):
-            with open(self.token_file, 'rb') as token:
+        if self.token_file.exists():
+            with self.token_file.open('rb') as token:
                 creds = pickle.load(token)
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
@@ -29,7 +30,7 @@ class GoogleDriveAPI:
             else:
                 flow = InstalledAppFlow.from_client_secrets_file(self.credentials_file, self.scopes)
                 creds = flow.run_local_server(port=0)
-            with open(self.token_file, 'wb') as token:
+            with self.token_file.open('wb') as token:
                 pickle.dump(creds, token)
         return build('drive', 'v3', credentials=creds)
 

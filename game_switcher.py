@@ -11,6 +11,9 @@ from datetime import datetime
 import re
 import time
 import tempfile
+import hashlib
+import winreg
+from pathlib import Path
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import QEvent
 
@@ -43,6 +46,7 @@ class GameSwitcher:
         "ordered_accounts": [],
         "last_switched_account": None,
         "riot_client_exe_path": None,
+        "last_graphics_settings_hash": None,
         "ui_settings": {
             "show_game_icons": True,
             "show_rank_tips": True,
@@ -62,15 +66,15 @@ class GameSwitcher:
         
         # Base directory for application assets (where the executable is or _MEIPASS)
         if base_directory:
-            self.base_dir = base_directory
+            self.base_dir = Path(base_directory)
         else:
-            self.base_dir = sys._MEIPASS if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
+            self.base_dir = Path(sys._MEIPASS) if getattr(sys, 'frozen', False) else Path(__file__).parent.resolve()
         
         # Persistent directory for user profiles and configuration
-        self.user_data_dir = os.path.join(self.app_data_path, "iMA Switcher")
+        self.user_data_dir = Path(self.app_data_path) / "iMA Switcher"
         
-        self.profiles_dir = os.path.join(self.user_data_dir, "profiles")
-        self.config_path = os.path.join(self.user_data_dir, "config.json")
+        self.profiles_dir = self.user_data_dir / "profiles"
+        self.config_path = self.user_data_dir / "config.json"
         
         # Initialize config once at startup
         self.config = self._load_config()
@@ -100,8 +104,8 @@ class GameSwitcher:
 
     def _cleanup_valorant_temp_files(self):
         # Clean up CrashReportClient
-        crash_report_path = os.path.join(self.app_data_path, "VALORANT", "Saved", "Config", "CrashReportClient")
-        if os.path.exists(crash_report_path):
+        crash_report_path = Path(self.app_data_path) / "VALORANT" / "Saved" / "Config" / "CrashReportClient"
+        if crash_report_path.exists():
             try:
                 shutil.rmtree(crash_report_path)
                 logging.info(f"Successfully cleaned up {crash_report_path}")
@@ -109,12 +113,12 @@ class GameSwitcher:
                 logging.error(f"Failed to clean up {crash_report_path}: {e}")
 
         # Clean up log files
-        logs_path = os.path.join(self.app_data_path, "VALORANT", "Saved", "Logs")
-        if os.path.exists(logs_path):
+        logs_path = Path(self.app_data_path) / "VALORANT" / "Saved" / "Logs"
+        if logs_path.exists():
             for filename in os.listdir(logs_path):
                 if filename.startswith("ShooterGame-backup") and filename.endswith(".log"):
                     try:
-                        os.remove(os.path.join(logs_path, filename))
+                        (logs_path / filename).unlink()
                         logging.info(f"Successfully deleted log file: {filename}")
                     except Exception as e:
                         logging.error(f"Failed to delete log file {filename}: {e}")
@@ -125,7 +129,7 @@ class GameSwitcher:
 
     def _load_config(self, force_reload=False):
         config = self.DEFAULT_CONFIG.copy()
-        if os.path.exists(self.config_path):
+        if self.config_path.exists():
             try:
                 with open(self.config_path, 'r', encoding='utf-8') as f:
                     loaded_config = json.load(f)
@@ -152,7 +156,7 @@ class GameSwitcher:
         return config
 
     def _save_config(self):
-        with open(self.config_path, 'w', encoding='utf-8') as f:
+        with self.config_path.open('w', encoding='utf-8') as f:
             json.dump(self.config, f, indent=4, ensure_ascii=False)
 
     def get_ima_config(self):
@@ -165,25 +169,89 @@ class GameSwitcher:
     def initialize_riot_client_paths(self, riot_client_exe_path=None):
 
         exe_path = riot_client_exe_path
-        if not exe_path or not os.path.exists(exe_path):
+        if not exe_path or not Path(exe_path).exists():
             exe_path = self.config.get("riot_client_exe_path")
 
-        if not exe_path or not os.path.exists(exe_path):
+        if not exe_path or not Path(exe_path).exists():
             exe_path = self._find_riot_client_path()
 
-        self.riot_games_config["ExeLocationDefault"] = exe_path if exe_path and os.path.exists(exe_path) else ""
-        self.riot_client_data_path = os.path.join(self.app_data_path, "Riot Games", "Riot Client")
+        self.riot_games_config["ExeLocationDefault"] = str(exe_path) if exe_path and Path(exe_path).exists() else ""
+        self.riot_client_data_path = Path(self.app_data_path) / "Riot Games" / "Riot Client"
         self.riot_games_config.update(self._load_riot_games_config_defaults())
 
+    def _find_riot_client_from_registry(self):
+        try:
+            # Check the uninstall information
+            uninstall_key_path = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Riot Game valorant.live"
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, uninstall_key_path) as key:
+                install_location, _ = winreg.QueryValueEx(key, "InstallLocation")
+                if install_location and os.path.isdir(install_location):
+                    exe_path = os.path.join(install_location, "RiotClientServices.exe")
+                    if os.path.exists(exe_path):
+                        return exe_path
+        except FileNotFoundError:
+            pass  # Key not found, continue
+        except Exception as e:
+            logging.error(f"Error reading registry for uninstall info: {e}")
+
+        try:
+            # Check the Riot Games key
+            riot_games_key_path = r"SOFTWARE\Riot Games\Riot Client"
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, riot_games_key_path) as key:
+                exe_path, _ = winreg.QueryValueEx(key, "ExecutablePath")
+                if exe_path and os.path.exists(exe_path):
+                    return exe_path
+        except FileNotFoundError:
+            pass  # Key not found, continue
+        except Exception as e:
+            logging.error(f"Error reading registry for Riot Games info: {e}")
+
+        return None
+
+    def _find_riot_client_from_registry(self):
+        try:
+            # Check the uninstall information
+            uninstall_key_path = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Riot Game valorant.live"
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, uninstall_key_path) as key:
+                install_location, _ = winreg.QueryValueEx(key, "InstallLocation")
+                if install_location and os.path.isdir(install_location):
+                    exe_path = os.path.join(install_location, "RiotClientServices.exe")
+                    if os.path.exists(exe_path):
+                        return exe_path
+        except FileNotFoundError:
+            pass  # Key not found, continue
+        except Exception as e:
+            logging.error(f"Error reading registry for uninstall info: {e}")
+
+        try:
+            # Check the Riot Games key
+            riot_games_key_path = r"SOFTWARE\Riot Games\Riot Client"
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, riot_games_key_path) as key:
+                exe_path, _ = winreg.QueryValueEx(key, "ExecutablePath")
+                if exe_path and os.path.exists(exe_path):
+                    return exe_path
+        except FileNotFoundError:
+            pass  # Key not found, continue
+        except Exception as e:
+            logging.error(f"Error reading registry for Riot Games info: {e}")
+
+        return None
+
     def _find_riot_client_path(self):
+        # First, try to find the path in the registry
+        registry_path = self._find_riot_client_from_registry()
+        if registry_path:
+            return registry_path
+
+        # If not found in registry, fall back to common paths
         common_paths = [
-            os.path.join("C:", os.sep, "Riot Games", "Riot Client", "RiotClientServices.exe"),
-            os.path.join(os.getenv('PROGRAMFILES'), "Riot Games", "Riot Client", "RiotClientServices.exe"),
-            os.path.join(os.getenv('PROGRAMFILES(X86)'), "Riot Games", "Riot Client", "RiotClientServices.exe"),
+            Path("C:") / "Riot Games" / "Riot Client" / "RiotClientServices.exe",
+            Path(os.getenv('PROGRAMFILES')) / "Riot Games" / "Riot Client" / "RiotClientServices.exe",
+            Path(os.getenv('PROGRAMFILES(X86)')) / "Riot Games" / "Riot Client" / "RiotClientServices.exe",
         ]
         for path in common_paths:
-            if os.path.exists(path):
-                return path
+            if path.exists():
+                return str(path)
         return None
 
     def _load_riot_games_config_defaults(self):
@@ -198,7 +266,7 @@ class GameSwitcher:
         self.config["riot_client_exe_path"] = exe_path
         self._save_config()
 
-    def _get_account_path(self, account_name): return os.path.join(self.profiles_dir, account_name)
+    def _get_account_path(self, account_name): return self.profiles_dir / account_name
 
     def _terminate_processes(self):
         all_processes = self.GAMES['valorant']["processes_to_kill"] + self.GAMES['lol']["processes_to_kill"]
@@ -212,7 +280,7 @@ class GameSwitcher:
 
     def _remove_junction_or_dir(self, path):
         logging.debug(f"Attempting to remove: {path}")
-        if not os.path.exists(path): # Use os.path.exists for general check
+        if not path.exists(): # Use path.exists for general check
             logging.debug(f"Path does not exist, no removal needed: {path}")
             return
         try:
@@ -246,9 +314,9 @@ class GameSwitcher:
         if account_name in self._account_game_configs_cache:
             return self._account_game_configs_cache[account_name]
 
-        game_config_path = os.path.join(self._get_account_path(account_name), 'game.json')
-        if os.path.exists(game_config_path):
-            with open(game_config_path, 'r', encoding='utf-8') as f:
+        game_config_path = self._get_account_path(account_name) / 'game.json'
+        if game_config_path.exists():
+            with game_config_path.open('r', encoding='utf-8') as f:
                 try:
                     data = json.load(f)
                     self._account_game_configs_cache[account_name] = data # Cache the loaded data
@@ -261,8 +329,8 @@ class GameSwitcher:
         return {}
 
     def _save_game_config(self, account_name, data):
-        game_config_path = os.path.join(self._get_account_path(account_name), 'game.json')
-        with open(game_config_path, 'w', encoding='utf-8') as f:
+        game_config_path = self._get_account_path(account_name) / 'game.json'
+        with game_config_path.open('w', encoding='utf-8') as f:
             json.dump(data, f, indent=4, ensure_ascii=False)
         self._account_game_configs_cache[account_name] = data # Update the cache
 
@@ -274,7 +342,7 @@ class GameSwitcher:
 
     def set_account_game(self, account_name, game):
         account_path = self._get_account_path(account_name)
-        if not os.path.exists(account_path):
+        if not account_path.exists():
             return False
         data = self._load_game_config(account_name)
         data['game'] = game
@@ -283,7 +351,7 @@ class GameSwitcher:
 
     def set_account_rank(self, account_name, rank):
         account_path = self._get_account_path(account_name)
-        if not os.path.exists(account_path):
+        if not account_path.exists():
             return False
         data = self._load_game_config(account_name)
         data['rank'] = rank
@@ -293,7 +361,7 @@ class GameSwitcher:
 
     def set_account_in_game_name_tag(self, account_name, in_game_name, in_game_tag, current_rr=None, last_game_rr=None):
         account_path = self._get_account_path(account_name)
-        if not os.path.exists(account_path):
+        if not account_path.exists():
             return False
         data = self._load_game_config(account_name)
         data['in_game_name'] = in_game_name
@@ -305,16 +373,16 @@ class GameSwitcher:
 
     def save_account(self, account_name, game='valorant', rank=None, in_game_name=None, in_game_tag=None):
         account_path = self._get_account_path(account_name)
-        os.makedirs(account_path, exist_ok=True)
+        account_path.mkdir(exist_ok=True)
         for item_name in self.riot_games_config["LoginData"].keys():
-            source_path = os.path.join(self.riot_client_data_path, item_name)
-            dest_path = os.path.join(account_path, item_name)
-            if not os.path.exists(source_path):
+            source_path = self.riot_client_data_path / item_name
+            dest_path = account_path / item_name
+            if not source_path.exists():
                 continue
             self._remove_junction_or_dir(dest_path)
-            if os.path.isdir(source_path):
+            if source_path.is_dir():
                 shutil.copytree(source_path, dest_path, dirs_exist_ok=True)
-            elif os.path.isfile(source_path):
+            elif source_path.is_file():
                 shutil.copy2(source_path, dest_path)
         self.set_account_game(account_name, game)
         if rank: self.set_account_rank(account_name, rank)
@@ -323,27 +391,25 @@ class GameSwitcher:
         return True
 
     def _perform_post_switch_tasks(self, account_name, game, on_update_callback):
-        """
-        Handles tasks that can be performed after the game has been launched,
-        to avoid delaying the game launch itself.
-        """
+        """Handles tasks that can be performed after the game has been launched,
+        to avoid delaying the game launch itself."""
         # Backup log for the previously switched account
         last_account_name = self.config.get("last_switched_account")
         if last_account_name and last_account_name != account_name:
-            log_path = os.path.join(self.app_data_path, "VALORANT", "Saved", "Logs", "ShooterGame.log")
-            if os.path.exists(log_path):
+            log_path = Path(self.app_data_path) / "VALORANT" / "Saved" / "Logs" / "ShooterGame.log"
+            if log_path.exists():
                 last_account_path = self._get_account_path(last_account_name)
                 try:
-                    shutil.copy2(log_path, os.path.join(last_account_path, "ShooterGame.log.bak"))
+                    shutil.copy2(log_path, last_account_path / "ShooterGame.log.bak")
                     logging.info(f"Backed up ShooterGame.log for {last_account_name}")
                 except Exception as e:
                     logging.error(f"Failed to backup ShooterGame.log for {last_account_name}: {e}")
 
         # Restore ShooterGame.log for the current account
         account_path = self._get_account_path(account_name)
-        log_backup_path = os.path.join(account_path, "ShooterGame.log.bak")
-        log_dest_path = os.path.join(self.app_data_path, "VALORANT", "Saved", "Logs", "ShooterGame.log")
-        if os.path.exists(log_backup_path):
+        log_backup_path = account_path / "ShooterGame.log.bak"
+        log_dest_path = Path(self.app_data_path) / "VALORANT" / "Saved" / "Logs" / "ShooterGame.log"
+        if log_backup_path.exists():
             try:
                 shutil.copy2(log_backup_path, log_dest_path)
                 logging.info(f"Restored ShooterGame.log for {account_name}")
@@ -369,7 +435,7 @@ class GameSwitcher:
             return False, "Administrator rights are required to switch accounts.", None
 
         account_path = self._get_account_path(account_name)
-        if not os.path.exists(account_path):
+        if not account_path.exists():
             return False, f"Profile for '{account_name}' not found.", None
 
         game, _, _, _, _, _ = self.get_account_game(account_name)
@@ -382,12 +448,12 @@ class GameSwitcher:
         self._terminate_processes()
 
         for item_name in self.riot_games_config["LoginData"].keys():
-            riot_item_path = os.path.join(self.riot_client_data_path, item_name)
-            profile_item_path = os.path.join(account_path, item_name)
+            riot_item_path = self.riot_client_data_path / item_name
+            profile_item_path = account_path / item_name
             self._remove_junction_or_dir(riot_item_path)
-            if os.path.exists(profile_item_path):
+            if profile_item_path.exists():
                 try:
-                    self._create_junction(profile_item_path, riot_item_path)
+                    self._create_junction(str(profile_item_path), str(riot_item_path))
                 except Exception as e:
                     return False, f"Failed to create junction for '{item_name}': {e}\nEnsure you are running as Administrator.", None
 
@@ -417,7 +483,7 @@ class GameSwitcher:
         game = 'valorant'  # Default to valorant for this flow
         self._terminate_processes()
         for item_name in self.riot_games_config["LoginData"].keys():
-            riot_item_path = os.path.join(self.riot_client_data_path, item_name)
+            riot_item_path = self.riot_client_data_path / item_name
             self._remove_junction_or_dir(riot_item_path)
         try:
             subprocess.Popen([self.riot_games_config["ExeLocationDefault"]])
@@ -428,20 +494,21 @@ class GameSwitcher:
     def get_saved_accounts(self):
         accounts_data = {}
         try:
-            dirs = [d for d in os.listdir(self.profiles_dir) if os.path.isdir(os.path.join(self.profiles_dir, d))]
-            for account_name in sorted(dirs):
-                icon_path = os.path.join(self._get_account_path(account_name), "icon.png")
+            dirs = [d for d in self.profiles_dir.iterdir() if d.is_dir()]
+            for account_dir in sorted(dirs):
+                account_name = account_dir.name
+                icon_path = account_dir / "icon.png"
                 game, rank, in_game_name, in_game_tag, current_rr, last_game_rr = self.get_account_game(account_name)
-                accounts_data[account_name] = (icon_path if os.path.exists(icon_path) else None, game, rank, in_game_name, in_game_tag, current_rr, last_game_rr)
+                accounts_data[account_name] = (str(icon_path) if icon_path.exists() else None, game, rank, in_game_name, in_game_tag, current_rr, last_game_rr)
                 
         except FileNotFoundError:
-            os.makedirs(self.profiles_dir, exist_ok=True)
+            self.profiles_dir.mkdir(exist_ok=True)
         return accounts_data
 
     def rename_account(self, old_name, new_name):
         old_path, new_path = self._get_account_path(old_name), self._get_account_path(new_name)
-        if os.path.exists(old_path) and not os.path.exists(new_path):
-            os.rename(old_path, new_path)
+        if old_path.exists() and not new_path.exists():
+            old_path.rename(new_path)
             if old_name in self._account_game_configs_cache:
                 self._account_game_configs_cache[new_name] = self._account_game_configs_cache.pop(old_name)
             self.update_ima_menu_if_enabled('rename', new_name, old_name=old_name)
@@ -450,7 +517,7 @@ class GameSwitcher:
 
     def delete_account(self, account_name):
         account_path = self._get_account_path(account_name)
-        if os.path.exists(account_path):
+        if account_path.exists():
             shutil.rmtree(account_path)
             if account_name in self._account_game_configs_cache:
                 del self._account_game_configs_cache[account_name]
@@ -460,12 +527,12 @@ class GameSwitcher:
 
     def set_account_icon(self, account_name, source_icon_path):
         account_path = self._get_account_path(account_name)
-        if not os.path.isdir(account_path): return False
-        dest_icon_path = os.path.join(account_path, "icon.png")
+        if not account_path.is_dir(): return False
+        dest_icon_path = account_path / "icon.png"
         try:
             if Image:
-                img = Image.open(source_icon_path)
-                img.save(dest_icon_path, "PNG")
+                pil_image = Image.open(source_icon_path)
+                pil_image.save(dest_icon_path, "PNG")
             else:
                 shutil.copy(source_icon_path, dest_icon_path)
             # Invalidate cache for this icon
@@ -479,10 +546,10 @@ class GameSwitcher:
 
     def remove_account_icon(self, account_name):
         account_path = self._get_account_path(account_name)
-        icon_path = os.path.join(account_path, "icon.png")
-        if os.path.exists(icon_path):
+        icon_path = account_path / "icon.png"
+        if icon_path.exists():
             try:
-                os.remove(icon_path)
+                icon_path.unlink()
                 # Invalidate cache for this icon
                 if icon_path in self._icon_cache:
                     del self._icon_cache[icon_path]
@@ -493,46 +560,84 @@ class GameSwitcher:
                 return False
         return False
 
-    def create_desktop_shortcut(self, account_name):
+    def _create_shortcut(self, shortcut_path, target_path, arguments="", working_dir=None, icon_location=None, description=""):
         try:
             import win32com.client
+            from PIL import Image
         except ImportError:
-            logging.error("Error: pywin32 is required to create shortcuts. Please run 'pip install pywin32'.")
+            logging.error("Error: pywin32 and Pillow are required to create shortcuts. Please run 'pip install pywin32 Pillow'.")
             return False
 
-        desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
-        shortcut_path = os.path.join(desktop_path, f"{account_name}.lnk")
+        shortcut_path_p = Path(shortcut_path)
+        target_path_p = Path(target_path)
+        
+        if working_dir is None:
+            working_dir_s = str(target_path_p.parent)
+        else:
+            working_dir_s = str(Path(working_dir))
+
+        icon_location_s = None
+        ico_path_p = None
+
+        if icon_location:
+            icon_location_p = Path(icon_location)
+            if icon_location_p.suffix.lower() == '.png':
+                try:
+                    img = Image.open(icon_location_p)
+                    ico_path_p = self.user_data_dir / (shortcut_path_p.name + ".ico")
+                    img.save(ico_path_p, format='ICO', sizes=[(32,32)])
+                    icon_location_s = str(ico_path_p)
+                except Exception as e:
+                    logging.error(f"Failed to convert PNG to ICO: {e}")
+                    icon_location_s = str(target_path_p) # Fallback to target exe icon
+            else:
+                icon_location_s = str(icon_location_p)
+        else:
+            icon_location_s = str(target_path_p)
+
+        try:
+            shell = win32com.client.Dispatch("WScript.Shell")
+            shortcut = shell.CreateShortCut(str(shortcut_path_p))
+            shortcut.TargetPath = str(target_path_p)
+            shortcut.Arguments = arguments
+            shortcut.WorkingDirectory = working_dir_s
+            shortcut.IconLocation = icon_location_s
+            shortcut.Description = description
+            shortcut.Save()
+            return True
+        except Exception as e:
+            logging.error(f"Error creating shortcut at {shortcut_path}: {e}")
+            return False
+        finally:
+            pass
+
+    def create_desktop_shortcut(self, account_name):
+        desktop_path = Path.home() / "Desktop"
+        shortcut_path = desktop_path / f"{account_name}.lnk"
 
         target_path = sys.executable
-        working_dir = os.path.dirname(target_path)
-
+        
         if not getattr(sys, 'frozen', False):
+            pythonw_path = os.path.join(os.path.dirname(sys.executable), 'pythonw.exe')
+            if os.path.exists(pythonw_path):
+                target_path = pythonw_path
             main_script_path = os.path.abspath(os.path.join(self.base_dir, "main.pyw"))
             arguments = f'"{main_script_path}" --switch "{account_name}"'
         else:
             arguments = f'--switch "{account_name}"'
 
-        try:
-            shell = win32com.client.Dispatch("WScript.Shell")
-            shortcut = shell.CreateShortCut(shortcut_path)
-            shortcut.TargetPath = target_path
-            shortcut.Arguments = arguments
-            shortcut.WorkingDirectory = working_dir
-            _game, _rank, _in_game_name, _in_game_tag, _current_rr, _last_game_rr = self.get_account_game(account_name)
-            shortcut.Description = f"Launch {_game.capitalize()} with {account_name} account"
+        _game, _rank, _in_game_name, _in_game_tag, _current_rr, _last_game_rr = self.get_account_game(account_name)
+        description = f"Launch {_game.capitalize()} with {account_name} account"
 
-            account_data = self.get_saved_accounts()
-            account_icon_path, _, rank, _, _, _, _ = account_data.get(account_name)
-            
-            ui_settings = self.get_ima_config().get("ui_settings", {})
-            use_rank_icons = ui_settings.get("use_rank_icons", False)
+        account_data = self.get_saved_accounts()
+        _, _, rank, _, _, _, _ = account_data.get(account_name)
+        
+        ui_settings = self.get_ima_config().get("ui_settings", {})
+        use_rank_icons = ui_settings.get("use_rank_icons", False)
 
-            shortcut.IconLocation = self.get_icon_path_for_account(account_name, rank, use_rank_icons)
-            shortcut.Save()
-            return True
-        except Exception as e:
-            logging.error(f"Error creating shortcut: {e}")
-            return False
+        icon_location = self.get_icon_path_for_account(account_name, rank, use_rank_icons)
+
+        return self._create_shortcut(shortcut_path, target_path, arguments=arguments, icon_location=icon_location, description=description)
 
     def get_icon_path_for_account(self, account_name, rank=None, use_rank_icons=False):
         icon_path_to_use = None
@@ -540,19 +645,19 @@ class GameSwitcher:
         account_icon_path = account_data[0] if account_data else None # Extract icon_path from the tuple
 
         if use_rank_icons and rank:
-            app_install_path = self.get_ima_config().get("app_install_path", self.base_dir)
-            rank_icon_candidate_path = os.path.join(app_install_path, "Assets", f"{rank.lower().replace(" ", "_")}.png")
-            if os.path.exists(rank_icon_candidate_path):
+            app_install_path = Path(self.get_ima_config().get("app_install_path", self.base_dir))
+            rank_icon_candidate_path = app_install_path / "Assets" / f"{rank.lower().replace(" ", "_")}.png"
+            if rank_icon_candidate_path.exists():
                 icon_path_to_use = rank_icon_candidate_path
         
-        if icon_path_to_use is None and account_icon_path and os.path.exists(account_icon_path):
-            icon_path_to_use = account_icon_path
+        if icon_path_to_use is None and account_icon_path and Path(account_icon_path).exists():
+            icon_path_to_use = Path(account_icon_path)
 
         if icon_path_to_use is None:
-            app_install_path = self.get_ima_config().get("app_install_path", self.base_dir)
-            icon_path_to_use = os.path.abspath(os.path.join(app_install_path, "logo.png"))
+            app_install_path = Path(self.get_ima_config().get("app_install_path", self.base_dir))
+            icon_path_to_use = app_install_path / "logo.png"
         
-        return icon_path_to_use
+        return str(icon_path_to_use.resolve())
 
     def get_backup_filename(self):
         now = datetime.now()
@@ -562,26 +667,27 @@ class GameSwitcher:
     def backup_profiles(self, backup_file_path):
         try:
             with tempfile.TemporaryDirectory() as temp_dir:
+                temp_dir_path = Path(temp_dir)
                 # 1. Copy profiles and config to a 'UserData' folder in temp_dir
-                user_data_backup_path = os.path.join(temp_dir, "UserData")
-                os.makedirs(user_data_backup_path)
-                shutil.copytree(self.profiles_dir, os.path.join(user_data_backup_path, "profiles"))
-                shutil.copy2(self.config_path, os.path.join(user_data_backup_path, "config.json"))
+                user_data_backup_path = temp_dir_path / "UserData"
+                user_data_backup_path.mkdir()
+                shutil.copytree(self.profiles_dir, user_data_backup_path / "profiles")
+                shutil.copy2(self.config_path, user_data_backup_path / "config.json")
 
                 # 2. Copy Riot Games and VALORANT data to a 'RiotData' folder in temp_dir
-                riot_data_backup_path = os.path.join(temp_dir, "RiotData")
-                os.makedirs(riot_data_backup_path)
+                riot_data_backup_path = temp_dir_path / "RiotData"
+                riot_data_backup_path.mkdir()
                 
-                riot_client_path = os.path.join(self.app_data_path, "Riot Games", "Riot Client")
-                if os.path.exists(riot_client_path):
-                    shutil.copytree(riot_client_path, os.path.join(riot_data_backup_path, "Riot Client"))
+                riot_client_path = Path(self.app_data_path) / "Riot Games" / "Riot Client"
+                if riot_client_path.exists():
+                    shutil.copytree(riot_client_path, riot_data_backup_path / "Riot Client")
 
-                valorant_path = os.path.join(self.app_data_path, "VALORANT")
-                if os.path.exists(valorant_path):
-                    shutil.copytree(valorant_path, os.path.join(riot_data_backup_path, "VALORANT"))
+                valorant_path = Path(self.app_data_path) / "VALORANT"
+                if valorant_path.exists():
+                    shutil.copytree(valorant_path, riot_data_backup_path / "VALORANT")
 
                 # 3. Create the zip archive from the temp_dir
-                shutil.make_archive(base_name=backup_file_path.replace('.zip', ''),
+                shutil.make_archive(base_name=str(backup_file_path).replace('.zip', ''),
                                     format='zip',
                                     root_dir=temp_dir)
             return True
@@ -593,39 +699,40 @@ class GameSwitcher:
         try:
             self._terminate_processes()
             with tempfile.TemporaryDirectory() as temp_dir:
+                temp_dir_path = Path(temp_dir)
                 with ZipFile(backup_file_path, 'r') as zip_ref:
-                    zip_ref.extractall(temp_dir)
+                    zip_ref.extractall(temp_dir_path)
 
-                user_data_source = os.path.join(temp_dir, "UserData")
-                if os.path.exists(user_data_source):
+                user_data_source = temp_dir_path / "UserData"
+                if user_data_source.exists():
                     # Restore config.json, overwriting if it exists
-                    backup_config_path = os.path.join(user_data_source, "config.json")
-                    if os.path.exists(backup_config_path):
+                    backup_config_path = user_data_source / "config.json"
+                    if backup_config_path.exists():
                         shutil.copy2(backup_config_path, self.config_path)
                         self.config = self._load_config(force_reload=True)
 
                     # Restore profiles by merging
-                    backup_profiles_dir = os.path.join(user_data_source, "profiles")
-                    if os.path.exists(backup_profiles_dir):
+                    backup_profiles_dir = user_data_source / "profiles"
+                    if backup_profiles_dir.exists():
                         for account_name in os.listdir(backup_profiles_dir):
-                            source_account_path = os.path.join(backup_profiles_dir, account_name)
-                            dest_account_path = os.path.join(self.profiles_dir, account_name)
-                            if os.path.isdir(source_account_path):
-                                if os.path.exists(dest_account_path):
+                            source_account_path = backup_profiles_dir / account_name
+                            dest_account_path = self.profiles_dir / account_name
+                            if source_account_path.is_dir():
+                                if dest_account_path.exists():
                                     shutil.rmtree(dest_account_path)
                                 shutil.copytree(source_account_path, dest_account_path)
 
-                riot_data_source = os.path.join(temp_dir, "RiotData")
-                if os.path.exists(riot_data_source):
-                    riot_client_dest = os.path.join(self.app_data_path, "Riot Games", "Riot Client")
-                    if os.path.exists(riot_client_dest):
+                riot_data_source = temp_dir_path / "RiotData"
+                if riot_data_source.exists():
+                    riot_client_dest = Path(self.app_data_path) / "Riot Games" / "Riot Client"
+                    if riot_client_dest.exists():
                         shutil.rmtree(riot_client_dest)
-                    shutil.move(os.path.join(riot_data_source, "Riot Client"), riot_client_dest)
+                    shutil.move(str(riot_data_source / "Riot Client"), str(riot_client_dest))
 
-                    valorant_dest = os.path.join(self.app_data_path, "VALORANT")
-                    if os.path.exists(valorant_dest):
+                    valorant_dest = Path(self.app_data_path) / "VALORANT"
+                    if valorant_dest.exists():
                         shutil.rmtree(valorant_dest)
-                    shutil.move(os.path.join(riot_data_source, "VALORANT"), valorant_dest)
+                    shutil.move(str(riot_data_source / "VALORANT"), str(valorant_dest))
             
             # Clear the icon cache to force UI to reload icons from disk
             self._icon_cache.clear()
@@ -669,13 +776,13 @@ class GameSwitcher:
         if save_config:
             self.set_ima_config({"output_dir": output_dir, "title": title, "menu_icon_path": menu_icon_path, "ordered_accounts": ordered_accounts})
         
-        script_path = os.path.join(output_dir, 'valo.nss')
-        icons_dir = os.path.join(output_dir, "icons"); os.makedirs(icons_dir, exist_ok=True)
+        script_path = Path(output_dir) / 'valo.nss'
+        icons_dir = Path(output_dir) / "icons"; icons_dir.mkdir(exist_ok=True)
         menu_icon_arg = ""
-        if menu_icon_path and os.path.exists(menu_icon_path):
+        if menu_icon_path and Path(menu_icon_path).exists():
             try:
-                base_icon_name = os.path.basename(menu_icon_path)
-                dest_icon_path = os.path.join(icons_dir, base_icon_name)
+                base_icon_name = Path(menu_icon_path).name
+                dest_icon_path = icons_dir / base_icon_name
                 shutil.copy(menu_icon_path, dest_icon_path)
                 ima_icon_path = fr"@app.dir\imports\icons\{base_icon_name}"
                 menu_icon_arg = f" icon='{ima_icon_path}'"
@@ -734,16 +841,16 @@ class GameSwitcher:
             f.write(final_script)
 
     def _find_game_user_settings_files(self):
-        valorant_config_path = os.path.join(os.getenv('LOCALAPPDATA'), "VALORANT", "Saved", "Config")
+        valorant_config_path = Path(os.getenv('LOCALAPPDATA')) / "VALORANT" / "Saved" / "Config"
         ini_files = []
         logging.debug(f"Searching for GameUserSettings.ini in: {valorant_config_path}")
-        if not os.path.exists(valorant_config_path):
+        if not valorant_config_path.exists():
             logging.warning(f"Valorant config path does not exist: {valorant_config_path}")
             return []
 
         for root, dirs, files in os.walk(valorant_config_path):
-            if "GameUserSettings.ini" in files and os.path.basename(root) == "Windows":
-                ini_file_path = os.path.join(root, "GameUserSettings.ini")
+            if "GameUserSettings.ini" in files and Path(root).name == "Windows":
+                ini_file_path = Path(root) / "GameUserSettings.ini"
                 ini_files.append(ini_file_path)
                 logging.debug(f"Found: {ini_file_path}")
         if not ini_files:
@@ -751,16 +858,16 @@ class GameSwitcher:
         return ini_files
 
     def _find_riot_user_settings_files(self):
-        valorant_config_path = os.path.join(os.getenv('LOCALAPPDATA'), "VALORANT", "Saved", "Config")
+        valorant_config_path = Path(os.getenv('LOCALAPPDATA')) / "VALORANT" / "Saved" / "Config"
         ini_files = []
         logging.debug(f"Searching for RiotUserSettings.ini in: {valorant_config_path}")
-        if not os.path.exists(valorant_config_path):
+        if not valorant_config_path.exists():
             logging.warning(f"Valorant config path does not exist: {valorant_config_path}")
             return []
 
         for root, dirs, files in os.walk(valorant_config_path):
-            if "RiotUserSettings.ini" in files and os.path.basename(root) == "Windows":
-                ini_file_path = os.path.join(root, "RiotUserSettings.ini")
+            if "RiotUserSettings.ini" in files and Path(root).name == "Windows":
+                ini_file_path = Path(root) / "RiotUserSettings.ini"
                 ini_files.append(ini_file_path)
                 logging.debug(f"Found: {ini_file_path}")
         if not ini_files:
@@ -803,7 +910,7 @@ class GameSwitcher:
         if not ini_files: return None, "No GameUserSettings.ini files found to load settings from."
         settings = {}
         try:
-            with open(ini_files[0], 'r', encoding='utf-8') as f:
+            with ini_files[0].open('r', encoding='utf-8') as f:
                 for line in f:
                     if line.strip().startswith("sg.") and "=" in line:
                         key, value = line.split("=", 1)
@@ -817,7 +924,7 @@ class GameSwitcher:
         if not ini_files: return None, "No RiotUserSettings.ini files found to load settings from."
         settings = {}
         try:
-            with open(ini_files[0], 'r', encoding='utf-8') as f:
+            with ini_files[0].open('r', encoding='utf-8') as f:
                 for line in f:
                     stripped_line = line.strip()
                     if stripped_line.startswith("EAres") and "=" in stripped_line:
@@ -828,6 +935,14 @@ class GameSwitcher:
             return None, f"Error reading {ini_files[0]}: {e}"
 
     def update_all_game_user_settings(self, graphics_settings):
+        settings_str = json.dumps(graphics_settings, sort_keys=True)
+        current_hash = hashlib.sha256(settings_str.encode('utf-8')).hexdigest()
+
+        last_hash = self.config.get("last_graphics_settings_hash")
+        if last_hash and last_hash == current_hash:
+            logging.info("Graphics settings are already up to date. Skipping file I/O.")
+            return True, "Settings already up to date."
+
         game_user_ini_files = self._find_game_user_settings_files()
         riot_user_ini_files = self._find_riot_user_settings_files()
         all_success = True
@@ -840,7 +955,7 @@ class GameSwitcher:
             
             for ini_file_path in game_user_ini_files:
                 try:
-                    with open(ini_file_path, 'r', encoding='utf-8') as f: lines = f.readlines()
+                    with ini_file_path.open('r', encoding='utf-8') as f: lines = f.readlines()
                     
                     temp_lines = []
                     settings_to_update = {}
@@ -891,7 +1006,7 @@ class GameSwitcher:
                             hdr_idx = next((i for i, l in enumerate(temp_lines) if l.strip().startswith("HDRDisplayOutputNits=")), -1)
                             if hdr_idx != -1: temp_lines.insert(hdr_idx + 1, f"FullscreenMode={fs_val}\n")
 
-                    with open(ini_file_path, 'w', encoding='utf-8') as f: f.writelines(temp_lines)
+                    with ini_file_path.open('w', encoding='utf-8') as f: f.writelines(temp_lines)
                     logging.info(f"Successfully updated: {ini_file_path}")
                 except Exception as e:
                     logging.error(f"Error updating {ini_file_path}: {e}")
@@ -906,7 +1021,7 @@ class GameSwitcher:
 
             for ini_file_path in riot_user_ini_files:
                 try:
-                    with open(ini_file_path, 'r', encoding='utf-8') as f: lines = f.readlines()
+                    with ini_file_path.open('r', encoding='utf-8') as f: lines = f.readlines()
                     
                     temp_lines = []
                     keys_to_process = set(all_settings_to_apply.keys())
@@ -941,11 +1056,15 @@ class GameSwitcher:
                                 else:
                                     temp_lines.append(insert_line)
 
-                    with open(ini_file_path, 'w', encoding='utf-8') as f: f.writelines(temp_lines)
+                    with ini_file_path.open('w', encoding='utf-8') as f: f.writelines(temp_lines)
                     logging.info(f"Successfully updated: {ini_file_path}")
                 except Exception as e:
                     logging.error(f"Error updating {ini_file_path}: {e}")
                     all_success = False
+        
+        if all_success:
+            self.config["last_graphics_settings_hash"] = current_hash
+            self._save_config()
 
         return all_success, None if all_success else "One or more files failed to update."
 
@@ -985,7 +1104,7 @@ class GameSwitcher:
             Image = None
             logging.warning("Pillow not installed. Image conversion for icons will not work. Please install it with 'pip install Pillow'")
 
-        if icon_path and os.path.exists(icon_path):
+        if icon_path and Path(icon_path).exists():
             try:
                 if Image:
                     pil_image = Image.open(icon_path)
@@ -1147,4 +1266,3 @@ class GameSwitcher:
     def start_rank_update_scheduler(self, on_update_callback=None):
         scheduler_thread = threading.Thread(target=self._run_rank_update_loop, args=(on_update_callback,), daemon=True)
         scheduler_thread.start()
-

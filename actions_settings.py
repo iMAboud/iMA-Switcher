@@ -5,6 +5,7 @@ from PyQt5.QtWidgets import QMessageBox, QFileDialog, QDialog
 from ui_components import SaveAccountDialog, ExportIMAMenuDialog, OptionsDialog, CustomMessageDialog, ConfirmDeleteDialog, BackupRestoreDialog
 from google_drive_api import GoogleDriveAPI
 import tempfile
+from pathlib import Path
 
 class SettingsActions:
     def __init__(self, parent):
@@ -51,8 +52,9 @@ class SettingsActions:
         suggested_filename = self.switcher.get_backup_filename()
         path, _ = QFileDialog.getSaveFileName(self.parent, "Save Backup", suggested_filename, "ZIP Files (*.zip)")
         if path:
-            if not path.endswith(".zip"): path += ".zip"
-            if self.switcher.backup_profiles(path):
+            path_p = Path(path)
+            if not path_p.suffix == ".zip": path_p = path_p.with_suffix(".zip")
+            if self.switcher.backup_profiles(str(path_p)):
                 self.parent.status_label.setText(f"Profiles backed up successfully.")
                 logging.info(f"Profiles backed up to {path}")
             else:
@@ -71,7 +73,7 @@ class SettingsActions:
                 temp_file_path = temp_file.name
 
             if self.switcher.backup_profiles(temp_file_path):
-                file_name = os.path.basename(self.switcher.get_backup_filename()) + ".zip"
+                file_name = Path(self.switcher.get_backup_filename()).name + ".zip"
                 drive_api.upload_file(temp_file_path, file_name)
                 msg_dialog = CustomMessageDialog("Backup Successful", "Profiles backed up to Google Drive.", self.parent)
                 msg_dialog.exec_()
@@ -83,9 +85,9 @@ class SettingsActions:
             logging.error(f"Google Drive backup failed: {e}")
             QMessageBox.critical(self.parent, "Google Drive Error", str(e))
         finally:
-            if temp_file_path and os.path.exists(temp_file_path):
+            if temp_file_path and Path(temp_file_path).exists():
                 try:
-                    os.remove(temp_file_path)
+                    Path(temp_file_path).unlink()
                     logging.info(f"Successfully cleaned up temp file: {temp_file_path}")
                 except Exception as e:
                     logging.error(f"Failed to clean up temp file {temp_file_path}: {e}")
@@ -122,9 +124,9 @@ class SettingsActions:
             logging.error(f"Google Drive restore failed: {e}")
             QMessageBox.critical(self.parent, "Google Drive Error", str(e))
         finally:
-            if temp_file_path and os.path.exists(temp_file_path):
+            if temp_file_path and Path(temp_file_path).exists():
                 try:
-                    os.remove(temp_file_path)
+                    Path(temp_file_path).unlink()
                     logging.info(f"Successfully cleaned up temp file: {temp_file_path}")
                 except Exception as e:
                     logging.error(f"Failed to clean up temp file {temp_file_path}: {e}")
@@ -151,7 +153,7 @@ class SettingsActions:
                 logging.error(f"Failed to restore profiles from {path}")
 
     def open_profiles_folder(self):
-        os.startfile(self.switcher.profiles_dir)
+        os.startfile(str(self.switcher.profiles_dir))
 
     def export_ima_menu(self):
         accounts_data = self.switcher.get_saved_accounts()
@@ -161,15 +163,15 @@ class SettingsActions:
 
         ima_config = self.switcher.get_ima_config()
         if not ima_config.get("menu_icon_path"):
-            default_ico = r"C:\Program Files\iMA Menu\icons\valorant.ico"
-            if os.path.exists(default_ico): ima_config["menu_icon_path"] = default_ico
+            default_ico = Path(r"C:\Program Files\iMA Menu\icons\valorant.ico")
+            if default_ico.exists(): ima_config["menu_icon_path"] = str(default_ico)
 
         dialog = ExportIMAMenuDialog(accounts_data, self.parent, default_settings=ima_config)
         
         if dialog.exec_() == QDialog.Accepted:
             settings = dialog.get_settings()
             output_dir = ima_config.get("output_dir") or r"C:\Program Files\iMA Menu\imports"
-            if not os.path.isdir(output_dir):
+            if not Path(output_dir).is_dir():
                 output_dir = QFileDialog.getExistingDirectory(self.parent, "Could not find default iMA Menu path. Please locate the 'imports' folder.")
                 if not output_dir: return
             if not output_dir: return # Added this line to handle cancellation
