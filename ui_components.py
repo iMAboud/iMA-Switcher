@@ -274,7 +274,7 @@ class ExportIMAMenuDialog(QDialog):
                 background-color: #c89f68; 
                 color: #2c2a2b; 
                 font-weight: bold; 
-                border-radius: 8px; 
+                border-radius: 15px; 
                 padding: 8px; 
                 border: none;
             }
@@ -446,7 +446,7 @@ class CustomMessageDialog(PopupDialog):
         ok_button = QPushButton("OK")
         ok_button.setStyleSheet("""
             QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 10px 20px;
+                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 15px; padding: 10px 20px;
             }
             QPushButton:hover {
                 background-color: #d9b68b; /* Brighter coffee color */
@@ -500,7 +500,7 @@ class InputDialog(PopupDialog):
         save_button = QPushButton("Save")
         save_button.setStyleSheet("""
             QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 10px 20px;
+                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 15px; padding: 10px 20px;
             }
             QPushButton:hover {
                 background-color: #d9b68b; /* Brighter coffee color */
@@ -616,7 +616,7 @@ class SaveAccountDialog(PopupDialog):
         save_button = QPushButton("Save")
         save_button.setStyleSheet("""
             QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 10px 20px;
+                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 15px; padding: 10px 20px;
             }
             QPushButton:hover {
                 background-color: #d9b68b; /* Brighter coffee color */
@@ -631,16 +631,101 @@ class SaveAccountDialog(PopupDialog):
     def get_details(self):
         return self.name_edit.text().strip(), self.game_combo.currentData(), self.in_game_name_edit.text().strip(), self.in_game_tag_edit.text().strip()
 
+class BackupRestoreSelectionDialog(PopupDialog):
+    backup_requested = pyqtSignal()
+    restore_requested = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__("Backup and Restore", parent)
+        self.setFixedSize(350, 200)
+
+        self.content_layout.setSpacing(15)
+        self.content_layout.setAlignment(Qt.AlignCenter)
+
+        backup_button = QPushButton("Backup")
+        backup_button.setStyleSheet("""
+            QPushButton {
+                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 15px; padding: 10px 20px;
+            }
+            QPushButton:hover {
+                background-color: #d9b68b;
+            }
+        """)
+        backup_button.setIcon(QIcon(get_asset_path("Backup.png")))
+        backup_button.setIconSize(QSize(24, 24))
+        backup_button.clicked.connect(self.backup_requested.emit)
+        backup_button.clicked.connect(self.accept)
+        self.content_layout.addWidget(backup_button)
+
+        restore_button = QPushButton("Restore")
+        restore_button.setStyleSheet("""
+            QPushButton {
+                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 15px; padding: 10px 20px;
+            }
+            QPushButton:hover {
+                background-color: #d9b68b;
+            }
+        """)
+        restore_button.setIcon(QIcon(get_asset_path("Restore.png")))
+        restore_button.setIconSize(QSize(24, 24))
+        restore_button.clicked.connect(self.restore_requested.emit)
+        restore_button.clicked.connect(self.accept)
+        self.content_layout.addWidget(restore_button)
+
+class BackupRestoreDialog(PopupDialog):
+    def __init__(self, parent=None, mode='backup'):
+        super().__init__(f"{mode.capitalize()} Profiles", parent)
+        self.setFixedSize(350, 200)
+        self.mode = mode
+        self.selection = None
+
+        self.content_layout.setSpacing(15)
+        self.content_layout.setAlignment(Qt.AlignCenter)
+
+        local_button = QPushButton("Local")
+        local_button.setStyleSheet("""
+            QPushButton {
+                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 15px; padding: 10px 20px;
+            }
+            QPushButton:hover {
+                background-color: #d9b68b;
+            }
+        """)
+        local_button.setIcon(QIcon(get_asset_path("Local.png")))
+        local_button.setIconSize(QSize(24, 24))
+        local_button.clicked.connect(lambda: self.set_selection("local"))
+        self.content_layout.addWidget(local_button)
+
+        google_drive_button = QPushButton("Google Drive")
+        google_drive_button.setStyleSheet("""
+            QPushButton {
+                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 15px; padding: 10px 20px;
+            }
+            QPushButton:hover {
+                background-color: #d9b68b;
+            }
+        """)
+        google_drive_button.setIcon(QIcon(get_asset_path("Google.png")))
+        google_drive_button.setIconSize(QSize(24, 24))
+        google_drive_button.clicked.connect(lambda: self.set_selection("google_drive"))
+        self.content_layout.addWidget(google_drive_button)
+
+    def set_selection(self, selection):
+        self.selection = selection
+        self.accept()
+
+    def get_selection(self):
+        return self.selection
+
 class SettingsDialog(PopupDialog):
     def __init__(self, actions, parent):
         super().__init__("Settings", parent)
-        # Removed the global stylesheet for QPushButton to avoid interfering with CustomTitleBar
         self.content_layout.setSpacing(10)
-        button_style = """QPushButton { background-color: #c89f68; color: #2c2a2b; font-size: 15px; font-weight: bold; border: none; border-radius: 12px; padding: 8px 15px; text-align: left; } QPushButton:hover { background-color: #d9b68b; } QPushButton::icon { width: 24px; height: 24px; } """
+        button_style = """QPushButton { background-color: #4f4a4b; color: #e0d6d1; font-size: 15px; font-weight: bold; border: none; border-radius: 15px; padding: 10px 20px; text-align: left; } QPushButton:hover { background-color: #c89f68; } QPushButton::icon { width: 24px; height: 24px; } """
         for text, (action_func, icon_name) in actions.items():
             icon_path = Path(get_asset_path(icon_name))
             button = QPushButton(text)
-            button.setStyleSheet(button_style) # Apply style directly to each button
+            button.setStyleSheet(button_style)
             if icon_path.exists():
                 button.setIcon(QIcon(str(icon_path)))
             button.clicked.connect(lambda _, func=action_func: (self.close(), func()))
@@ -649,10 +734,9 @@ class SettingsDialog(PopupDialog):
 class OptionsDialog(PopupDialog):
     settings_applied = pyqtSignal() # New signal
 
-    def __init__(self, switcher_instance, parent=None, main_window=None):
+    def __init__(self, switcher_instance, parent=None):
         super().__init__("Options", parent)
         self.switcher = switcher_instance
-        self.main_window = main_window # Store it
         self.setFixedSize(600, 700)
 
         self.quality_settings_map = {
@@ -1107,39 +1191,6 @@ class OptionsDialog(PopupDialog):
         main_layout.addWidget(top_group)
         main_layout.addWidget(bottom_group)
         
-        # --- Updater Group ---
-        updater_group = QGroupBox("Application Updates")
-        updater_group.setStyleSheet("""
-            QGroupBox { color: #FFFFFF;
-                font-size: 14px;
-                font-weight: bold;
-                border: 1px solid #c89f68;
-                border-radius: 8px;
-                margin-top: 10px; }
-            QGroupBox::title { subcontrol-origin: margin;
-                subcontrol-position: top left;
-                padding: 0 10px;
-                left: 10px;
-                color: #FFFFFF; }
-        """)
-        updater_layout = QGridLayout(updater_group)
-        
-        self.update_status_label = QLabel(f"Current Version: {self.main_window.__version__}")
-        self.update_status_label.setStyleSheet("color: #e0d6d1;")
-        updater_layout.addWidget(self.update_status_label, 0, 0)
-
-        self.check_for_update_button = QPushButton("Check for Update")
-        self.check_for_update_button.setStyleSheet("""
-            QPushButton {
-                background-color: #4f4a4b; color: #e0d6d1; font-weight: bold; 
-                border-radius: 8px; padding: 10px 20px; border: 1px solid #4f4a4b;
-            }
-            QPushButton:hover { background-color: #5a5556; border: 1px solid #c89f68; }
-        """)
-        self.check_for_update_button.clicked.connect(self.main_window.check_for_updates)
-        updater_layout.addWidget(self.check_for_update_button, 0, 1, Qt.AlignRight)
-
-        main_layout.addWidget(updater_group)
         main_layout.addStretch()
 
         self.tab_widget.setIconSize(QSize(32, 32))
@@ -1705,100 +1756,6 @@ class ConfirmDeleteDialog(PopupDialog):
         
         button_layout.addStretch()
         self.content_layout.addLayout(button_layout)
-
-class ConfirmDeleteDialog(PopupDialog):
-    def __init__(self, account_name, parent=None, title="Confirm Delete", message=None):
-        super().__init__(title, parent)
-        self.setFixedSize(350, 180)
-        
-        if message is None:
-            message = f"Delete '{account_name}'?"
-
-        message_label = QLabel(message)
-        message_label.setStyleSheet("color: #e0d6d1; font-size: 16px; font-weight: bold; text-align: center;")
-        message_label.setAlignment(Qt.AlignCenter)
-        self.content_layout.addWidget(message_label)
-        
-        button_layout = QHBoxLayout()
-        button_layout.setSpacing(15) # Increased spacing between buttons
-        button_layout.addStretch()
-
-        no_button = QPushButton("No")
-        no_button.setStyleSheet("""
-            QPushButton {
-                background-color: #4f4a4b; color: #e0d6d1; font-weight: bold; 
-                border-radius: 8px; padding: 10px 20px; border: 1px solid #4f4a4b; /* Increased padding */
-            }
-            QPushButton:hover { background-color: #5a5556; border: 1px solid #c89f68; }
-            QPushButton:pressed { background-color: #454142; }
-        """
-)
-        no_button.clicked.connect(self.reject)
-        button_layout.addWidget(no_button)
-
-        yes_button = QPushButton("Yes")
-        yes_button.setStyleSheet("""
-            QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 10px 20px;
-            }
-            QPushButton:hover {
-                background-color: #d9b68b; /* Brighter coffee color */
-            }
-        """
-)
-        yes_button.clicked.connect(self.accept)
-        button_layout.addWidget(yes_button)
-        
-        button_layout.addStretch()
-        self.content_layout.addLayout(button_layout)
-
-class BackupRestoreMenuDialog(PopupDialog):
-    def __init__(self, parent=None):
-        super().__init__("Backup & Restore", parent)
-        self.setFixedSize(300, 200)
-
-        self.content_layout.setSpacing(10) # Add spacing between buttons
-
-        backup_button = QPushButton("Backup")
-        backup_button.setIcon(QIcon(get_asset_path("Backup.png")))
-        backup_button.setIconSize(QSize(24, 24))
-        backup_button.setStyleSheet("""
-            QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold; 
-                border-radius: 8px; padding: 10px 20px; border: 1px solid #c89f68;
-            }
-            QPushButton:hover { background-color: #d9b68b; border: 1px solid #d9b68b; }
-        """
-)
-        backup_button.clicked.connect(lambda: (self.accept(), self.parent().settings_handler.backup_profiles()))
-        self.content_layout.addWidget(backup_button)
-
-        restore_button = QPushButton("Restore")
-        restore_button.setIcon(QIcon(get_asset_path("Restore.png")))
-        restore_button.setIconSize(QSize(24, 24))
-        restore_button.setStyleSheet("""
-            QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold; 
-                border-radius: 8px; padding: 10px 20px; border: 1px solid #c89f68;
-            }
-            QPushButton:hover { background-color: #d9b68b; border: 1px solid #d9b68b; }
-        """
-)
-        restore_button.clicked.connect(lambda: (self.accept(), self.parent().settings_handler.restore_profiles()))
-        self.content_layout.addWidget(restore_button)
-
-        close_button = QPushButton("Close")
-        close_button.setStyleSheet("""
-            QPushButton {
-                background-color: #4f4a4b; color: #e0d6d1; font-weight: bold; 
-                border-radius: 8px; padding: 10px 20px; border: 1px solid #4f4a4b;
-            }
-            QPushButton:hover { background-color: #5a5556; border: 1px solid #c89f68; }
-        """
-)
-        close_button.clicked.connect(self.reject)
-        self.content_layout.addWidget(close_button)
-
 
 class AccountWidget(QWidget):
     selected = pyqtSignal(str)

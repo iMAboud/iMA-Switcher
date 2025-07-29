@@ -7,10 +7,6 @@ import shutil
 import subprocess 
 import threading 
 import logging 
-import requests
-from packaging.version import parse as parse_version
-
-import tempfile
 
 if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
     sys.path.append(str(Path(sys._MEIPASS)))
@@ -42,9 +38,7 @@ from ui_components import (
     LaunchNotificationWidget,
     InstallerDialog, 
     GameSelectionDialog,
-    RiotClientNotFoundDialog,
-    OptionsDialog,
-    BackupRestoreMenuDialog
+    RiotClientNotFoundDialog
 )
 from game_switcher import CustomUpdateEvent
 from actions_settings import SettingsActions
@@ -79,7 +73,7 @@ def run_installer():
         def install_thread():
             try:
                 install_path_p = Path(install_path)
-                install_path_p.mkdir(exist_ok=True)
+                install_path_p.mkdir(parents=True, exist_ok=True)
 
                 destination_exe_path = install_path_p / "iMA Switcher.exe"
                 shutil.copy2(current_exe, destination_exe_path)
@@ -99,21 +93,46 @@ def run_installer():
                 if dialog.should_add_desktop_shortcut():
                     desktop_path = Path.home() / "Desktop"
                     shortcut_path = desktop_path / "iMA Switcher.lnk"
-                    switcher_instance._create_shortcut(str(shortcut_path), str(destination_exe_path))
+                    if not switcher_instance._create_shortcut(str(shortcut_path), str(destination_exe_path)):
+                        logging.error("Failed to create desktop shortcut.")
 
                 if dialog.should_add_start_menu_shortcut():
                     start_menu_path = Path(os.getenv("APPDATA")) / "Microsoft" / "Windows" / "Start Menu" / "Programs"
                     shortcut_path = start_menu_path / "iMA Switcher.lnk"
-                    switcher_instance._create_shortcut(str(shortcut_path), str(destination_exe_path))
+                    if not switcher_instance._create_shortcut(str(shortcut_path), str(destination_exe_path)):
+                        logging.error("Failed to create Start Menu shortcut.")
 
                 subprocess.Popen([destination_exe_path])
                 QApplication.instance().quit()
 
-            except Exception as e:
+            except (IOError, OSError) as e:
                 logging.critical(
+                    f"Installation Error: File system operation failed: {e}"
+                )
+                QMessageBox.critical(
                     None,
                     "Installation Error",
-                    f"An error occurred during installation:\n{e}"
+                    f"A file system error occurred during installation:\n{e}"
+                )
+                QApplication.instance().quit()
+            except subprocess.CalledProcessError as e:
+                logging.critical(
+                    f"Installation Error: Subprocess failed: {e.cmd} -> {e.stderr}"
+                )
+                QMessageBox.critical(
+                    None,
+                    "Installation Error",
+                    f"A command failed during installation:\n{e.cmd}\n{e.stderr}"
+                )
+                QApplication.instance().quit()
+            except Exception as e:
+                logging.critical(
+                    f"Installation Error: An unexpected error occurred: {e}"
+                )
+                QMessageBox.critical(
+                    None,
+                    "Installation Error",
+                    f"An unexpected error occurred during installation:\n{e}"
                 )
                 QApplication.instance().quit()
 
@@ -126,13 +145,10 @@ def run_installer():
 
 
 class ModernValorantSwitcher(QMainWindow):
-    __version__ = "1.0.8"
     account_updated = pyqtSignal(str) # New signal
     status_message_requested = pyqtSignal(str)
     
     switch_account_finished = pyqtSignal(bool, str, str, QPixmap, str, str, str, bool)
-    update_available = pyqtSignal(str, str)
-    no_update_found = pyqtSignal(str)
     
     
     
@@ -168,8 +184,6 @@ class ModernValorantSwitcher(QMainWindow):
         self.status_message_requested.connect(self.status_label.setText)
         
         self.switch_account_finished.connect(self.on_switch_account_finished)
-        self.update_available.connect(self.on_update_available)
-        self.no_update_found.connect(self.on_no_update_found)
         
         
         
@@ -382,7 +396,7 @@ class ModernValorantSwitcher(QMainWindow):
         dialog.exec_()
 
     def open_options_dialog(self):
-        dialog = OptionsDialog(self.switcher, self, main_window=self) 
+        dialog = OptionsDialog(self.switcher, self)
         dialog.settings_applied.connect(self.load_accounts)
         dialog.exec_()
 
@@ -390,7 +404,7 @@ class ModernValorantSwitcher(QMainWindow):
         return {
             "Add Account": (self.settings_handler.add_account, "Add.png"),
             "Save Account": (self.settings_handler.save_current_account, "Save.png"),
-            "Backup & Restore": (lambda: BackupRestoreMenuDialog(self).exec_(), "Backup.png"),
+            "Backup | Restore": (self.settings_handler.backup_restore_profiles, "Backup.png"),
             "Open Folder": (self.settings_handler.open_profiles_folder, "Open.png"),
             "iMA Menu": (self.settings_handler.export_ima_menu, "ima.png"),
             "Options": (self.settings_handler.open_options_dialog, "Options.png"),
@@ -458,13 +472,8 @@ class ModernValorantSwitcher(QMainWindow):
                 use_rank_icons = ui_settings.get("use_rank_icons", False)
                 icon_path_to_use = self.switcher.get_icon_path_for_account(account_name, rank, use_rank_icons)
                 
-                # Asynchronously load the new icon
-                cached_icon = self.switcher.get_icon_from_cache(icon_path_to_use)
-                if cached_icon:
-                    icon = cached_icon
-                else:
-                    icon = self.switcher.get_placeholder_qicon()
-                    self.load_icon_async(account_name, icon_path_to_use)
+                # Synchronously load the new icon for immediate update
+                icon = self.switcher.get_qicon_from_path(icon_path_to_use)
 
                 self.account_widgets[account_name].update_data(account_name, icon, game, rank, in_game_name, in_game_tag, current_rr, last_game_rr, ui_settings)
                 self.update_window_size() # Recalculate window size if visibility of elements changed
@@ -665,23 +674,18 @@ class ModernValorantSwitcher(QMainWindow):
         elif not success:
             if "Riot Client not found" in message:
                 # Attempt automatic recovery first
-                self.status_label.setText("Riot Client not found. Attempting automatic recovery...")
-                QApplication.processEvents()
-                new_path = self.switcher._find_riot_client_path()
-                
-                if new_path and os.path.exists(new_path):
-                    self.status_label.setText(f"Found Riot Client at: {new_path}. Retrying switch...")
-                    QApplication.processEvents()
-                    self.switcher.set_riot_client_paths(new_path)
-                    self.switch_to_selected_account()  # Retry the switch
+                found_path = self.switcher._find_riot_client_path()
+                if found_path:
+                    self.switcher.set_riot_client_paths(found_path)
+                    self.status_label.setText("Riot Client path found automatically. Retrying switch...")
+                    self.switch_to_selected_account() # Retry switching
                 else:
-                    # If automatic recovery fails, show the dialog
-                    self.status_label.setText("Automatic recovery failed. Please locate Riot Client manually.")
+                    # If automatic recovery fails, show dialog for manual location
                     dialog = RiotClientNotFoundDialog(self)
                     if dialog.exec_() == QDialog.Accepted:
-                        manual_path = dialog.get_path()
-                        if manual_path and os.path.exists(manual_path):
-                            self.switcher.set_riot_client_paths(manual_path)
+                        new_path = dialog.get_path()
+                        if new_path and os.path.exists(new_path):
+                            self.switcher.set_riot_client_paths(new_path)
                             self.switch_to_selected_account() # Retry switching
             else:
                 self.status_label.setText(f"Failed to switch to '{name}'.")
@@ -695,140 +699,6 @@ class ModernValorantSwitcher(QMainWindow):
             except Exception as e:
                 logging.error(f"Could not create notification: {e}")
         self.refresh_accounts() # Refresh after any switch attempt
-
-    def check_for_updates(self):
-        """Checks GitHub for the latest release."""
-        self.status_label.setText("Checking for updates...")
-        # Show status in the options dialog as well
-        options_dialog = self.findChild(OptionsDialog)
-        if options_dialog:
-            options_dialog.check_for_update_button.setText("Checking...")
-            options_dialog.check_for_update_button.setEnabled(False)
-
-        # Run the check in a background thread
-        threading.Thread(target=self._update_check_thread, daemon=True).start()
-
-    def _update_check_thread(self):
-        try:
-            # IMPORTANT: Replace with your actual GitHub username and repository name
-            repo_url = "https://api.github.com/repos/iMAboud/iMA-Switcher/releases/latest"
-            
-            response = requests.get(repo_url, timeout=10)
-            response.raise_for_status()
-            release_data = response.json()
-            
-            latest_version_str = release_data['tag_name'].lstrip('v') # Remove 'v' prefix if it exists
-            latest_version = parse_version(latest_version_str)
-            current_version = parse_version(self.__version__)
-
-            if latest_version > current_version:
-                # Found a new version, pass info back to the main thread
-                download_url = None
-                for asset in release_data.get('assets', []):
-                    if asset['name'].endswith('.exe'): # Find the installer/app executable
-                        download_url = asset['browser_download_url']
-                        break
-                if download_url:
-                    self.update_available.emit(latest_version_str, download_url)
-                else:
-                    self.no_update_found.emit("Update found, but no .exe asset available.")
-            else:
-                self.no_update_found.emit("You have the latest version.")
-
-        except Exception as e:
-            logging.error(f"Update check failed: {e}")
-            self.no_update_found.emit("Error checking for updates.")
-
-    def on_update_available(self, version, url):
-        self.status_label.setText(f"Update {version} available!")
-        options_dialog = self.findChild(OptionsDialog)
-        if options_dialog:
-            options_dialog.update_status_label.setText(f"New version available: {version}")
-            options_dialog.check_for_update_button.setText(f"Update to {version}")
-            options_dialog.check_for_update_button.setEnabled(True)
-            # Disconnect the old check function and connect the download function
-            options_dialog.check_for_update_button.clicked.disconnect()
-            options_dialog.check_for_update_button.clicked.connect(lambda: self.download_and_apply_update(url))
-
-    def on_no_update_found(self, message):
-        self.status_label.setText(message)
-        options_dialog = self.findChild(OptionsDialog)
-        if options_dialog:
-            options_dialog.update_status_label.setText(message)
-            options_dialog.check_for_update_button.setText("Check for Update")
-            options_dialog.check_for_update_button.setEnabled(True)
-
-    def download_and_apply_update(self, url):
-        options_dialog = self.findChild(OptionsDialog)
-        if options_dialog:
-            options_dialog.check_for_update_button.setText("Downloading...")
-            options_dialog.check_for_update_button.setEnabled(False)
-        
-        # Run download in a background thread
-        threading.Thread(target=self._download_thread, args=(url,), daemon=True).start()
-
-    def _download_thread(self, url):
-        try:
-            # Download the new exe to a temporary file
-            response = requests.get(url, stream=True, timeout=300)
-            response.raise_for_status()
-            
-            temp_dir = tempfile.gettempdir()
-            new_exe_path = Path(temp_dir) / "iMA-Switcher.new.exe"
-
-            with open(new_exe_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-
-            # Now, create and run the update script
-            self.run_update_script(new_exe_path)
-
-        except Exception as e:
-            logging.error(f"Download failed: {e}")
-            self.no_update_found.emit("Error downloading update.") # Reuse signal to reset button
-
-    def run_update_script(self, new_exe_path):
-        current_exe_path = Path(sys.executable)
-        install_dir = current_exe_path.parent
-        
-        # Create a batch script to perform the update
-        script_content = f"""
-@echo on
-
-echo Waiting for iMA Switcher to close...
-ping -n 5 127.0.0.1 > NUL
-
-echo Attempting to replace application files...
-move /Y "{new_exe_path}" "{current_exe_path}" 2>&1
-IF %ERRORLEVEL% NEQ 0 (
-    echo ERROR: Failed to move new executable. Errorlevel: %ERRORLEVEL%
-    echo This might be due to permissions or the file being in use.
-    pause
-    exit /b %ERRORLEVEL%
-)
-
-echo Relaunching iMA Switcher...
-start "" "{current_exe_path}"
-
-echo Cleaning up update script...
-del "%~f0"
-
-exit /b 0
-"""
-        
-        script_path = Path(tempfile.gettempdir()) / "update_ima.bat"
-        try:
-            with open(script_path, "w") as f:
-                f.write(script_content)
-            
-            # Launch the script in a new process, completely detached
-            subprocess.Popen(["cmd.exe", "/c", str(script_path)], creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP, close_fds=True)
-            
-            # Close the current application
-            QApplication.instance().quit()
-        except Exception as e:
-            logging.error(f"Failed to launch update script: {e}")
-            self.no_update_found.emit("Error launching update process.")
 
     
 

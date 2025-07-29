@@ -5,7 +5,7 @@ import json
 import ctypes
 import sys
 import threading
-from zipfile import ZipFile
+from zipfile import ZipFile, BadZipFile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 import re
@@ -13,21 +13,10 @@ import time
 import tempfile
 import hashlib
 import winreg
+import pywintypes # For COM errors
 from pathlib import Path
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import QApplication, QMessageBox
 from PyQt5.QtCore import QEvent
-import logging
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-try:
-    from jsonschema import validate
-    from jsonschema.exceptions import ValidationError
-except ImportError:
-    validate = None
-    ValidationError = None
-    logging.warning("jsonschema not installed. Configuration validation will be skipped. Please install it with 'pip install jsonschema'")
-
 
 class CustomUpdateEvent(QEvent):
     EVENT_TYPE = QEvent.Type(QEvent.registerEventType())
@@ -41,14 +30,121 @@ except ImportError:
     requests = None
     logging.warning("'requests' library not installed. Rank fetching will not work. Please install it with 'pip install requests'")
 try:
-    from PIL import Image
+    from PIL import Image, UnidentifiedImageError
 except ImportError:
     Image = None
+    UnidentifiedImageError = None # Define it as None if PIL is not available
     logging.warning("Pillow not installed. Image conversion for icons will not work. Please install it with 'pip install Pillow'")
 
-from config_manager import ConfigManager
+import logging
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+from jsonschema import validate, ValidationError
 
 class GameSwitcher:
+    CONFIG_SCHEMA = {
+        "type": "object",
+        "properties": {
+            "output_dir": {"type": ["string", "null"]},
+            "title": {"type": "string"},
+            "menu_icon_path": {"type": "string"},
+            "ordered_accounts": {"type": "array", "items": {"type": "string"}},
+            "last_switched_account": {"type": ["string", "null"]},
+            "riot_client_exe_path": {"type": ["string", "null"]},
+            "last_graphics_settings_hash": {"type": ["string", "null"]},
+            "ui_settings": {
+                "type": "object",
+                "properties": {
+                    "show_game_icons": {"type": "boolean"},
+                    "show_rank_tips": {"type": "boolean"},
+                    "tip_delay": {"type": "number"},
+                    "use_rank_icons": {"type": "boolean"},
+                    "show_rank_icon_left": {"type": "boolean"},
+                    "show_name_tag": {"type": "boolean"},
+                    "auto_rank_update": {"type": "boolean"},
+                    "rank_check_region": {"type": "string"},
+                    "grid_size": {"type": "integer"},
+                    "orientation": {"type": "string"},
+                    "show_current_rr": {"type": "boolean"},
+                    "show_last_game_rr": {"type": "boolean"}
+                },
+                "required": [
+                    "show_game_icons", "show_rank_tips", "tip_delay", "use_rank_icons",
+                    "show_rank_icon_left", "show_name_tag", "auto_rank_update",
+                    "rank_check_region", "grid_size", "orientation",
+                    "show_current_rr", "show_last_game_rr"
+                ],
+                "additionalProperties": False
+            },
+            "graphics_settings": {
+                "type": "object",
+                "properties": {
+                    "display_mode": {"type": "string"},
+                    "quality": {"type": "object"},
+                    "riot_settings": {"type": "object"},
+                    "audio_settings": {"type": "object"}
+                },
+                "required": ["display_mode", "quality", "riot_settings", "audio_settings"],
+                "additionalProperties": False
+            },
+            "app_install_path": {"type": "string"},
+            # These are present at the top level in the provided config.json instance,
+            # but ideally should only be nested under graphics_settings.
+            # Adding them here to pass validation for the current config.json structure.
+            "display_mode": {"type": "string"},
+            "quality": {"type": "object"},
+            "riot_settings": {"type": "object"},
+            "audio_settings": {"type": "object"}
+        },
+        "required": [
+            "output_dir",
+            "title",
+            "menu_icon_path",
+            "ordered_accounts",
+            "last_switched_account",
+            "riot_client_exe_path",
+            "last_graphics_settings_hash",
+            "ui_settings",
+            "graphics_settings",
+            "app_install_path"
+        ],
+        "additionalProperties": False
+    }
+    DEFAULT_CONFIG = {
+        "output_dir": None,
+        "title": "Valorant",
+        "menu_icon_path": "",
+        "ordered_accounts": [],
+        "last_switched_account": None,
+        "riot_client_exe_path": None,
+        "last_graphics_settings_hash": None,
+        "ui_settings": {
+            "show_game_icons": True,
+            "show_rank_tips": True,
+            "tip_delay": 1.0,
+            "use_rank_icons": False,
+            "show_rank_icon_left": True,
+            "show_name_tag": True,
+            "auto_rank_update": True,
+            "rank_check_region": "eu",
+            "grid_size": 4,
+            "orientation": "vertical",
+            "show_current_rr": True,
+            "show_last_game_rr": True
+        },
+        "graphics_settings": {
+            "display_mode": "Default",
+            "quality": {
+                "sg.ViewDistanceQuality": 3, "sg.AntiAliasingQuality": 3, "sg.ShadowQuality": 3,
+                "sg.PostProcessQuality": 3, "sg.TextureQuality": 3, "sg.EffectsQuality": 3,
+                "sg.FoliageQuality": 3, "sg.ShadingQuality": 3
+            },
+            "riot_settings": {},
+            "audio_settings": {}
+        },
+        "app_install_path": ""
+    }
     def __init__(self, base_directory=None):
         logging.debug("GameSwitcher: Initializing")
         self.app_data_path = os.getenv('LOCALAPPDATA')
@@ -61,11 +157,12 @@ class GameSwitcher:
         
         # Persistent directory for user profiles and configuration
         self.user_data_dir = Path(self.app_data_path) / "iMA Switcher"
-        self.config_manager = ConfigManager(self.user_data_dir)
-        self.config = self.config_manager.get_config()
         
         self.profiles_dir = self.user_data_dir / "profiles"
+        self.config_path = self.user_data_dir / "config.json"
         
+        # Initialize config once at startup
+        self.config = self._load_config()
         self._account_game_configs_cache = {}
         self._icon_cache = {}
         self.switch_counter = 0
@@ -97,7 +194,7 @@ class GameSwitcher:
             try:
                 shutil.rmtree(crash_report_path)
                 logging.info(f"Successfully cleaned up {crash_report_path}")
-            except Exception as e:
+            except OSError as e:
                 logging.error(f"Failed to clean up {crash_report_path}: {e}")
 
         # Clean up log files
@@ -108,19 +205,70 @@ class GameSwitcher:
                     try:
                         (logs_path / filename).unlink()
                         logging.info(f"Successfully deleted log file: {filename}")
-                    except Exception as e:
+                    except OSError as e:
                         logging.error(f"Failed to delete log file {filename}: {e}")
 
     def is_admin(self):
         try: return ctypes.windll.shell32.IsUserAnAdmin()
-        except: return False
+        except pywintypes.error as e:
+            logging.error(f"Error checking admin privileges: {e}")
+            return False
+        except Exception as e:
+            logging.error(f"An unexpected error occurred while checking admin privileges: {e}")
+            return False
+
+    def _load_config(self, force_reload=False):
+        # Recursively update config with loaded values
+        def deep_update(target, source):
+            for k, v in source.items():
+                if isinstance(v, dict) and k in target and isinstance(target[k], dict):
+                    target[k] = deep_update(target[k], v)
+                else:
+                    target[k] = v
+            return target
+
+        config = self.DEFAULT_CONFIG.copy()
+        if self.config_path.exists():
+            try:
+                with open(self.config_path, 'r', encoding='utf-8') as f:
+                    loaded_config = json.load(f)
+                    
+                config = deep_update(config, loaded_config)
+
+                # Validate the merged config against the schema
+                validate(instance=config, schema=self.CONFIG_SCHEMA)
+
+            except FileNotFoundError:
+                logging.warning(f"config.json not found at {self.config_path}. Using defaults.")
+                QMessageBox.critical(None, "Configuration Error", "config.json not found. Using default settings.")
+            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                logging.warning(f"config.json is corrupted or has encoding issues. Using defaults. Error: {e}")
+                QMessageBox.critical(None, "Configuration Error", f"Your config.json file is corrupted or unreadable. Using default settings. Error: {e}")
+            except ValidationError as e:
+                logging.warning(f"config.json validation failed. Using defaults. Error: {e.message}")
+                QMessageBox.critical(None, "Configuration Error", f"Your config.json file is invalid: {e.message}. Using default settings.")
+            except Exception as e:
+                logging.error(f"An unexpected error occurred while loading config: {e}")
+                QMessageBox.critical(None, "Configuration Error", f"An unexpected error occurred while loading config: {e}. Using default settings.")
+        return config
+
+    def _save_config(self):
+        try:
+            with self.config_path.open('w', encoding='utf-8') as f:
+                json.dump(self.config, f, indent=4, ensure_ascii=False)
+        except IOError as e:
+            logging.error(f"Failed to save config to {self.config_path}: {e}")
+            QMessageBox.critical(None, "Save Error", f"Failed to save configuration: {e}")
+        except Exception as e:
+            logging.error(f"An unexpected error occurred while saving config: {e}")
+            QMessageBox.critical(None, "Save Error", f"An unexpected error occurred while saving configuration: {e}")
 
     def get_ima_config(self):
-        return self.config_manager.get_config()
+        return self.config
 
     def set_ima_config(self, settings):
-        self.config_manager.update_config(settings)
-        self.config = self.config_manager.get_config()
+        self.config.update(settings)
+        self._save_config()
 
     def initialize_riot_client_paths(self, riot_client_exe_path=None):
 
@@ -147,8 +295,10 @@ class GameSwitcher:
                         return exe_path
         except FileNotFoundError:
             pass  # Key not found, continue
-        except Exception as e:
+        except OSError as e: # Catching OSError for registry access issues
             logging.error(f"Error reading registry for uninstall info: {e}")
+        except Exception as e:
+            logging.error(f"An unexpected error occurred while reading registry for uninstall info: {e}")
 
         try:
             # Check the Riot Games key
@@ -159,8 +309,43 @@ class GameSwitcher:
                     return exe_path
         except FileNotFoundError:
             pass  # Key not found, continue
-        except Exception as e:
+        except OSError as e: # Catching OSError for registry access issues
             logging.error(f"Error reading registry for Riot Games info: {e}")
+        except Exception as e:
+            logging.error(f"An unexpected error occurred while reading registry for Riot Games info: {e}")
+
+        return None
+
+    def _find_riot_client_from_registry(self):
+        try:
+            # Check the uninstall information
+            uninstall_key_path = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Riot Game valorant.live"
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, uninstall_key_path) as key:
+                install_location, _ = winreg.QueryValueEx(key, "InstallLocation")
+                if install_location and os.path.isdir(install_location):
+                    exe_path = os.path.join(install_location, "RiotClientServices.exe")
+                    if os.path.exists(exe_path):
+                        return exe_path
+        except FileNotFoundError:
+            pass  # Key not found, continue
+        except OSError as e:
+            logging.error(f"Error reading registry for uninstall info: {e}")
+        except Exception as e:
+            logging.error(f"An unexpected error occurred while reading registry for uninstall info: {e}")
+
+        try:
+            # Check the Riot Games key
+            riot_games_key_path = r"SOFTWARE\Riot Games\Riot Client"
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, riot_games_key_path) as key:
+                exe_path, _ = winreg.QueryValueEx(key, "ExecutablePath")
+                if exe_path and os.path.exists(exe_path):
+                    return exe_path
+        except FileNotFoundError:
+            pass  # Key not found, continue
+        except OSError as e:
+            logging.error(f"Error reading registry for Riot Games info: {e}")
+        except Exception as e:
+            logging.error(f"An unexpected error occurred while reading registry for Riot Games info: {e}")
 
         return None
 
@@ -188,19 +373,37 @@ class GameSwitcher:
 
     def set_riot_client_paths(self, exe_path):
         self.initialize_riot_client_paths(exe_path)
-        self.set_ima_config({"riot_client_exe_path": exe_path})
+        if self.config is None:
+            self.config = self._load_config() 
+        self.config["riot_client_exe_path"] = exe_path
+        self._save_config()
 
     def _get_account_path(self, account_name): return self.profiles_dir / account_name
 
     def _terminate_processes(self):
         all_processes = self.GAMES['valorant']["processes_to_kill"] + self.GAMES['lol']["processes_to_kill"]
         for exe in all_processes:
-            subprocess.run(f"taskkill /f /im {exe}", shell=True, capture_output=True, text=True)
+            try:
+                subprocess.run(f"taskkill /f /im {exe}", shell=True, check=True, capture_output=True, text=True)
+            except subprocess.CalledProcessError as e:
+                logging.debug(f"Process {exe} not running or could not be terminated: {e.stderr.strip()}")
+            except Exception as e:
+                logging.error(f"Error terminating process {exe}: {e}")
 
     def _create_junction(self, source, link_name):
         startupinfo = subprocess.STARTUPINFO()
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        subprocess.run(['cmd', '/c', 'mklink', '/J', link_name, source], check=True, startupinfo=startupinfo, capture_output=True, text=True)
+        try:
+            subprocess.run(['cmd', '/c', 'mklink', '/J', link_name, source], check=True, startupinfo=startupinfo, capture_output=True, text=True)
+        except subprocess.CalledProcessError as e:
+            logging.error(f"Failed to create junction from {source} to {link_name}: {e.stderr.strip()}")
+            raise
+        except FileNotFoundError:
+            logging.error("mklink command not found. Ensure cmd.exe is in your PATH.")
+            raise
+        except Exception as e:
+            logging.error(f"An unexpected error occurred while creating junction: {e}")
+            raise
 
     def _remove_junction_or_dir(self, path):
         logging.debug(f"Attempting to remove: {path}")
@@ -351,7 +554,8 @@ class GameSwitcher:
             self.fetch_and_update_rank_data(account_name, False, on_update_callback)
 
         # Update the last switched account in the config
-        self.set_ima_config({"last_switched_account": account_name})
+        self.config["last_switched_account"] = account_name
+        self._save_config()
 
     def switch_account(self, account_name, selected_game=None, on_update_callback=None):
         if not self.is_admin():
@@ -371,50 +575,52 @@ class GameSwitcher:
         self._terminate_processes()
 
         backup_paths = {}
-        created_junctions = []
-
         try:
-            # Backup phase
+            # 1. Backup phase: Rename existing directories/junctions
             for item_name in self.riot_games_config["LoginData"].keys():
                 riot_item_path = self.riot_client_data_path / item_name
-                riot_item_backup_path = self.riot_client_data_path / f"{item_name}.bak"
+                backup_path = self.riot_client_data_path / f"{item_name}.bak"
                 
-                if riot_item_backup_path.exists():
-                    self._remove_junction_or_dir(riot_item_backup_path)
+                if riot_item_path.is_symlink() or riot_item_path.exists():
+                    if backup_path.is_symlink() or backup_path.exists():
+                        self._remove_junction_or_dir(backup_path)
+                    riot_item_path.rename(backup_path)
+                    backup_paths[item_name] = backup_path
 
-                if riot_item_path.exists():
-                    riot_item_path.rename(riot_item_backup_path)
-                    backup_paths[item_name] = riot_item_backup_path
-
-            # Attempt phase
+            # 2. Attempt phase: Create new junctions
             for item_name in self.riot_games_config["LoginData"].keys():
                 riot_item_path = self.riot_client_data_path / item_name
                 profile_item_path = account_path / item_name
+                
                 if profile_item_path.exists():
                     self._create_junction(str(profile_item_path), str(riot_item_path))
-                    created_junctions.append(riot_item_path)
 
-            # Commit phase: If successful, delete backups
-            for bak_path in backup_paths.values():
-                self._remove_junction_or_dir(bak_path)
+            # 3. Commit phase: Delete backups
+            for backup_path in backup_paths.values():
+                if backup_path.is_symlink() or backup_path.exists():
+                    self._remove_junction_or_dir(backup_path)
 
         except Exception as e:
-            # Rollback phase
-            for junction_path in created_junctions:
-                self._remove_junction_or_dir(junction_path)
+            # 4. Rollback phase
+            logging.error(f"Account switch failed, rolling back. Error: {e}")
+            for item_name, backup_path in backup_paths.items():
+                riot_item_path = self.riot_client_data_path / item_name
+                
+                # Clean up the failed/partial new junction/directory
+                if riot_item_path.is_symlink() or riot_item_path.exists():
+                    self._remove_junction_or_dir(riot_item_path)
+                
+                # Restore from backup
+                if backup_path.is_symlink() or backup_path.exists():
+                    backup_path.rename(riot_item_path)
             
-            for bak_path in backup_paths.values():
-                original_path = Path(str(bak_path).replace(".bak", ""))
-                if bak_path.exists():
-                    bak_path.rename(original_path)
-            
-            return False, f"Failed to switch account: {e}\nChanges have been rolled back.", None
+            return False, f"Failed to create junction: {e}\nYour previous configuration has been restored.", None
 
         try:
             launch_args = self.GAMES[game]["launch_args"].split()
             command = [self.riot_games_config["ExeLocationDefault"]] + launch_args
             
-            creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
+            creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
             subprocess.Popen(command, creationflags=creationflags, close_fds=True)
 
             # Run post-switch tasks in a background thread
@@ -489,8 +695,9 @@ class GameSwitcher:
             else:
                 shutil.copy(source_icon_path, dest_icon_path)
             # Invalidate cache for this icon
-            if dest_icon_path in self._icon_cache:
-                del self._icon_cache[dest_icon_path]
+            resolved_dest_icon_path = str(dest_icon_path.resolve())
+            if resolved_dest_icon_path in self._icon_cache:
+                del self._icon_cache[resolved_dest_icon_path]
             self.update_ima_menu_if_enabled('update', account_name)
             return True
         except Exception as e:
@@ -504,8 +711,9 @@ class GameSwitcher:
             try:
                 icon_path.unlink()
                 # Invalidate cache for this icon
-                if icon_path in self._icon_cache:
-                    del self._icon_cache[icon_path]
+                resolved_icon_path = str(icon_path.resolve())
+                if resolved_icon_path in self._icon_cache:
+                    del self._icon_cache[resolved_icon_path]
                 self.update_ima_menu_if_enabled('update', account_name)
                 return True
             except Exception as e:
@@ -575,9 +783,9 @@ class GameSwitcher:
             if os.path.exists(pythonw_path):
                 target_path = pythonw_path
             main_script_path = os.path.abspath(os.path.join(self.base_dir, "main.pyw"))
-            arguments = f'"""{main_script_path}""" --switch """{account_name}"""'
+            arguments = f'"{main_script_path}" --switch "{account_name}"'
         else:
-            arguments = f'--switch """{account_name}"""'
+            arguments = f'--switch "{account_name}"'
 
         _game, _rank, _in_game_name, _in_game_tag, _current_rr, _last_game_rr = self.get_account_game(account_name)
         description = f"Launch {_game.capitalize()} with {account_name} account"
@@ -625,7 +833,7 @@ class GameSwitcher:
                 user_data_backup_path = temp_dir_path / "UserData"
                 user_data_backup_path.mkdir()
                 shutil.copytree(self.profiles_dir, user_data_backup_path / "profiles")
-                shutil.copy2(self.config_manager.config_path, user_data_backup_path / "config.json")
+                shutil.copy2(self.config_path, user_data_backup_path / "config.json")
 
                 # 2. Copy Riot Games and VALORANT data to a 'RiotData' folder in temp_dir
                 riot_data_backup_path = temp_dir_path / "RiotData"
@@ -661,9 +869,8 @@ class GameSwitcher:
                     # Restore config.json, overwriting if it exists
                     backup_config_path = user_data_source / "config.json"
                     if backup_config_path.exists():
-                        with open(backup_config_path, 'r') as f:
-                            new_config_data = json.load(f)
-                        self.set_ima_config(new_config_data)
+                        shutil.copy2(backup_config_path, self.config_path)
+                        self.config = self._load_config(force_reload=True)
 
                     # Restore profiles by merging
                     backup_profiles_dir = user_data_source / "profiles"
@@ -784,8 +991,8 @@ class GameSwitcher:
                 rank_index = rank_order.index(rank) if rank in rank_order else 0
                 tip_arg = f" tip=['{rank}', tip.info, {tip_delay}]"
             
-            cmd_executable = f'"""{main_app_path}"""'
-            cmd_args = f'--switch """{account_name}"""'
+            cmd_executable = f'"{main_app_path}"'
+            cmd_args = f'--switch "{account_name}"'
             item_line = f"    item(title='{account_name}'{tip_arg} cmd='{cmd_executable}' args='{cmd_args}'{item_icon_arg})"
             script_content.append(item_line)
             
@@ -852,7 +1059,12 @@ class GameSwitcher:
         return self.config["graphics_settings"]
 
     def save_graphics_settings(self, settings):
-        self.set_ima_config(settings)
+        # Extract ui_settings if present
+        ui_settings = settings.pop("ui_settings", None)
+        if ui_settings is not None:
+            self.config["ui_settings"] = ui_settings
+        self.config["graphics_settings"] = settings
+        self._save_config()
 
     def _get_global_game_user_settings_from_file(self):
         ini_files = self._find_game_user_settings_files()
@@ -1012,7 +1224,8 @@ class GameSwitcher:
                     all_success = False
         
         if all_success:
-            self.set_ima_config({"last_graphics_settings_hash": current_hash})
+            self.config["last_graphics_settings_hash"] = current_hash
+            self._save_config()
 
         return all_success, None if all_success else "One or more files failed to update."
 
