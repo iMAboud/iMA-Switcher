@@ -53,6 +53,7 @@ class GameSwitcher:
             "last_switched_account": {"type": ["string", "null"]},
             "riot_client_exe_path": {"type": ["string", "null"]},
             "last_graphics_settings_hash": {"type": ["string", "null"]},
+            "ima_menu_path": {"type": ["string", "null"]},
             "ui_settings": {
                 "type": "object",
                 "properties": {
@@ -98,7 +99,6 @@ class GameSwitcher:
             "audio_settings": {"type": "object"}
         },
         "required": [
-            "output_dir",
             "title",
             "menu_icon_path",
             "ordered_accounts",
@@ -112,13 +112,13 @@ class GameSwitcher:
         "additionalProperties": False
     }
     DEFAULT_CONFIG = {
-        "output_dir": None,
         "title": "Valorant",
         "menu_icon_path": "",
         "ordered_accounts": [],
         "last_switched_account": None,
         "riot_client_exe_path": None,
         "last_graphics_settings_hash": None,
+        "ima_menu_path": None,
         "ui_settings": {
             "show_game_icons": True,
             "show_rank_tips": True,
@@ -906,7 +906,14 @@ class GameSwitcher:
 
     def update_ima_menu_if_enabled(self, action, name=None, old_name=None):
         ima_config = self.get_ima_config()
-        if not ima_config.get("output_dir"): return
+        ima_menu_path_str = ima_config.get("ima_menu_path")
+        if not ima_menu_path_str: return
+
+        ima_menu_path = Path(ima_menu_path_str)
+        output_dir = ima_menu_path / "imports"
+        if not output_dir.exists():
+            logging.warning(f"iMA Menu imports directory not found at {output_dir}. Auto-update skipped.")
+            return
         
         logging.info(f"iMA Auto-Update: Action='{action}', Name='{name}'")
         
@@ -923,15 +930,47 @@ class GameSwitcher:
         
         try:
             self.generate_ima_menu_script(
-                output_dir=ima_config["output_dir"],
+                output_dir=str(output_dir),
                 title=ima_config["title"],
                 ordered_accounts=ima_config["ordered_accounts"],
                 menu_icon_path=ima_config.get("menu_icon_path", ""),
                 save_config=False  
             )
-            logging.info("Auto-update of valo.nss successful.")
+            self.update_ima_shell_script(ima_menu_path)
+            logging.info("Auto-update of valo.nss and shell.nss successful.")
         except Exception as e:
             logging.error(f"Automatic iMA menu update failed: {e}")
+
+    def update_ima_shell_script(self, ima_menu_path):
+        shell_nss_path = Path(ima_menu_path) / 'shell.nss'
+        import_line = "import 'imports/valo.nss'"
+
+        if not shell_nss_path.exists():
+            logging.error(f"shell.nss not found at {shell_nss_path}")
+            return False, f"shell.nss not found at the specified path."
+
+        try:
+            with open(shell_nss_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            
+            # Check if the import line already exists
+            if any(import_line in line for line in lines):
+                logging.info(f"'{import_line}' already exists in {shell_nss_path}. No changes needed.")
+                return True, "Import already exists."
+
+            # Add the import line at the end
+            with open(shell_nss_path, 'a', encoding='utf-8') as f:
+                f.write(f'\n{import_line}')
+            
+            logging.info(f"Successfully added '{import_line}' to {shell_nss_path}")
+            return True, "Successfully updated shell.nss."
+
+        except IOError as e:
+            logging.error(f"Error reading/writing shell.nss: {e}")
+            return False, f"Error accessing shell.nss: {e}"
+        except Exception as e:
+            logging.error(f"An unexpected error occurred while updating shell.nss: {e}")
+            return False, f"An unexpected error occurred: {e}"
 
     def generate_ima_menu_script(self, output_dir, title, ordered_accounts, menu_icon_path="", save_config=False):
         if save_config:

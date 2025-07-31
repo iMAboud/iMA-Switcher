@@ -2,7 +2,11 @@ import os
 import threading
 import logging
 from PyQt5.QtWidgets import QMessageBox, QFileDialog, QDialog
-from ui_components import SaveAccountDialog, ExportIMAMenuDialog, OptionsDialog, CustomMessageDialog, ConfirmDeleteDialog, BackupRestoreDialog, BackupRestoreSelectionDialog
+from ui_components import (
+    SaveAccountDialog, ExportIMAMenuDialog, OptionsDialog, 
+    CustomMessageDialog, ConfirmDeleteDialog, BackupRestoreDialog, 
+    BackupRestoreSelectionDialog, IMAMenuPathDialog
+)
 from google_drive_api import GoogleDriveAPI
 import tempfile
 from pathlib import Path
@@ -40,10 +44,13 @@ class SettingsActions:
         self.parent.add_account_finished.emit(success)
 
     def backup_restore_profiles(self):
-        dialog = BackupRestoreSelectionDialog(self.parent)
-        dialog.backup_requested.connect(self._handle_backup_selection)
-        dialog.restore_requested.connect(self._handle_restore_selection)
-        dialog.exec_()
+        selection_dialog = BackupRestoreSelectionDialog(self.parent)
+        if selection_dialog.exec_() == QDialog.Accepted:
+            selection = selection_dialog.get_selection()
+            if selection == "backup":
+                self._handle_backup_selection()
+            elif selection == "restore":
+                self._handle_restore_selection()
 
     def _handle_backup_selection(self):
         dialog = BackupRestoreDialog(self.parent, mode='backup')
@@ -53,6 +60,54 @@ class SettingsActions:
                 self._backup_local()
             elif backup_type == "google_drive":
                 self._backup_google_drive()
+
+    def _backup_local(self):
+        backup_filename = f"{self.switcher.get_backup_filename()}.zip"
+        path, _ = QFileDialog.getSaveFileName(self.parent, "Save Backup", backup_filename, "ZIP Files (*.zip)")
+        if path:
+            if self.switcher.backup_profiles(path):
+                msg_dialog = CustomMessageDialog("Backup Successful", "Profiles backed up locally.", self.parent)
+                msg_dialog.exec_()
+                logging.info(f"Profiles backed up to {path}")
+            else:
+                self.parent.status_label.setText("Backup failed.")
+                logging.error(f"Failed to backup profiles to {path}")
+
+    def _backup_google_drive(self):
+        temp_file_path = None
+        try:
+            backup_filename_base = self.switcher.get_backup_filename()
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as temp_file:
+                temp_file_path = temp_file.name
+            
+            if self.switcher.backup_profiles(temp_file_path):
+                drive_api = GoogleDriveAPI(self.switcher.user_data_dir)
+                backup_filename_zip = f"{backup_filename_base}.zip"
+                drive_api.upload_file(temp_file_path, backup_filename_zip)
+                
+                msg_dialog = CustomMessageDialog("Backup Successful", "Profiles backed up to Google Drive.", self.parent)
+                msg_dialog.exec_()
+                logging.info(f"Profiles backed up to Google Drive: {backup_filename_zip}")
+            else:
+                self.parent.status_label.setText("Backup failed.")
+                logging.error("Failed to create backup file.")
+                QMessageBox.critical(self.parent, "Backup Failed", "Could not create the backup file.")
+
+        except (IOError, ConnectionAbortedError) as e:
+            self.parent.status_label.setText("Google Drive backup failed.")
+            logging.error(f"Google Drive backup failed: {e}")
+            QMessageBox.critical(self.parent, "Google Drive Error", str(e))
+        except Exception as e:
+            self.parent.status_label.setText("Google Drive backup failed.")
+            logging.error(f"An unexpected error occurred during Google Drive backup: {e}")
+            QMessageBox.critical(self.parent, "Google Drive Error", f"An unexpected error occurred: {e}")
+        finally:
+            if temp_file_path and Path(temp_file_path).exists():
+                try:
+                    Path(temp_file_path).unlink()
+                    logging.info(f"Successfully cleaned up temp file: {temp_file_path}")
+                except OSError as e:
+                    logging.error(f"Failed to clean up temp file {temp_file_path}: {e}")
 
     def _handle_restore_selection(self):
         dialog = BackupRestoreDialog(self.parent, mode='restore')
@@ -130,31 +185,66 @@ class SettingsActions:
             return
 
         ima_config = self.switcher.get_ima_config()
-        if not ima_config.get("menu_icon_path"):
-            default_ico = Path(r"C:\Program Files\iMA Menu\icons\valorant.ico")
-            if default_ico.exists(): ima_config["menu_icon_path"] = str(default_ico)
 
+        # Dialog to get settings from user
         dialog = ExportIMAMenuDialog(accounts_data, self.parent, default_settings=ima_config)
-        
-        if dialog.exec_() == QDialog.Accepted:
-            settings = dialog.get_settings()
-            output_dir = ima_config.get("output_dir") or r"C:\Program Files\iMA Menu\imports"
-            if not Path(output_dir).is_dir():
-                output_dir = QFileDialog.getExistingDirectory(self.parent, "Could not find default iMA Menu path. Please locate the 'imports' folder.")
-                if not output_dir: return
-            if not output_dir: return # Added this line to handle cancellation
-            try:
-                self.switcher.generate_ima_menu_script(**settings, output_dir=output_dir, save_config=True)
-                msg_dialog = CustomMessageDialog("Export Successful", "Accounts added to iMA Menu", self.parent)
-                msg_dialog.exec_()
-                self.parent.load_accounts() # Refresh accounts in UI after export
-                logging.info(f"Successfully exported iMA Menu script to {output_dir}")
-            except (IOError, OSError) as e:
-                logging.error(f"An error occurred during iMA Menu export: {e}")
-                QMessageBox.critical(self.parent, "Export Failed", f"An error occurred during export: {e}")
-            except Exception as e:
-                logging.error(f"An unexpected error occurred during iMA Menu export: {e}")
-                QMessageBox.critical(self.parent, "Export Failed", f"An unexpected error occurred: {e}")
+        if dialog.exec_() != QDialog.Accepted:
+            return
+
+        settings = dialog.get_settings()
+
+        # Determine and validate iMA Menu path
+        ima_menu_path_str = ima_config.get("ima_menu_path") or r"C:\Program Files\iMA Menu"
+        ima_menu_path = Path(ima_menu_path_str)
+
+        if not (ima_menu_path / "shell.nss").exists():
+            path_dialog = IMAMenuPathDialog(self.parent, default_path=ima_menu_path_str)
+            if path_dialog.exec_() == QDialog.Accepted:
+                new_path_str = path_dialog.get_path()
+                if not new_path_str or not (Path(new_path_str) / "shell.nss").exists():
+                    QMessageBox.critical(self.parent, "Path Error", "The selected path is invalid or does not contain shell.nss.")
+                    return
+                ima_menu_path = Path(new_path_str)
+            else:
+                return # User cancelled
+
+        # All checks passed, now save all settings together
+        self.switcher.set_ima_config({
+            "title": settings["title"],
+            "menu_icon_path": settings["menu_icon_path"],
+            "ordered_accounts": settings["ordered_accounts"],
+            "ima_menu_path": str(ima_menu_path) # Save the validated path
+        })
+
+        output_dir = ima_menu_path / "imports"
+        output_dir.mkdir(exist_ok=True)
+
+        try:
+            # Generate the valo.nss script
+            self.switcher.generate_ima_menu_script(
+                output_dir=str(output_dir), 
+                title=settings["title"], 
+                ordered_accounts=settings["ordered_accounts"], 
+                menu_icon_path=settings["menu_icon_path"], 
+                save_config=False # Config is already saved
+            )
+            
+            # Update the shell.nss script
+            success, message = self.switcher.update_ima_shell_script(ima_menu_path)
+            if not success:
+                QMessageBox.warning(self.parent, "Shell Script Warning", message)
+
+            msg_dialog = CustomMessageDialog("Export Successful", "Accounts added to iMA Menu", self.parent)
+            msg_dialog.exec_()
+            self.parent.load_accounts() # Refresh accounts in UI after export
+            logging.info(f"Successfully exported iMA Menu script to {output_dir}")
+
+        except (IOError, OSError) as e:
+            logging.error(f"An error occurred during iMA Menu export: {e}")
+            QMessageBox.critical(self.parent, "Export Failed", f"An error occurred during export: {e}")
+        except Exception as e:
+            logging.error(f"An unexpected error occurred during iMA Menu export: {e}")
+            QMessageBox.critical(self.parent, "Export Failed", f"An unexpected error occurred: {e}")
 
     def open_options_dialog(self):
         self.options_dialog = OptionsDialog(self.switcher, self.parent)

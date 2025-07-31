@@ -330,6 +330,13 @@ class ExportIMAMenuDialog(QDialog):
         self.icon_path_edit = QLineEdit(self.menu_icon_path)
         self.icon_path_edit.setPlaceholderText("Optional: Select an icon for the main menu")
         browse_button = QPushButton("Browse...")
+        browse_button.setStyleSheet("""
+            QPushButton {
+                background-color: #c89f68; color: #2c2a2b; font-weight: bold;
+                border-radius: 8px; padding: 10px; border: none;
+            }
+            QPushButton:hover { background-color: #d9b68b; }
+        """)
         browse_button.clicked.connect(self.select_icon)
         icon_layout.addWidget(self.icon_path_edit)
         icon_layout.addWidget(browse_button)
@@ -632,12 +639,10 @@ class SaveAccountDialog(PopupDialog):
         return self.name_edit.text().strip(), self.game_combo.currentData(), self.in_game_name_edit.text().strip(), self.in_game_tag_edit.text().strip()
 
 class BackupRestoreSelectionDialog(PopupDialog):
-    backup_requested = pyqtSignal()
-    restore_requested = pyqtSignal()
-
     def __init__(self, parent=None):
         super().__init__("Backup and Restore", parent)
         self.setFixedSize(350, 200)
+        self.selection = None
 
         self.content_layout.setSpacing(15)
         self.content_layout.setAlignment(Qt.AlignCenter)
@@ -653,8 +658,7 @@ class BackupRestoreSelectionDialog(PopupDialog):
         """)
         backup_button.setIcon(QIcon(get_asset_path("Backup.png")))
         backup_button.setIconSize(QSize(24, 24))
-        backup_button.clicked.connect(self.backup_requested.emit)
-        backup_button.clicked.connect(self.accept)
+        backup_button.clicked.connect(lambda: self._set_selection_and_accept("backup"))
         self.content_layout.addWidget(backup_button)
 
         restore_button = QPushButton("Restore")
@@ -668,9 +672,15 @@ class BackupRestoreSelectionDialog(PopupDialog):
         """)
         restore_button.setIcon(QIcon(get_asset_path("Restore.png")))
         restore_button.setIconSize(QSize(24, 24))
-        restore_button.clicked.connect(self.restore_requested.emit)
-        restore_button.clicked.connect(self.accept)
+        restore_button.clicked.connect(lambda: self._set_selection_and_accept("restore"))
         self.content_layout.addWidget(restore_button)
+
+    def _set_selection_and_accept(self, selection):
+        self.selection = selection
+        self.accept()
+
+    def get_selection(self):
+        return self.selection
 
 class BackupRestoreDialog(PopupDialog):
     def __init__(self, parent=None, mode='backup'):
@@ -1268,20 +1278,6 @@ class OptionsDialog(PopupDialog):
         success, message = self.switcher.update_all_game_user_settings(settings_to_save)
         self.switcher.update_ima_menu_if_enabled('update', None)
         
-        ima_config = self.switcher.get_ima_config()
-        if ima_config.get("output_dir"):
-            try:
-                self.switcher.generate_ima_menu_script(
-                    output_dir=ima_config["output_dir"],
-                    title=ima_config["title"],
-                    ordered_accounts=ima_config["ordered_accounts"],
-                    menu_icon_path=ima_config.get("menu_icon_path", ""),
-                    save_config=False
-                )
-                print("iMA menu script updated due to UI settings change.")
-            except Exception as e:
-                print(f"Error updating iMA menu script from OptionsDialog: {e}")
-
         if success:
             self.status_label.setText("Settings applied successfully to all accounts.")
             self.settings_applied.emit()
@@ -1705,6 +1701,60 @@ class RiotClientNotFoundDialog(PopupDialog):
 
     def browse(self):
         path, _ = QFileDialog.getOpenFileName(self, "Select RiotClientServices.exe", "", "Executable Files (*.exe)")
+        if path:
+            self.path_edit.setText(str(Path(path)))
+
+    def get_path(self):
+        return self.path_edit.text()
+
+class IMAMenuPathDialog(PopupDialog):
+    def __init__(self, parent=None, default_path=""):
+        super().__init__("iMA Menu Path Not Found", parent)
+        self.setFixedSize(450, 250)
+        
+        message_text = "Could not locate <b>shell.nss</b>.<br><br>Please select your iMA Menu installation folder (the one containing 'shell.nss' and the 'imports' folder)."
+        message_label = QLabel(message_text)
+        message_label.setWordWrap(True)
+        message_label.setStyleSheet("color: #e0d6d1; font-size: 14px; text-align: center;")
+        message_label.setAlignment(Qt.AlignCenter)
+        self.content_layout.addWidget(message_label)
+
+        self.path_edit = QLineEdit(default_path)
+        self.path_edit.setPlaceholderText("Path to iMA Menu folder")
+        self.path_edit.setStyleSheet("background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 8px; color: #e0d6d1;")
+        self.content_layout.addWidget(self.path_edit)
+
+        button_layout = QHBoxLayout()
+        button_layout.setSpacing(10)
+        
+        browse_button = QPushButton("Browse...")
+        browse_button.setStyleSheet('''
+            QPushButton {
+                background-color: #4f4a4b; color: #e0d6d1; font-weight: bold; 
+                border-radius: 8px; padding: 8px 15px; border: 1px solid transparent;
+            }
+            QPushButton:hover { background-color: #5a5556; border: 1px solid #c89f68; }
+        ''')
+        browse_button.clicked.connect(self.browse)
+        button_layout.addWidget(browse_button)
+        
+        button_layout.addStretch()
+
+        ok_button = QPushButton("OK")
+        ok_button.setStyleSheet('''
+            QPushButton {
+                background-color: #c89f68; color: #2c2a2b; font-weight: bold; 
+                border-radius: 8px; padding: 8px 25px;
+            }
+            QPushButton:hover { background-color: #d9b68b; }
+        ''')
+        ok_button.clicked.connect(self.accept)
+        button_layout.addWidget(ok_button)
+        
+        self.content_layout.addLayout(button_layout)
+
+    def browse(self):
+        path = QFileDialog.getExistingDirectory(self, "Select iMA Menu Folder", self.path_edit.text())
         if path:
             self.path_edit.setText(str(Path(path)))
 
