@@ -285,6 +285,7 @@ class ModernValorantSwitcher(QMainWindow):
         self.setup_grid_container()
         self.account_widgets.clear()
         accounts = self.switcher.get_saved_accounts()
+        logging.info(f"Found {len(accounts)} accounts.")
 
         ordered_accounts = self.switcher.get_ima_config().get("ordered_accounts", [])
         account_names_in_order = [name for name in ordered_accounts if name in accounts]
@@ -336,6 +337,7 @@ class ModernValorantSwitcher(QMainWindow):
         else:
             self.selected_account_name = None
             self.status_label.setText("No accounts found.")
+        logging.info("Finished loading accounts.")
 
     def rearrange_grid(self):
         if not self.account_widgets: return

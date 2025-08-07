@@ -873,9 +873,11 @@ class GameSwitcher:
                     shutil.move(str(riot_data_source / "VALORANT"), str(valorant_dest))
             
             # Clear the icon cache to force UI to reload icons from disk
+            logging.info("Clearing caches after restore...")
             self._icon_cache.clear()
             self._account_game_configs_cache.clear()
             self._invalidate_saved_accounts_cache()
+            logging.info("Caches cleared.")
 
             self.update_ima_menu_if_enabled('restore', list(self.get_saved_accounts().keys()))
             return True

@@ -433,10 +433,10 @@ class PopupDialog(QDialog):
         self.content_layout.setContentsMargins(15, 10, 15, 15)
         popup_layout.addLayout(self.content_layout)
 
-        main_v_layout = QVBoxLayout(self)
+        main_v_layout = QVBoxLayout()
         main_v_layout.setContentsMargins(0,0,0,0)
-        self.setLayout(main_v_layout)
         main_v_layout.addWidget(self.main_widget)
+        self.setLayout(main_v_layout)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -678,15 +678,6 @@ class LoadingDialog(PopupDialog):
         self.loading_label.setAlignment(Qt.AlignCenter)
         self.loading_label.setStyleSheet("color: #c89f68; font-size: 20px; font-weight: bold;")
         self.content_layout.addWidget(self.loading_label)
-
-class BackupRestoreSelectionDialog(PopupDialog):
-    def __init__(self, parent=None):
-        super().__init__("Backup and Restore", parent)
-        self.setFixedSize(350, 200)
-        self.selection = None
-
-        self.content_layout.setSpacing(15)
-        self.content_layout.setAlignment(Qt.AlignCenter)
         backup_button = QPushButton("Backup")
         backup_button.setStyleSheet("""
             QPushButton {

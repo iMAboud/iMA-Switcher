@@ -198,7 +198,7 @@ class SettingsActions:
                 msg_dialog.exec_()
                 logging.info("Calling load_accounts after restore.")
                 self.parent.load_accounts()
-                logging.info(f"Profiles restored from {path}")
+                logging.info(f"Profiles restored from {path}. UI should be refreshed.")
             else:
                 self.parent.status_label.setText("Restore failed.")
                 logging.error(f"Failed to restore profiles from {path}")
