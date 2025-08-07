@@ -355,10 +355,12 @@ class GameSwitcher:
     def _get_account_path(self, account_name): return self.profiles_dir / account_name
 
     def _terminate_processes(self):
+        logging.info("Terminating Riot and game processes...")
         all_processes = self.GAMES['valorant']["processes_to_kill"] + self.GAMES['lol']["processes_to_kill"]
         for exe in all_processes:
             try:
                 subprocess.run(f"taskkill /f /im {exe}", shell=True, check=True, capture_output=True, text=True)
+                logging.info(f"Terminated process: {exe}")
             except subprocess.CalledProcessError as e:
                 logging.debug(f"Process {exe} not running or could not be terminated: {e.stderr.strip()}")
             except Exception as e:
@@ -503,29 +505,7 @@ class GameSwitcher:
     def _perform_post_switch_tasks(self, account_name, game, on_update_callback):
         """Handles tasks that can be performed after the game has been launched,
         to avoid delaying the game launch itself."""
-        # Backup log for the previously switched account
-        last_account_name = self.config.get("last_switched_account")
-        if last_account_name and last_account_name != account_name:
-            log_path = Path(self.app_data_path) / "VALORANT" / "Saved" / "Logs" / "ShooterGame.log"
-            if log_path.exists():
-                last_account_path = self._get_account_path(last_account_name)
-                try:
-                    shutil.copy2(log_path, last_account_path / "ShooterGame.log.bak")
-                    logging.info(f"Backed up ShooterGame.log for {last_account_name}")
-                except Exception as e:
-                    logging.error(f"Failed to backup ShooterGame.log for {last_account_name}: {e}")
-
-        # Restore ShooterGame.log for the current account
-        account_path = self._get_account_path(account_name)
-        log_backup_path = account_path / "ShooterGame.log.bak"
-        log_dest_path = Path(self.app_data_path) / "VALORANT" / "Saved" / "Logs" / "ShooterGame.log"
-        if log_backup_path.exists():
-            try:
-                shutil.copy2(log_backup_path, log_dest_path)
-                logging.info(f"Restored ShooterGame.log for {account_name}")
-            except Exception as e:
-                logging.error(f"Failed to restore ShooterGame.log for {account_name}: {e}")
-
+        time.sleep(10) # Delay to prioritize game launch
         # Update graphics settings if Valorant was launched
         if game == 'valorant':
             graphics_settings = self.get_graphics_settings()
@@ -1136,6 +1116,7 @@ class GameSwitcher:
             return None, f"Error reading {ini_files[0]}: {e}"
 
     def update_all_game_user_settings(self, graphics_settings):
+        # Calculate a hash of the settings to avoid unnecessary file writes.
         settings_str = json.dumps(graphics_settings, sort_keys=True)
         current_hash = hashlib.sha256(settings_str.encode('utf-8')).hexdigest()
 
