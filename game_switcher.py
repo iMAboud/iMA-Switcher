@@ -5,6 +5,7 @@ import json
 import ctypes
 import sys
 import threading
+import time
 from zipfile import ZipFile, BadZipFile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -833,6 +834,22 @@ class GameSwitcher:
             logging.error(f"Backup failed: {e}")
             return False
 
+    def _robust_rmtree(self, path, max_retries=3, delay=1):
+        path = Path(path)
+        for i in range(max_retries):
+            try:
+                if path.exists():
+                    shutil.rmtree(path)
+                    logging.info(f"Successfully removed directory: {path}")
+                return
+            except OSError as e:
+                logging.warning(f"Attempt {i+1}/{max_retries} to remove {path} failed: {e}")
+                if i < max_retries - 1:
+                    time.sleep(delay)
+                else:
+                    logging.error(f"Failed to remove {path} after {max_retries} attempts.")
+                    raise
+
     def restore_profiles(self, backup_file_path):
         try:
             self._terminate_processes()
@@ -843,36 +860,32 @@ class GameSwitcher:
 
                 user_data_source = temp_dir_path / "UserData"
                 if user_data_source.exists():
-                    # Restore config.json, overwriting if it exists
                     backup_config_path = user_data_source / "config.json"
                     if backup_config_path.exists():
                         shutil.copy2(backup_config_path, self.config_path)
                         self.config = self._load_config(force_reload=True)
 
-                    # Restore profiles by merging
                     backup_profiles_dir = user_data_source / "profiles"
                     if backup_profiles_dir.exists():
                         for account_name in os.listdir(backup_profiles_dir):
                             source_account_path = backup_profiles_dir / account_name
                             dest_account_path = self.profiles_dir / account_name
                             if source_account_path.is_dir():
-                                if dest_account_path.exists():
-                                    shutil.rmtree(dest_account_path)
+                                self._robust_rmtree(dest_account_path)
                                 shutil.copytree(source_account_path, dest_account_path)
 
                 riot_data_source = temp_dir_path / "RiotData"
                 if riot_data_source.exists():
                     riot_client_dest = Path(self.app_data_path) / "Riot Games" / "Riot Client"
-                    if riot_client_dest.exists():
-                        shutil.rmtree(riot_client_dest)
-                    shutil.move(str(riot_data_source / "Riot Client"), str(riot_client_dest))
+                    self._robust_rmtree(riot_client_dest)
+                    if (riot_data_source / "Riot Client").exists():
+                        shutil.move(str(riot_data_source / "Riot Client"), str(riot_client_dest))
 
                     valorant_dest = Path(self.app_data_path) / "VALORANT"
-                    if valorant_dest.exists():
-                        shutil.rmtree(valorant_dest)
-                    shutil.move(str(riot_data_source / "VALORANT"), str(valorant_dest))
+                    self._robust_rmtree(valorant_dest)
+                    if (riot_data_source / "VALORANT").exists():
+                        shutil.move(str(riot_data_source / "VALORANT"), str(valorant_dest))
             
-            # Clear the icon cache to force UI to reload icons from disk
             logging.info("Clearing caches after restore...")
             self._icon_cache.clear()
             self._account_game_configs_cache.clear()
@@ -882,7 +895,7 @@ class GameSwitcher:
             self.update_ima_menu_if_enabled('restore', list(self.get_saved_accounts().keys()))
             return True
         except Exception as e:
-            logging.error(f"Restore failed: {e}")
+            logging.error(f"Restore failed: {e}", exc_info=True)
             return False
 
     def update_ima_menu_if_enabled(self, action, name=None, old_name=None):
