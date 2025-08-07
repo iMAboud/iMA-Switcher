@@ -300,7 +300,8 @@ class ModernValorantSwitcher(QMainWindow):
 
         # A single loop to create all account widgets
         for name in account_names_in_order:
-            icon_path, game, rank, in_game_name, in_game_tag, current_rr, last_game_rr = accounts[name]
+            account_data = accounts[name]
+            rank = account_data['rank']
             icon_path_to_use = self.switcher.get_icon_path_for_account(name, rank, use_rank_icons)
             
             # Check cache first, otherwise load async
@@ -311,7 +312,7 @@ class ModernValorantSwitcher(QMainWindow):
                 icon = self.switcher.get_placeholder_qicon()
                 self.load_icon_async(name, icon_path_to_use)
 
-            widget = AccountWidget(name, icon, game, rank, in_game_name, in_game_tag, current_rr, last_game_rr, self.grid_container, switcher_instance=self.switcher)
+            widget = AccountWidget(name, icon, account_data['game'], rank, account_data['in_game_name'], account_data['in_game_tag'], account_data['current_rr'], account_data['last_game_rr'], self.grid_container, switcher_instance=self.switcher)
             widget.selected.connect(self.on_account_selected)
             widget.double_clicked.connect(self.on_account_double_clicked)
             widget.context_menu_requested.connect(self.show_context_menu)
@@ -467,15 +468,15 @@ class ModernValorantSwitcher(QMainWindow):
         if account_name in self.account_widgets:
             updated_account_data = self.switcher.get_saved_accounts().get(account_name)
             if updated_account_data:
-                icon_path, game, rank, in_game_name, in_game_tag, current_rr, last_game_rr = updated_account_data
                 ui_settings = self.switcher.get_ima_config().get("ui_settings", {})
                 use_rank_icons = ui_settings.get("use_rank_icons", False)
+                rank = updated_account_data['rank']
                 icon_path_to_use = self.switcher.get_icon_path_for_account(account_name, rank, use_rank_icons)
                 
                 # Synchronously load the new icon for immediate update
                 icon = self.switcher.get_qicon_from_path(icon_path_to_use)
 
-                self.account_widgets[account_name].update_data(account_name, icon, game, rank, in_game_name, in_game_tag, current_rr, last_game_rr, ui_settings)
+                self.account_widgets[account_name].update_data(account_name, icon, updated_account_data['game'], rank, updated_account_data['in_game_name'], updated_account_data['in_game_tag'], updated_account_data['current_rr'], updated_account_data['last_game_rr'], ui_settings)
                 self.update_window_size() # Recalculate window size if visibility of elements changed
             else:
                 # If account data is not found, it means the account was likely deleted.
@@ -634,7 +635,9 @@ class ModernValorantSwitcher(QMainWindow):
             # Show the LaunchNotificationWidget after successful game selection
             account_data = self.switcher.get_saved_accounts().get(account_name)
             if account_data:
-                _, _, rank, in_game_name, in_game_tag, current_rr, last_game_rr = account_data
+                rank = account_data['rank']
+                in_game_name = account_data['in_game_name']
+                in_game_tag = account_data['in_game_tag']
                 ui_settings = self.switcher.get_ima_config().get("ui_settings", {})
                 use_rank_icons = ui_settings.get("use_rank_icons", False)
                 account_icon_path_str = self.switcher.get_icon_path_for_account(account_name, rank, use_rank_icons)
@@ -653,7 +656,9 @@ class ModernValorantSwitcher(QMainWindow):
         success, message, game_type = self.switcher.switch_account(account_name, selected_game=selected_game, on_update_callback=self.account_updated.emit)
         
         account_data = self.switcher.get_saved_accounts().get(account_name)
-        account_icon_path, game, rank, in_game_name, in_game_tag, current_rr, last_game_rr = account_data if account_data else (None, None, None, None, None, None, None)
+        rank = account_data['rank'] if account_data else None
+        in_game_name = account_data['in_game_name'] if account_data else None
+        in_game_tag = account_data['in_game_tag'] if account_data else None
         ui_settings = self.switcher.get_ima_config().get("ui_settings", {})
         use_rank_icons = ui_settings.get("use_rank_icons", False)
         account_icon_path_str = self.switcher.get_icon_path_for_account(account_name, rank, use_rank_icons)
@@ -713,7 +718,9 @@ def _handle_game_selection_standalone(switcher, account_name, game, pixmap):
             switcher.fetch_and_update_all_accounts()
         
         account_data = switcher.get_saved_accounts().get(account_name)
-        _, _, rank, in_game_name, in_game_tag, _, _ = account_data if account_data else (None, None, None, None, None, None, None)
+        rank = account_data['rank'] if account_data else None
+        in_game_name = account_data['in_game_name'] if account_data else None
+        in_game_tag = account_data['in_game_tag'] if account_data else None
         ui_settings = switcher.get_ima_config().get("ui_settings", {})
         use_rank_icons = ui_settings.get("use_rank_icons", False)
 
@@ -741,7 +748,9 @@ def main():
         
         app = QApplication(sys.argv)
         accounts_data = switcher.get_saved_accounts()
-        account_icon_path, game_type, rank, in_game_name, in_game_tag, current_rr, last_game_rr = accounts_data.get(account_name, (None, None, None, None, None, None, None))
+        account_data = accounts_data.get(account_name)
+        game_type = account_data['game'] if account_data else None
+        rank = account_data['rank'] if account_data else None
         
         ui_settings = switcher.get_ima_config().get("ui_settings", {})
         use_rank_icons = ui_settings.get("use_rank_icons", False)
@@ -759,7 +768,9 @@ def main():
             result, _, _ = switcher.switch_account(account_name, on_update_callback=None)
             if result:
                 account_data = switcher.get_saved_accounts().get(account_name)
-                _, _, rank, in_game_name, in_game_tag, _, _ = account_data if account_data else (None, None, None, None, None, None, None)
+                rank = account_data['rank'] if account_data else None
+                in_game_name = account_data['in_game_name'] if account_data else None
+                in_game_tag = account_data['in_game_tag'] if account_data else None
                 ui_settings = switcher.get_ima_config().get("ui_settings", {})
                 use_rank_icons = ui_settings.get("use_rank_icons", False)
 

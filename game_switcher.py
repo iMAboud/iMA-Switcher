@@ -36,6 +36,12 @@ except ImportError:
     UnidentifiedImageError = None # Define it as None if PIL is not available
     logging.warning("Pillow not installed. Image conversion for icons will not work. Please install it with 'pip install Pillow'")
 
+try:
+    from bs4 import BeautifulSoup
+except ImportError:
+    BeautifulSoup = None
+    logging.warning("BeautifulSoup not installed. Rank fetching will not work. Please install it with 'pip install beautifulsoup4'")
+
 import logging
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -165,6 +171,7 @@ class GameSwitcher:
         self.config = self._load_config()
         self._account_game_configs_cache = {}
         self._icon_cache = {}
+        self._saved_accounts_cache = None
         self.switch_counter = 0
         self._cleanup_valorant_temp_files()
 
@@ -430,9 +437,14 @@ class GameSwitcher:
 
     def get_account_game(self, account_name):
         data = self._load_game_config(account_name)
-        result = (data.get('game', 'valorant'), data.get('rank', None), data.get('in_game_name', None), data.get('in_game_tag', None), data.get('current_rr', None), data.get('last_game_rr', None))
-        logging.debug(f"DEBUG: get_account_game for {account_name} returning: {result} (length: {len(result)})")
-        return result
+        return {
+            'game': data.get('game', 'valorant'),
+            'rank': data.get('rank', None),
+            'in_game_name': data.get('in_game_name', None),
+            'in_game_tag': data.get('in_game_tag', None),
+            'current_rr': data.get('current_rr', None),
+            'last_game_rr': data.get('last_game_rr', None)
+        }
 
     def set_account_game(self, account_name, game):
         account_path = self._get_account_path(account_name)
@@ -441,6 +453,7 @@ class GameSwitcher:
         data = self._load_game_config(account_name)
         data['game'] = game
         self._save_game_config(account_name, data)
+        self._invalidate_saved_accounts_cache()
         return True
 
     def set_account_rank(self, account_name, rank):
@@ -450,6 +463,7 @@ class GameSwitcher:
         data = self._load_game_config(account_name)
         data['rank'] = rank
         self._save_game_config(account_name, data)
+        self._invalidate_saved_accounts_cache()
         self.update_ima_menu_if_enabled('update', account_name)
         return True
 
@@ -463,6 +477,7 @@ class GameSwitcher:
         data['current_rr'] = current_rr
         data['last_game_rr'] = last_game_rr
         self._save_game_config(account_name, data)
+        self._invalidate_saved_accounts_cache()
         return True
 
     def save_account(self, account_name, game='valorant', rank=None, in_game_name=None, in_game_tag=None):
@@ -481,6 +496,7 @@ class GameSwitcher:
         self.set_account_game(account_name, game)
         if rank: self.set_account_rank(account_name, rank)
         if in_game_name or in_game_tag: self.set_account_in_game_name_tag(account_name, in_game_name, in_game_tag)
+        self._invalidate_saved_accounts_cache()
         self.update_ima_menu_if_enabled('add', account_name)
         return True
 
@@ -532,7 +548,8 @@ class GameSwitcher:
         if not account_path.exists():
             return False, f"Profile for '{account_name}' not found.", None
 
-        game, _, _, _, _, _ = self.get_account_game(account_name)
+        account_game_data = self.get_account_game(account_name)
+        game = account_game_data['game']
 
         if game == 'both' and selected_game is None:
             return True, "Game selection required.", "both"
@@ -617,18 +634,28 @@ class GameSwitcher:
         except FileNotFoundError:
             return False
 
+    def _invalidate_saved_accounts_cache(self):
+        self._saved_accounts_cache = None
+
     def get_saved_accounts(self):
+        if self._saved_accounts_cache is not None:
+            return self._saved_accounts_cache
+
         accounts_data = {}
         try:
             dirs = [d for d in self.profiles_dir.iterdir() if d.is_dir()]
             for account_dir in sorted(dirs):
                 account_name = account_dir.name
                 icon_path = account_dir / "icon.png"
-                game, rank, in_game_name, in_game_tag, current_rr, last_game_rr = self.get_account_game(account_name)
-                accounts_data[account_name] = (str(icon_path) if icon_path.exists() else None, game, rank, in_game_name, in_game_tag, current_rr, last_game_rr)
-                
+                account_game_data = self.get_account_game(account_name)
+                accounts_data[account_name] = {
+                    "icon_path": str(icon_path) if icon_path.exists() else None,
+                    **account_game_data
+                }
         except FileNotFoundError:
             self.profiles_dir.mkdir(exist_ok=True)
+
+        self._saved_accounts_cache = accounts_data
         return accounts_data
 
     def rename_account(self, old_name, new_name):
@@ -637,6 +664,7 @@ class GameSwitcher:
             old_path.rename(new_path)
             if old_name in self._account_game_configs_cache:
                 self._account_game_configs_cache[new_name] = self._account_game_configs_cache.pop(old_name)
+            self._invalidate_saved_accounts_cache()
             self.update_ima_menu_if_enabled('rename', new_name, old_name=old_name)
             return True
         return False
@@ -647,6 +675,7 @@ class GameSwitcher:
             shutil.rmtree(account_path)
             if account_name in self._account_game_configs_cache:
                 del self._account_game_configs_cache[account_name]
+            self._invalidate_saved_accounts_cache()
             self.update_ima_menu_if_enabled('delete', account_name)
             return True
         return False
@@ -665,6 +694,7 @@ class GameSwitcher:
             resolved_dest_icon_path = str(dest_icon_path.resolve())
             if resolved_dest_icon_path in self._icon_cache:
                 del self._icon_cache[resolved_dest_icon_path]
+            self._invalidate_saved_accounts_cache()
             self.update_ima_menu_if_enabled('update', account_name)
             return True
         except Exception as e:
@@ -681,6 +711,7 @@ class GameSwitcher:
                 resolved_icon_path = str(icon_path.resolve())
                 if resolved_icon_path in self._icon_cache:
                     del self._icon_cache[resolved_icon_path]
+                self._invalidate_saved_accounts_cache()
                 self.update_ima_menu_if_enabled('update', account_name)
                 return True
             except Exception as e:
@@ -754,12 +785,11 @@ class GameSwitcher:
         else:
             arguments = f'--switch "{account_name}"'
 
-        _game, _rank, _in_game_name, _in_game_tag, _current_rr, _last_game_rr = self.get_account_game(account_name)
-        description = f"Launch {_game.capitalize()} with {account_name} account"
+        account_data = self.get_saved_accounts().get(account_name)
+        game = account_data['game']
+        rank = account_data['rank']
+        description = f"Launch {game.capitalize()} with {account_name} account"
 
-        account_data = self.get_saved_accounts()
-        _, _, rank, _, _, _, _ = account_data.get(account_name)
-        
         ui_settings = self.get_ima_config().get("ui_settings", {})
         use_rank_icons = ui_settings.get("use_rank_icons", False)
 
@@ -770,7 +800,7 @@ class GameSwitcher:
     def get_icon_path_for_account(self, account_name, rank=None, use_rank_icons=False):
         icon_path_to_use = None
         account_data = self.get_saved_accounts().get(account_name)
-        account_icon_path = account_data[0] if account_data else None # Extract icon_path from the tuple
+        account_icon_path = account_data['icon_path'] if account_data else None
 
         if use_rank_icons and rank:
             app_install_path = Path(self.get_ima_config().get("app_install_path", self.base_dir))
@@ -864,6 +894,7 @@ class GameSwitcher:
             
             # Clear the icon cache to force UI to reload icons from disk
             self._icon_cache.clear()
+            self._invalidate_saved_accounts_cache()
 
             self.update_ima_menu_if_enabled('restore', list(self.get_saved_accounts().keys()))
             return True
@@ -969,7 +1000,10 @@ class GameSwitcher:
         
         for account_name in ordered_accounts:
             if account_name not in accounts_data: continue
-            icon_source_path, game, rank, in_game_name, in_game_tag, current_rr, last_game_rr = accounts_data.get(account_name)
+            account_data = accounts_data.get(account_name)
+            icon_source_path = account_data['icon_path']
+            game = account_data['game']
+            rank = account_data['rank']
             
             item_icon_arg = ""
             icon_to_use_for_menu = None
@@ -1303,38 +1337,53 @@ class GameSwitcher:
         return icon
 
     def _parse_rank_data(self, html_content):
-        # A more robust parsing method to handle variations in the source HTML
+        if not BeautifulSoup:
+            return None, None, None
+
+        soup = BeautifulSoup(html_content, 'html.parser')
+
         rank = None
         current_rr = None
         last_game_rr = None
 
-        # Try to find rank, which is typically in brackets. E.g., "[Diamond 1]"
-        rank_match = re.search(r'\[(.*?)\]', html_content)
-        if rank_match:
-            rank = rank_match.group(1).strip()
-        elif "unrated" in html_content.lower() or "unranked" in html_content.lower():
-            rank = 'Unranked'
+        rank_div = soup.find('div', class_='rank')
+        if rank_div:
+            rank_text = rank_div.get_text(strip=True)
+            rank_match = re.search(r'\[(.*?)\]', rank_text)
+            if rank_match:
+                rank = rank_match.group(1).strip()
+            elif "unrated" in rank_text.lower() or "unranked" in rank_text.lower():
+                rank = 'Unranked'
 
-        # If a rank was found, look for RR values.
-        if rank:
-            # Look for current RR, e.g., ": 10 RR" or "55 RR"
-            rr_match = re.search(r':?\s*(\d+)\s*RR', html_content)
+        rr_div = soup.find('div', class_='rr')
+        if rr_div:
+            rr_text = rr_div.get_text(strip=True)
+            rr_match = re.search(r'(\d+)\s*RR', rr_text)
             if rr_match:
                 current_rr = int(rr_match.group(1))
-            elif rank.lower() in ['unranked', 'unrated']:
-                current_rr = 0
 
-            # Look for last game's RR change, e.g., "[-12]" or "[+25]"
-            last_rr_match = re.search(r'\[([+-]?\d+)\]', html_content)
+        last_rr_div = soup.find('div', class_='last-rr')
+        if last_rr_div:
+            last_rr_text = last_rr_div.get_text(strip=True)
+            last_rr_match = re.search(r'\[([+-]?\d+)\]', last_rr_text)
             if last_rr_match:
                 last_game_rr = int(last_rr_match.group(1))
-            elif rank.lower() in ['unranked', 'unrated']:
-                last_game_rr = 0
+
+        if rank and current_rr is None:
+            if rank.lower() in ['unranked', 'unrated']:
+                current_rr = 0
         
-        # Return the found data. Some values might be None if not found.
+        if rank and last_game_rr is None:
+            if rank.lower() in ['unranked', 'unrated']:
+                last_game_rr = 0
+
         return rank, current_rr, last_game_rr
 
     def fetch_and_update_rank_data(self, account_name, is_manual_refresh=False, on_update_callback=None):
+        if not requests:
+            logging.warning("Rank fetching skipped: 'requests' library not installed.")
+            return
+
         logging.debug(f"fetch_and_update_rank_data called for {account_name}. Manual refresh: {is_manual_refresh}")
         ui_settings = self.get_ima_config().get("ui_settings", {})
         auto_rank_update_enabled = ui_settings.get("auto_rank_update", True)
@@ -1348,7 +1397,11 @@ class GameSwitcher:
             logging.debug(f"Account data not found for {account_name}.")
             return
 
-        _, _, rank, in_game_name, in_game_tag, current_rr, last_game_rr = account_data
+        rank = account_data['rank']
+        in_game_name = account_data['in_game_name']
+        in_game_tag = account_data['in_game_tag']
+        current_rr = account_data['current_rr']
+        last_game_rr = account_data['last_game_rr']
 
         if not in_game_name or not in_game_tag:
             logging.debug(f"Skipping rank fetch for {account_name}: missing in-game name or tag.")
