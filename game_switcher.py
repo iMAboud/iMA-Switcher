@@ -316,39 +316,6 @@ class GameSwitcher:
 
         return None
 
-    def _find_riot_client_from_registry(self):
-        try:
-            # Check the uninstall information
-            uninstall_key_path = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Riot Game valorant.live"
-            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, uninstall_key_path) as key:
-                install_location, _ = winreg.QueryValueEx(key, "InstallLocation")
-                if install_location and os.path.isdir(install_location):
-                    exe_path = os.path.join(install_location, "RiotClientServices.exe")
-                    if os.path.exists(exe_path):
-                        return exe_path
-        except FileNotFoundError:
-            pass  # Key not found, continue
-        except OSError as e:
-            logging.error(f"Error reading registry for uninstall info: {e}")
-        except Exception as e:
-            logging.error(f"An unexpected error occurred while reading registry for uninstall info: {e}")
-
-        try:
-            # Check the Riot Games key
-            riot_games_key_path = r"SOFTWARE\Riot Games\Riot Client"
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, riot_games_key_path) as key:
-                exe_path, _ = winreg.QueryValueEx(key, "ExecutablePath")
-                if exe_path and os.path.exists(exe_path):
-                    return exe_path
-        except FileNotFoundError:
-            pass  # Key not found, continue
-        except OSError as e:
-            logging.error(f"Error reading registry for Riot Games info: {e}")
-        except Exception as e:
-            logging.error(f"An unexpected error occurred while reading registry for Riot Games info: {e}")
-
-        return None
-
     def _find_riot_client_path(self):
         # First, try to find the path in the registry
         registry_path = self._find_riot_client_from_registry()
