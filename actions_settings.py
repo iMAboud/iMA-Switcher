@@ -135,13 +135,19 @@ class SettingsActions:
     def _restore_local(self):
         path, _ = QFileDialog.getOpenFileName(self.parent, "Select Backup", "", "ZIP Files (*.zip)")
         if path:
-            loading_dialog = LoadingDialog("Restoring", "Restoring profiles...", self.parent)
-            loading_dialog.show()
-            QApplication.processEvents()
-            self._confirm_and_restore(path)
-            loading_dialog.close()
+            threading.Thread(target=self._run_restore, args=(path,)).start()
+
+    def _run_restore(self, path, modified_time=None):
+        loading_dialog = LoadingDialog("Restoring", "Restoring profiles...", self.parent)
+        loading_dialog.show()
+        QApplication.processEvents()
+        self._confirm_and_restore(path, modified_time)
+        loading_dialog.close()
 
     def _restore_google_drive(self):
+        threading.Thread(target=self._run_restore_google_drive).start()
+
+    def _run_restore_google_drive(self):
         loading_dialog = LoadingDialog("Restoring", "Restoring profiles from Google Drive...", self.parent)
         loading_dialog.show()
         QApplication.processEvents()
