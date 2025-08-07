@@ -662,22 +662,6 @@ class BackupRestoreSelectionDialog(PopupDialog):
         self.content_layout.setSpacing(15)
         self.content_layout.setAlignment(Qt.AlignCenter)
 
-class LoadingDialog(PopupDialog):
-    def __init__(self, title, message, parent=None):
-        super().__init__(title, parent)
-        self.setFixedSize(350, 180)
-
-        message_label = QLabel(message)
-        message_label.setStyleSheet("color: #e0d6d1; font-size: 16px; font-weight: bold; text-align: center;")
-        message_label.setAlignment(Qt.AlignCenter)
-        self.content_layout.addWidget(message_label)
-
-        # In a real application, you would use a QMovie or a custom animation here.
-        # For this example, we'll just use a label.
-        self.loading_label = QLabel("Loading...")
-        self.loading_label.setAlignment(Qt.AlignCenter)
-        self.loading_label.setStyleSheet("color: #c89f68; font-size: 20px; font-weight: bold;")
-        self.content_layout.addWidget(self.loading_label)
         backup_button = QPushButton("Backup")
         backup_button.setStyleSheet("""
             QPushButton {
@@ -717,54 +701,23 @@ class LoadingDialog(PopupDialog):
     def get_selection(self):
         return self.selection
 
-class BackupRestoreDialog(PopupDialog):
-    def __init__(self, parent=None, mode='backup'):
-        super().__init__(f"{mode.capitalize()} Profiles", parent)
-        self.setFixedSize(350, 200)
-        self.mode = mode
-        self.selection = None
 
-        self.content_layout.setSpacing(15)
-        self.content_layout.setAlignment(Qt.AlignCenter)
+class LoadingDialog(PopupDialog):
+    def __init__(self, title, message, parent=None):
+        super().__init__(title, parent)
+        self.setFixedSize(350, 180)
 
-        local_button = QPushButton("Local")
-        local_button.setStyleSheet("""
-            QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 15px; padding: 10px 20px;
-            }
-            QPushButton:hover {
-                background-color: #d9b68b;
-            }
-        """)
-        shadow = QGraphicsDropShadowEffect(blurRadius=10, color=QColor(0, 0, 0, 120), offset=QPoint(0, 3))
-        local_button.setGraphicsEffect(shadow)
-        local_button.setIcon(QIcon(get_asset_path("Local.png")))
-        local_button.setIconSize(QSize(24, 24))
-        local_button.clicked.connect(lambda: self.set_selection("local"))
-        self.content_layout.addWidget(local_button)
+        message_label = QLabel(message)
+        message_label.setStyleSheet("color: #e0d6d1; font-size: 16px; font-weight: bold; text-align: center;")
+        message_label.setAlignment(Qt.AlignCenter)
+        self.content_layout.addWidget(message_label)
 
-        google_drive_button = QPushButton("Google Drive")
-        google_drive_button.setStyleSheet("""
-            QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 15px; padding: 10px 20px;
-            }
-            QPushButton:hover {
-                background-color: #d9b68b;
-            }
-        """)
-        shadow = QGraphicsDropShadowEffect(blurRadius=10, color=QColor(0, 0, 0, 120), offset=QPoint(0, 3))
-        google_drive_button.setGraphicsEffect(shadow)
-        google_drive_button.setIcon(QIcon(get_asset_path("Google.png")))
-        google_drive_button.setIconSize(QSize(24, 24))
-        google_drive_button.clicked.connect(lambda: self.set_selection("google_drive"))
-        self.content_layout.addWidget(google_drive_button)
-
-    def set_selection(self, selection):
-        self.selection = selection
-        self.accept()
-
-    def get_selection(self):
-        return self.selection
+        # In a real application, you would use a QMovie or a custom animation here.
+        # For this example, we'll just use a label.
+        self.loading_label = QLabel("Loading...")
+        self.loading_label.setAlignment(Qt.AlignCenter)
+        self.loading_label.setStyleSheet("color: #c89f68; font-size: 20px; font-weight: bold;")
+        self.content_layout.addWidget(self.loading_label)
 
 class SettingsDialog(PopupDialog):
     def __init__(self, actions, parent):
