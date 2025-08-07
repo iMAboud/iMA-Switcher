@@ -1337,46 +1337,35 @@ class GameSwitcher:
         return icon
 
     def _parse_rank_data(self, html_content):
-        if not BeautifulSoup:
-            return None, None, None
-
-        soup = BeautifulSoup(html_content, 'html.parser')
-
+        # A more robust parsing method to handle variations in the source HTML
         rank = None
         current_rr = None
         last_game_rr = None
 
-        rank_div = soup.find('div', class_='rank')
-        if rank_div:
-            rank_text = rank_div.get_text(strip=True)
-            rank_match = re.search(r'\[(.*?)\]', rank_text)
-            if rank_match:
-                rank = rank_match.group(1).strip()
-            elif "unrated" in rank_text.lower() or "unranked" in rank_text.lower():
-                rank = 'Unranked'
+        # Try to find rank, which is typically in brackets. E.g., "[Diamond 1]"
+        rank_match = re.search(r'\[(.*?)\]', html_content)
+        if rank_match:
+            rank = rank_match.group(1).strip()
+        elif "unrated" in html_content.lower() or "unranked" in html_content.lower():
+            rank = 'Unranked'
 
-        rr_div = soup.find('div', class_='rr')
-        if rr_div:
-            rr_text = rr_div.get_text(strip=True)
-            rr_match = re.search(r'(\d+)\s*RR', rr_text)
+        # If a rank was found, look for RR values.
+        if rank:
+            # Look for current RR, e.g., ": 10 RR" or "55 RR"
+            rr_match = re.search(r':?\s*(\d+)\s*RR', html_content)
             if rr_match:
                 current_rr = int(rr_match.group(1))
+            elif rank.lower() in ['unranked', 'unrated']:
+                current_rr = 0
 
-        last_rr_div = soup.find('div', class_='last-rr')
-        if last_rr_div:
-            last_rr_text = last_rr_div.get_text(strip=True)
-            last_rr_match = re.search(r'\[([+-]?\d+)\]', last_rr_text)
+            # Look for last game's RR change, e.g., "[-12]" or "[+25]"
+            last_rr_match = re.search(r'\[([+-]?\d+)\]', html_content)
             if last_rr_match:
                 last_game_rr = int(last_rr_match.group(1))
-
-        if rank and current_rr is None:
-            if rank.lower() in ['unranked', 'unrated']:
-                current_rr = 0
-        
-        if rank and last_game_rr is None:
-            if rank.lower() in ['unranked', 'unrated']:
+            elif rank.lower() in ['unranked', 'unrated']:
                 last_game_rr = 0
 
+        # Return the found data. Some values might be None if not found.
         return rank, current_rr, last_game_rr
 
     def fetch_and_update_rank_data(self, account_name, is_manual_refresh=False, on_update_callback=None):
