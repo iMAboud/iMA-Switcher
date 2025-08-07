@@ -874,6 +874,7 @@ class GameSwitcher:
             
             # Clear the icon cache to force UI to reload icons from disk
             self._icon_cache.clear()
+            self._account_game_configs_cache.clear()
             self._invalidate_saved_accounts_cache()
 
             self.update_ima_menu_if_enabled('restore', list(self.get_saved_accounts().keys()))

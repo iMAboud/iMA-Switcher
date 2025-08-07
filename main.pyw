@@ -280,6 +280,7 @@ class ModernValorantSwitcher(QMainWindow):
         self.scroll_area.setWidget(self.grid_container)
 
     def load_accounts(self):
+        logging.info("Loading accounts...")
         previously_selected = self.selected_account_name
         self.setup_grid_container()
         self.account_widgets.clear()

@@ -337,6 +337,8 @@ class ExportIMAMenuDialog(QDialog):
             }
             QPushButton:hover { background-color: #d9b68b; }
         """)
+        shadow = QGraphicsDropShadowEffect(blurRadius=10, color=QColor(0, 0, 0, 120), offset=QPoint(0, 3))
+        browse_button.setGraphicsEffect(shadow)
         browse_button.clicked.connect(self.select_icon)
         icon_layout.addWidget(self.icon_path_edit)
         icon_layout.addWidget(browse_button)
@@ -362,6 +364,8 @@ class ExportIMAMenuDialog(QDialog):
             QPushButton:hover { background-color: #5a5556; border: 1px solid #c89f68; }
             QPushButton:pressed { background-color: #454142; }
         """)
+        shadow = QGraphicsDropShadowEffect(blurRadius=10, color=QColor(0, 0, 0, 120), offset=QPoint(0, 3))
+        cancel_button.setGraphicsEffect(shadow)
         cancel_button.clicked.connect(self.reject)
         button_layout.addWidget(cancel_button)
 
@@ -374,6 +378,12 @@ class ExportIMAMenuDialog(QDialog):
                 background-color: #d9b68b; /* Brighter coffee color */
             }
         """)
+        shadow = QGraphicsDropShadowEffect(blurRadius=10, color=QColor(0, 0, 0, 120), offset=QPoint(0, 3))
+        install_button.setGraphicsEffect(shadow)
+        shadow = QGraphicsDropShadowEffect(blurRadius=10, color=QColor(0, 0, 0, 120), offset=QPoint(0, 3))
+        ok_button.setGraphicsEffect(shadow)
+        shadow = QGraphicsDropShadowEffect(blurRadius=10, color=QColor(0, 0, 0, 120), offset=QPoint(0, 3))
+        export_button.setGraphicsEffect(shadow)
         export_button.clicked.connect(self.accept)
         button_layout.addWidget(export_button)
         
@@ -513,6 +523,8 @@ class InputDialog(PopupDialog):
                 background-color: #d9b68b; /* Brighter coffee color */
             }
         """)
+        shadow = QGraphicsDropShadowEffect(blurRadius=10, color=QColor(0, 0, 0, 120), offset=QPoint(0, 3))
+        save_button.setGraphicsEffect(shadow)
         save_button.clicked.connect(self.accept)
         
         button_layout = QHBoxLayout()
@@ -617,6 +629,8 @@ class SaveAccountDialog(PopupDialog):
             QPushButton:hover { background-color: #5a5556; border: 1px solid #c89f68; }
             QPushButton:pressed { background-color: #454142; }
         """)
+        shadow = QGraphicsDropShadowEffect(blurRadius=10, color=QColor(0, 0, 0, 120), offset=QPoint(0, 3))
+        cancel_button.setGraphicsEffect(shadow)
         cancel_button.clicked.connect(self.reject)
         button_layout.addWidget(cancel_button)
 
@@ -629,6 +643,8 @@ class SaveAccountDialog(PopupDialog):
                 background-color: #d9b68b; /* Brighter coffee color */
             }
         """)
+        shadow = QGraphicsDropShadowEffect(blurRadius=10, color=QColor(0, 0, 0, 120), offset=QPoint(0, 3))
+        save_button.setGraphicsEffect(shadow)
         save_button.clicked.connect(self.accept)
         button_layout.addWidget(save_button)
         
@@ -645,6 +661,23 @@ class BackupRestoreSelectionDialog(PopupDialog):
         self.selection = None
 
         self.content_layout.setSpacing(15)
+
+class LoadingDialog(PopupDialog):
+    def __init__(self, title, message, parent=None):
+        super().__init__(title, parent)
+        self.setFixedSize(350, 180)
+
+        message_label = QLabel(message)
+        message_label.setStyleSheet("color: #e0d6d1; font-size: 16px; font-weight: bold; text-align: center;")
+        message_label.setAlignment(Qt.AlignCenter)
+        self.content_layout.addWidget(message_label)
+
+        # In a real application, you would use a QMovie or a custom animation here.
+        # For this example, we'll just use a label.
+        self.loading_label = QLabel("Loading...")
+        self.loading_label.setAlignment(Qt.AlignCenter)
+        self.loading_label.setStyleSheet("color: #c89f68; font-size: 20px; font-weight: bold;")
+        self.content_layout.addWidget(self.loading_label)
         self.content_layout.setAlignment(Qt.AlignCenter)
 
         backup_button = QPushButton("Backup")
@@ -656,6 +689,8 @@ class BackupRestoreSelectionDialog(PopupDialog):
                 background-color: #d9b68b;
             }
         """)
+        shadow = QGraphicsDropShadowEffect(blurRadius=10, color=QColor(0, 0, 0, 120), offset=QPoint(0, 3))
+        backup_button.setGraphicsEffect(shadow)
         backup_button.setIcon(QIcon(get_asset_path("Backup.png")))
         backup_button.setIconSize(QSize(24, 24))
         backup_button.clicked.connect(lambda: self._set_selection_and_accept("backup"))
@@ -670,6 +705,8 @@ class BackupRestoreSelectionDialog(PopupDialog):
                 background-color: #d9b68b;
             }
         """)
+        shadow = QGraphicsDropShadowEffect(blurRadius=10, color=QColor(0, 0, 0, 120), offset=QPoint(0, 3))
+        restore_button.setGraphicsEffect(shadow)
         restore_button.setIcon(QIcon(get_asset_path("Restore.png")))
         restore_button.setIconSize(QSize(24, 24))
         restore_button.clicked.connect(lambda: self._set_selection_and_accept("restore"))
@@ -701,6 +738,8 @@ class BackupRestoreDialog(PopupDialog):
                 background-color: #d9b68b;
             }
         """)
+        shadow = QGraphicsDropShadowEffect(blurRadius=10, color=QColor(0, 0, 0, 120), offset=QPoint(0, 3))
+        local_button.setGraphicsEffect(shadow)
         local_button.setIcon(QIcon(get_asset_path("Local.png")))
         local_button.setIconSize(QSize(24, 24))
         local_button.clicked.connect(lambda: self.set_selection("local"))
@@ -715,6 +754,8 @@ class BackupRestoreDialog(PopupDialog):
                 background-color: #d9b68b;
             }
         """)
+        shadow = QGraphicsDropShadowEffect(blurRadius=10, color=QColor(0, 0, 0, 120), offset=QPoint(0, 3))
+        google_drive_button.setGraphicsEffect(shadow)
         google_drive_button.setIcon(QIcon(get_asset_path("Google.png")))
         google_drive_button.setIconSize(QSize(24, 24))
         google_drive_button.clicked.connect(lambda: self.set_selection("google_drive"))
@@ -738,6 +779,8 @@ class SettingsDialog(PopupDialog):
             button.setStyleSheet(button_style)
             if icon_path.exists():
                 button.setIcon(QIcon(str(icon_path)))
+            shadow = QGraphicsDropShadowEffect(blurRadius=10, color=QColor(0, 0, 0, 120), offset=QPoint(0, 3))
+            button.setGraphicsEffect(shadow)
             button.clicked.connect(lambda _, func=action_func: (self.close(), func()))
             self.content_layout.addWidget(button)
 
@@ -845,6 +888,8 @@ class OptionsDialog(PopupDialog):
             QPushButton:hover { background-color: #5a5556; border: 1px solid #c89f68; }
             QPushButton:pressed { background-color: #454142; }
         """)
+        shadow = QGraphicsDropShadowEffect(blurRadius=10, color=QColor(0, 0, 0, 120), offset=QPoint(0, 3))
+        close_button.setGraphicsEffect(shadow)
         close_button.clicked.connect(self.close)
         button_layout.addWidget(close_button)
 
@@ -857,6 +902,8 @@ class OptionsDialog(PopupDialog):
                 background-color: #d9b68b; /* Brighter coffee color */
             }
         """)
+        shadow = QGraphicsDropShadowEffect(blurRadius=10, color=QColor(0, 0, 0, 120), offset=QPoint(0, 3))
+        apply_button.setGraphicsEffect(shadow)
         apply_button.clicked.connect(self.apply_settings)
         button_layout.addWidget(apply_button)
         
@@ -1498,8 +1545,8 @@ class GameSelectionDialog(PopupDialog):
         self.accept()
 
 class IconPickerDialog(PopupDialog):
-    def __init__(self, switcher_instance, current_icon_path, parent=None):
-        super().__init__("Change Icon", parent)
+    def __init__(self, switcher_instance, current_icon_path, account_name, parent=None):
+        super().__init__(f"Change Icon for <font color='#c89f68'>{account_name}</font>", parent)
         self.switcher = switcher_instance
         self.selected_icon_path = current_icon_path
         self.setFixedSize(420, 550)
@@ -1531,6 +1578,8 @@ class IconPickerDialog(PopupDialog):
         self.remove_button.setFixedSize(24, 24)
         self.remove_button.setStyleSheet("""QPushButton { background-color: #f38ba8; color: white; font-size: 14px; font-weight: bold; border-radius: 12px; border: 1px solid transparent; }
             QPushButton:hover { background-color: #e67e80; border-color: white; }""")
+        shadow = QGraphicsDropShadowEffect(blurRadius=10, color=QColor(0, 0, 0, 120), offset=QPoint(0, 3))
+        self.remove_button.setGraphicsEffect(shadow)
         self.remove_button.clicked.connect(self.remove_icon)
         self.remove_button.move(5, 5)  # Top-left corner
         self.remove_button.raise_()
@@ -1560,12 +1609,16 @@ class IconPickerDialog(PopupDialog):
         cancel_button = QPushButton("Cancel")
         cancel_button.setStyleSheet("""QPushButton { background-color: #4f4a4b; color: #e0d6d1; font-weight: bold; border-radius: 8px; padding: 10px 20px; border: 1px solid #4f4a4b;}
             QPushButton:hover { background-color: #5a5556; border: 1px solid #c89f68; }""")
+        shadow = QGraphicsDropShadowEffect(blurRadius=10, color=QColor(0, 0, 0, 120), offset=QPoint(0, 3))
+        cancel_button.setGraphicsEffect(shadow)
         cancel_button.clicked.connect(self.reject)
         button_layout.addWidget(cancel_button)
 
         save_button = QPushButton("Save")
         save_button.setStyleSheet("""QPushButton { background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 10px 20px; }
             QPushButton:hover { background-color: #d9b68b; }""")
+        shadow = QGraphicsDropShadowEffect(blurRadius=10, color=QColor(0, 0, 0, 120), offset=QPoint(0, 3))
+        save_button.setGraphicsEffect(shadow)
         save_button.clicked.connect(self.accept)
         button_layout.addWidget(save_button)
         
@@ -1689,11 +1742,15 @@ class RiotClientNotFoundDialog(PopupDialog):
         button_layout = QHBoxLayout()
         browse_button = QPushButton("Browse")
         browse_button.setStyleSheet("background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 8px;")
+        shadow = QGraphicsDropShadowEffect(blurRadius=10, color=QColor(0, 0, 0, 120), offset=QPoint(0, 3))
+        browse_button.setGraphicsEffect(shadow)
         browse_button.clicked.connect(self.browse)
         button_layout.addWidget(browse_button)
 
         save_button = QPushButton("Save")
         save_button.setStyleSheet("background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 8px;")
+        shadow = QGraphicsDropShadowEffect(blurRadius=10, color=QColor(0, 0, 0, 120), offset=QPoint(0, 3))
+        save_button.setGraphicsEffect(shadow)
         save_button.clicked.connect(self.accept)
         button_layout.addWidget(save_button)
         
@@ -1735,6 +1792,8 @@ class IMAMenuPathDialog(PopupDialog):
             }
             QPushButton:hover { background-color: #5a5556; border: 1px solid #c89f68; }
         ''')
+        shadow = QGraphicsDropShadowEffect(blurRadius=10, color=QColor(0, 0, 0, 120), offset=QPoint(0, 3))
+        browse_button.setGraphicsEffect(shadow)
         browse_button.clicked.connect(self.browse)
         button_layout.addWidget(browse_button)
         
@@ -1748,6 +1807,8 @@ class IMAMenuPathDialog(PopupDialog):
             }
             QPushButton:hover { background-color: #d9b68b; }
         ''')
+        shadow = QGraphicsDropShadowEffect(blurRadius=10, color=QColor(0, 0, 0, 120), offset=QPoint(0, 3))
+        ok_button.setGraphicsEffect(shadow)
         ok_button.clicked.connect(self.accept)
         button_layout.addWidget(ok_button)
         
@@ -1788,6 +1849,8 @@ class ConfirmDeleteDialog(PopupDialog):
             QPushButton:pressed { background-color: #454142; }
         """
 )
+        shadow = QGraphicsDropShadowEffect(blurRadius=10, color=QColor(0, 0, 0, 120), offset=QPoint(0, 3))
+        no_button.setGraphicsEffect(shadow)
         no_button.clicked.connect(self.reject)
         button_layout.addWidget(no_button)
 
@@ -1801,6 +1864,8 @@ class ConfirmDeleteDialog(PopupDialog):
             }
         """
 )
+        shadow = QGraphicsDropShadowEffect(blurRadius=10, color=QColor(0, 0, 0, 120), offset=QPoint(0, 3))
+        yes_button.setGraphicsEffect(shadow)
         yes_button.clicked.connect(self.accept)
         button_layout.addWidget(yes_button)
         
@@ -1834,6 +1899,8 @@ class AccountWidget(QWidget):
                               QWidget#AccountWidget[is_add_button="true"]:hover { background-color: #5a5556; } 
                               QWidget#AccountWidget[is_add_button="true"] QLabel#NameLabel { color: #c89f68; }""")
         self.init_ui(icon)
+        shadow = QGraphicsDropShadowEffect(blurRadius=15, color=QColor(0, 0, 0, 150), offset=QPoint(0, 4))
+        self.setGraphicsEffect(shadow)
 
         self.icon_anim = QPropertyAnimation(self, b"iconSize")
         self.icon_anim.setDuration(150)
@@ -2082,6 +2149,8 @@ class HoverButton(QPushButton):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.anim = QPropertyAnimation(self, b"iconSize", duration=150, easingCurve=QEasingCurve.OutQuad)
+        shadow = QGraphicsDropShadowEffect(blurRadius=10, color=QColor(0, 0, 0, 120), offset=QPoint(0, 3))
+        self.setGraphicsEffect(shadow)
 
     def enterEvent(self, event):
         self.original_icon_size = self.iconSize()

@@ -1,11 +1,11 @@
 import os
 import threading
 import logging
-from PyQt5.QtWidgets import QMessageBox, QFileDialog, QDialog
+from PyQt5.QtWidgets import QMessageBox, QFileDialog, QDialog, QApplication
 from ui_components import (
     SaveAccountDialog, ExportIMAMenuDialog, OptionsDialog, 
     CustomMessageDialog, ConfirmDeleteDialog, BackupRestoreDialog, 
-    BackupRestoreSelectionDialog, IMAMenuPathDialog
+    BackupRestoreSelectionDialog, IMAMenuPathDialog, LoadingDialog
 )
 from google_drive_api import GoogleDriveAPI
 import tempfile
@@ -65,15 +65,24 @@ class SettingsActions:
         backup_filename = f"{self.switcher.get_backup_filename()}.zip"
         path, _ = QFileDialog.getSaveFileName(self.parent, "Save Backup", backup_filename, "ZIP Files (*.zip)")
         if path:
+            loading_dialog = LoadingDialog("Backing Up", "Backing up profiles...", self.parent)
+            loading_dialog.show()
+            QApplication.processEvents()
             if self.switcher.backup_profiles(path):
+                loading_dialog.close()
                 msg_dialog = CustomMessageDialog("Backup Successful", "Profiles backed up locally.", self.parent)
                 msg_dialog.exec_()
                 logging.info(f"Profiles backed up to {path}")
             else:
+                loading_dialog.close()
                 self.parent.status_label.setText("Backup failed.")
                 logging.error(f"Failed to backup profiles to {path}")
 
     def _backup_google_drive(self):
+        loading_dialog = LoadingDialog("Backing Up", "Backing up profiles to Google Drive...", self.parent)
+        loading_dialog.show()
+        QApplication.processEvents()
+
         temp_file_path = None
         try:
             backup_filename_base = self.switcher.get_backup_filename()
@@ -85,23 +94,28 @@ class SettingsActions:
                 backup_filename_zip = f"{backup_filename_base}.zip"
                 drive_api.upload_file(temp_file_path, backup_filename_zip)
                 
+                loading_dialog.close()
                 msg_dialog = CustomMessageDialog("Backup Successful", "Profiles backed up to Google Drive.", self.parent)
                 msg_dialog.exec_()
                 logging.info(f"Profiles backed up to Google Drive: {backup_filename_zip}")
             else:
+                loading_dialog.close()
                 self.parent.status_label.setText("Backup failed.")
                 logging.error("Failed to create backup file.")
                 QMessageBox.critical(self.parent, "Backup Failed", "Could not create the backup file.")
 
         except (IOError, ConnectionAbortedError) as e:
+            loading_dialog.close()
             self.parent.status_label.setText("Google Drive backup failed.")
             logging.error(f"Google Drive backup failed: {e}")
             QMessageBox.critical(self.parent, "Google Drive Error", str(e))
         except Exception as e:
+            loading_dialog.close()
             self.parent.status_label.setText("Google Drive backup failed.")
             logging.error(f"An unexpected error occurred during Google Drive backup: {e}")
             QMessageBox.critical(self.parent, "Google Drive Error", f"An unexpected error occurred: {e}")
         finally:
+            loading_dialog.close()
             if temp_file_path and Path(temp_file_path).exists():
                 try:
                     Path(temp_file_path).unlink()
@@ -121,9 +135,17 @@ class SettingsActions:
     def _restore_local(self):
         path, _ = QFileDialog.getOpenFileName(self.parent, "Select Backup", "", "ZIP Files (*.zip)")
         if path:
+            loading_dialog = LoadingDialog("Restoring", "Restoring profiles...", self.parent)
+            loading_dialog.show()
+            QApplication.processEvents()
             self._confirm_and_restore(path)
+            loading_dialog.close()
 
     def _restore_google_drive(self):
+        loading_dialog = LoadingDialog("Restoring", "Restoring profiles from Google Drive...", self.parent)
+        loading_dialog.show()
+        QApplication.processEvents()
+
         temp_file_path = None
         try:
             drive_api = GoogleDriveAPI(self.switcher.user_data_dir)
@@ -134,17 +156,22 @@ class SettingsActions:
                 
                 drive_api.download_file(backup_file['id'], temp_file_path)
                 self._confirm_and_restore(temp_file_path, backup_file['modifiedTime'])
+                loading_dialog.close()
             else:
+                loading_dialog.close()
                 QMessageBox.warning(self.parent, "No Backup Found", "No backup file found on your Google Drive.")
         except (IOError, ConnectionAbortedError) as e:
+            loading_dialog.close()
             self.parent.status_label.setText("Google Drive restore failed.")
             logging.error(f"Google Drive restore failed: {e}")
             QMessageBox.critical(self.parent, "Google Drive Error", str(e))
         except Exception as e:
+            loading_dialog.close()
             self.parent.status_label.setText("Google Drive restore failed.")
             logging.error(f"An unexpected error occurred during Google Drive restore: {e}")
             QMessageBox.critical(self.parent, "Google Drive Error", f"An unexpected error occurred: {e}")
         finally:
+            loading_dialog.close()
             if temp_file_path and Path(temp_file_path).exists():
                 try:
                     Path(temp_file_path).unlink()
@@ -169,6 +196,7 @@ class SettingsActions:
             if self.switcher.restore_profiles(path):
                 msg_dialog = CustomMessageDialog("Restore Successful", "Profiles restored successfully.", self.parent)
                 msg_dialog.exec_()
+                logging.info("Calling load_accounts after restore.")
                 self.parent.load_accounts()
                 logging.info(f"Profiles restored from {path}")
             else:

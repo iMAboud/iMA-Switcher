@@ -74,9 +74,10 @@ class ContextActions:
         name = self.parent.get_selected_account_name()
         if not name: return
 
-        current_icon_path, _, _, _, _, _, _ = self.switcher.get_saved_accounts().get(name, (None, None, None, None, None, None, None))
+        account_data = self.switcher.get_saved_accounts().get(name)
+        current_icon_path = account_data['icon_path'] if account_data else None
         
-        dialog = IconPickerDialog(self.switcher, current_icon_path, self.parent)
+        dialog = IconPickerDialog(self.switcher, current_icon_path, name, self.parent)
         if dialog.exec_() == QDialog.Accepted:
             new_icon_path = dialog.get_selected_icon_path()
             if new_icon_path:
