@@ -36,15 +36,15 @@ except ImportError:
     UnidentifiedImageError = None # Define it as None if PIL is not available
     logging.warning("Pillow not installed. Image conversion for icons will not work. Please install it with 'pip install Pillow'")
 
+import logging
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
 try:
     from bs4 import BeautifulSoup
 except ImportError:
     BeautifulSoup = None
     logging.warning("BeautifulSoup not installed. Rank fetching will not work. Please install it with 'pip install beautifulsoup4'")
-
-import logging
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 from jsonschema import validate, ValidationError
 
