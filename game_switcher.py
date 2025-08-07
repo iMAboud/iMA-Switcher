@@ -357,7 +357,9 @@ class GameSwitcher:
 
     def _terminate_processes(self):
         logging.info("Terminating Riot and game processes...")
-        all_processes = self.GAMES['valorant']["processes_to_kill"] + self.GAMES['lol']["processes_to_kill"]
+        all_processes = self.GAMES['valorant']["processes_to_kill"] + self.GAMES['lol']["processes_to_kill"] + ["RiotClientUxRender.exe"]
+        all_processes = list(set(all_processes))
+
         for exe in all_processes:
             try:
                 subprocess.run(f"taskkill /f /im {exe}", shell=True, check=True, capture_output=True, text=True)
@@ -366,6 +368,9 @@ class GameSwitcher:
                 logging.debug(f"Process {exe} not running or could not be terminated: {e.stderr.strip()}")
             except Exception as e:
                 logging.error(f"Error terminating process {exe}: {e}")
+
+        logging.info("Waiting 2 seconds for processes to release file locks...")
+        time.sleep(2)
 
     def _create_junction(self, source, link_name):
         startupinfo = subprocess.STARTUPINFO()
