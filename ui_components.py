@@ -380,10 +380,6 @@ class ExportIMAMenuDialog(QDialog):
         """)
         shadow = QGraphicsDropShadowEffect(blurRadius=10, color=QColor(0, 0, 0, 120), offset=QPoint(0, 3))
         install_button.setGraphicsEffect(shadow)
-        shadow = QGraphicsDropShadowEffect(blurRadius=10, color=QColor(0, 0, 0, 120), offset=QPoint(0, 3))
-        ok_button.setGraphicsEffect(shadow)
-        shadow = QGraphicsDropShadowEffect(blurRadius=10, color=QColor(0, 0, 0, 120), offset=QPoint(0, 3))
-        export_button.setGraphicsEffect(shadow)
         export_button.clicked.connect(self.accept)
         button_layout.addWidget(export_button)
         
@@ -661,6 +657,7 @@ class BackupRestoreSelectionDialog(PopupDialog):
         self.selection = None
 
         self.content_layout.setSpacing(15)
+        self.content_layout.setAlignment(Qt.AlignCenter)
 
 class LoadingDialog(PopupDialog):
     def __init__(self, title, message, parent=None):
@@ -678,7 +675,6 @@ class LoadingDialog(PopupDialog):
         self.loading_label.setAlignment(Qt.AlignCenter)
         self.loading_label.setStyleSheet("color: #c89f68; font-size: 20px; font-weight: bold;")
         self.content_layout.addWidget(self.loading_label)
-        self.content_layout.setAlignment(Qt.AlignCenter)
 
         backup_button = QPushButton("Backup")
         backup_button.setStyleSheet("""
