@@ -393,8 +393,8 @@ class ExportIMAMenuDialog(QDialog):
         if ordered_list is None: ordered_list = sorted(self.accounts_data.keys())
         all_accounts = set(self.accounts_data.keys()); current_accounts = set(ordered_list)
         for name in ordered_list:
-            if name in self.accounts_data: self._add_item(name, self.accounts_data[name][0])
-        for name in sorted(list(all_accounts - current_accounts)): self._add_item(name, self.accounts_data[name][0])
+            if name in self.accounts_data: self._add_item(name, self.accounts_data[name]['icon_path'])
+        for name in sorted(list(all_accounts - current_accounts)): self._add_item(name, self.accounts_data[name]['icon_path'])
 
     def _add_item(self, name, icon_path):
         item = QListWidgetItem(name); item.setIcon(self.parent().switcher.get_qicon_from_path(icon_path or "")); self.accounts_list.addItem(item)
