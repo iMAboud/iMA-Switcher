@@ -818,17 +818,28 @@ class GameSwitcher:
                 shutil.copytree(self.profiles_dir, user_data_backup_path / "profiles")
                 shutil.copy2(self.config_path, user_data_backup_path / "config.json")
 
-                # 2. Copy Riot Games and VALORANT data to a 'RiotData' folder in temp_dir
+                # 2. Selectively copy game settings to a 'RiotData' folder
                 riot_data_backup_path = temp_dir_path / "RiotData"
                 riot_data_backup_path.mkdir()
-                
-                riot_client_path = Path(self.app_data_path) / "Riot Games" / "Riot Client"
-                if riot_client_path.exists():
-                    shutil.copytree(riot_client_path, riot_data_backup_path / "Riot Client")
 
-                valorant_path = Path(self.app_data_path) / "VALORANT"
-                if valorant_path.exists():
-                    shutil.copytree(valorant_path, riot_data_backup_path / "VALORANT")
+                setting_files_to_back_up = self._find_game_user_settings_files() + self._find_riot_user_settings_files()
+
+                if not setting_files_to_back_up:
+                    logging.warning("No .ini setting files found to back up.")
+                else:
+                    for file_path in setting_files_to_back_up:
+                        try:
+                            # Create a relative path to maintain folder structure
+                            relative_path = file_path.relative_to(Path(self.app_data_path))
+                            backup_dest_path = riot_data_backup_path / relative_path
+
+                            # Ensure the destination directory exists
+                            backup_dest_path.parent.mkdir(parents=True, exist_ok=True)
+
+                            shutil.copy2(file_path, backup_dest_path)
+                            logging.info(f"Backed up setting file: {relative_path}")
+                        except Exception as e:
+                            logging.error(f"Failed to back up setting file {file_path}: {e}")
 
                 # 3. Create the zip archive from the temp_dir
                 shutil.make_archive(base_name=str(backup_file_path).replace('.zip', ''),
@@ -836,7 +847,7 @@ class GameSwitcher:
                                     root_dir=temp_dir)
             return True
         except Exception as e:
-            logging.error(f"Backup failed: {e}")
+            logging.error(f"Backup failed: {e}", exc_info=True)
             return False
 
     def _robust_rmtree(self, path, max_retries=3, delay=1):
@@ -860,9 +871,16 @@ class GameSwitcher:
             self._terminate_processes()
             with tempfile.TemporaryDirectory() as temp_dir:
                 temp_dir_path = Path(temp_dir)
-                with ZipFile(backup_file_path, 'r') as zip_ref:
-                    zip_ref.extractall(temp_dir_path)
+                try:
+                    with ZipFile(backup_file_path, 'r') as zip_ref:
+                        zip_ref.extractall(temp_dir_path)
+                except (BadZipFile, FileNotFoundError) as e:
+                    logging.error(f"Restore failed: Invalid or missing backup file. {e}")
+                    # It's better to return a more descriptive error message if possible
+                    # but for now, adhering to the boolean return type for the worker.
+                    return False
 
+                # Restore UserData (profiles, config.json)
                 user_data_source = temp_dir_path / "UserData"
                 if user_data_source.exists():
                     backup_config_path = user_data_source / "config.json"
@@ -872,24 +890,25 @@ class GameSwitcher:
 
                     backup_profiles_dir = user_data_source / "profiles"
                     if backup_profiles_dir.exists():
-                        for account_name in os.listdir(backup_profiles_dir):
-                            source_account_path = backup_profiles_dir / account_name
-                            dest_account_path = self.profiles_dir / account_name
-                            if source_account_path.is_dir():
-                                self._robust_rmtree(dest_account_path)
-                                shutil.copytree(source_account_path, dest_account_path)
+                        self._robust_rmtree(self.profiles_dir)
+                        shutil.copytree(backup_profiles_dir, self.profiles_dir)
 
+                # Selectively restore RiotData (.ini files)
                 riot_data_source = temp_dir_path / "RiotData"
                 if riot_data_source.exists():
-                    riot_client_dest = Path(self.app_data_path) / "Riot Games" / "Riot Client"
-                    self._robust_rmtree(riot_client_dest)
-                    if (riot_data_source / "Riot Client").exists():
-                        shutil.move(str(riot_data_source / "Riot Client"), str(riot_client_dest))
+                    for root, _, files in os.walk(riot_data_source):
+                        for file in files:
+                            if file.endswith('.ini'):
+                                try:
+                                    source_file_path = Path(root) / file
+                                    relative_path = source_file_path.relative_to(riot_data_source)
+                                    dest_file_path = Path(self.app_data_path) / relative_path
 
-                    valorant_dest = Path(self.app_data_path) / "VALORANT"
-                    self._robust_rmtree(valorant_dest)
-                    if (riot_data_source / "VALORANT").exists():
-                        shutil.move(str(riot_data_source / "VALORANT"), str(valorant_dest))
+                                    dest_file_path.parent.mkdir(parents=True, exist_ok=True)
+                                    shutil.copy2(source_file_path, dest_file_path)
+                                    logging.info(f"Restored setting file: {relative_path}")
+                                except Exception as e:
+                                    logging.error(f"Failed to restore setting file {file}: {e}")
             
             logging.info("Clearing caches after restore...")
             self._icon_cache.clear()
@@ -1137,6 +1156,60 @@ class GameSwitcher:
             return None, f"Error reading {ini_files[0]}: {e}"
 
     def update_all_game_user_settings(self, graphics_settings):
+        """
+        Updates all found GameUserSettings.ini and RiotUserSettings.ini files
+        with the provided graphics and audio settings.
+        This function is designed to be robust, preserving file structure and
+        handling additions, updates, and deletions of settings.
+        """
+        def _update_ini_file_robustly(ini_file_path, settings_to_update, keys_to_delete=None):
+            if keys_to_delete is None:
+                keys_to_delete = []
+            try:
+                with ini_file_path.open('r', encoding='utf-8') as f:
+                    lines = f.readlines()
+
+                new_lines = []
+                remaining_settings_to_update = settings_to_update.copy()
+
+                for line in lines:
+                    stripped_line = line.strip()
+                    # Skip empty lines or lines without an '='
+                    if not stripped_line or '=' not in stripped_line:
+                        new_lines.append(line)
+                        continue
+
+                    key = stripped_line.split('=', 1)[0]
+
+                    if key in keys_to_delete:
+                        logging.debug(f"Deleting setting '{key}' from {ini_file_path.name}")
+                        continue  # Skip line to delete
+
+                    if key in remaining_settings_to_update:
+                        value = remaining_settings_to_update[key]
+                        new_lines.append(f"{key}={value}\n")
+                        logging.debug(f"Updating setting '{key}={value}' in {ini_file_path.name}")
+                        del remaining_settings_to_update[key]
+                    else:
+                        new_lines.append(line) # Keep original line
+
+                # Add any new settings to the end of the file
+                if remaining_settings_to_update:
+                    if new_lines and new_lines[-1].strip() != '':
+                        new_lines.append('\n') # Ensure there's a blank line before adding new settings
+                    for key, value in remaining_settings_to_update.items():
+                        new_lines.append(f"{key}={value}\n")
+                        logging.debug(f"Adding new setting '{key}={value}' to {ini_file_path.name}")
+
+                with ini_file_path.open('w', encoding='utf-8') as f:
+                    f.writelines(new_lines)
+
+                logging.info(f"Successfully updated settings in: {ini_file_path}")
+                return True
+            except Exception as e:
+                logging.error(f"Error updating {ini_file_path}: {e}", exc_info=True)
+                return False
+
         # Calculate a hash of the settings to avoid unnecessary file writes.
         settings_str = json.dumps(graphics_settings, sort_keys=True)
         current_hash = hashlib.sha256(settings_str.encode('utf-8')).hexdigest()
@@ -1146,123 +1219,60 @@ class GameSwitcher:
             logging.info("Graphics settings are already up to date. Skipping file I/O.")
             return True, "Settings already up to date."
 
-        game_user_ini_files = self._find_game_user_settings_files()
-        riot_user_ini_files = self._find_riot_user_settings_files()
         all_success = True
 
+        # --- Update GameUserSettings.ini ---
+        game_user_ini_files = self._find_game_user_settings_files()
         if not game_user_ini_files:
             logging.info("No GameUserSettings.ini files found to update.")
         else:
+            game_settings_to_apply = graphics_settings.get("quality", {}).copy()
             display_mode = graphics_settings.get("display_mode", "Default")
-            quality_settings = graphics_settings.get("quality", {})
-            
+
+            display_settings = {}
+            if display_mode == "Fullscreen":
+                display_settings = {
+                    "ResolutionSizeX": "1920", "ResolutionSizeY": "1080",
+                    "LastUserConfirmedResolutionSizeX": "1920", "LastUserConfirmedResolutionSizeY": "1080",
+                    "WindowPosX": "0", "WindowPosY": "0",
+                    "FullscreenMode": "0", "LastConfirmedFullscreenMode": "0", "PreferredFullscreenMode": "0"
+                }
+            elif display_mode == "Windowed Fullscreen":
+                display_settings = {
+                    "ResolutionSizeX": "1920", "ResolutionSizeY": "1080",
+                    "LastUserConfirmedResolutionSizeX": "1280", "LastUserConfirmedResolutionSizeY": "720",
+                    "WindowPosX": "0", "WindowPosY": "0",
+                    "FullscreenMode": "1", "LastConfirmedFullscreenMode": "1", "PreferredFullscreenMode": "1"
+                }
+            elif display_mode == "Windowed":
+                display_settings = {
+                    "ResolutionSizeX": "1920", "ResolutionSizeY": "1032",
+                    "LastUserConfirmedResolutionSizeX": "1280", "LastUserConfirmedResolutionSizeY": "720",
+                    "WindowPosX": "0", "WindowPosY": "24",
+                    "FullscreenMode": "2", "LastConfirmedFullscreenMode": "2", "PreferredFullscreenMode": "1"
+                }
+
+            game_settings_to_apply.update(display_settings)
+
             for ini_file_path in game_user_ini_files:
-                try:
-                    with ini_file_path.open('r', encoding='utf-8') as f: lines = f.readlines()
-                    
-                    temp_lines = []
-                    settings_to_update = {}
-                    if display_mode == "Fullscreen":
-                        settings_to_update = {
-                            "ResolutionSizeX": "1920", "ResolutionSizeY": "1080",
-                            "LastUserConfirmedResolutionSizeX": "1920", "LastUserConfirmedResolutionSizeY": "1080",
-                            "WindowPosX": "0", "WindowPosY": "0",
-                            "LastConfirmedFullscreenMode": "0", "PreferredFullscreenMode": "0"
-                        }
-                    elif display_mode == "Windowed Fullscreen":
-                        settings_to_update = {
-                            "ResolutionSizeX": "1920", "ResolutionSizeY": "1080",
-                            "LastUserConfirmedResolutionSizeX": "1280", "LastUserConfirmedResolutionSizeY": "720",
-                            "WindowPosX": "0", "WindowPosY": "0",
-                            "LastConfirmedFullscreenMode": "1", "PreferredFullscreenMode": "1"
-                        }
-                    elif display_mode == "Windowed":
-                        settings_to_update = {
-                            "ResolutionSizeX": "1920", "ResolutionSizeY": "1032",
-                            "LastUserConfirmedResolutionSizeX": "1280", "LastUserConfirmedResolutionSizeY": "720",
-                            "WindowPosX": "0", "WindowPosY": "24",
-                            "LastConfirmedFullscreenMode": "2", "PreferredFullscreenMode": "1"
-                        }
-
-                    for line in lines:
-                        stripped = line.strip()
-                        key_to_update = next((key for key in settings_to_update if stripped.startswith(key + "=")), None)
-                        if key_to_update:
-                            temp_lines.append(f"{key_to_update}={settings_to_update[key_to_update]}\n")
-                            del settings_to_update[key_to_update]
-                            continue
-                        
-                        if stripped.startswith("sg."):
-                            key = stripped.split('=')[0]
-                            if key in quality_settings:
-                                temp_lines.append(f"{key}={quality_settings[key]}\n")
-                                continue
-
-                        if display_mode != "Default" and stripped.startswith("FullscreenMode="):
-                            continue
-
-                        temp_lines.append(line)
-
-                    if display_mode != "Default":
-                        if display_mode in ["Windowed", "Windowed Fullscreen"]:
-                            fs_val = "1" if display_mode == "Windowed Fullscreen" else "2"
-                            hdr_idx = next((i for i, l in enumerate(temp_lines) if l.strip().startswith("HDRDisplayOutputNits=")), -1)
-                            if hdr_idx != -1: temp_lines.insert(hdr_idx + 1, f"FullscreenMode={fs_val}\n")
-
-                    with ini_file_path.open('w', encoding='utf-8') as f: f.writelines(temp_lines)
-                    logging.info(f"Successfully updated: {ini_file_path}")
-                except Exception as e:
-                    logging.error(f"Error updating {ini_file_path}: {e}")
+                if not _update_ini_file_robustly(ini_file_path, game_settings_to_apply):
                     all_success = False
 
+        # --- Update RiotUserSettings.ini ---
+        riot_user_ini_files = self._find_riot_user_settings_files()
         if not riot_user_ini_files:
             logging.info("No RiotUserSettings.ini files found to update.")
         else:
             riot_settings = graphics_settings.get("riot_settings", {})
             audio_settings = graphics_settings.get("audio_settings", {})
-            all_settings_to_apply = {**riot_settings, **audio_settings}
+            all_riot_settings = {**riot_settings, **audio_settings}
+
+            # Separate settings to update/add from settings to delete
+            settings_to_update = {k: v for k, v in all_riot_settings.items() if v not in ["High", "On", "MAX"]}
+            keys_to_delete = [k for k, v in all_riot_settings.items() if v in ["High", "On", "MAX"]]
 
             for ini_file_path in riot_user_ini_files:
-                try:
-                    with ini_file_path.open('r', encoding='utf-8') as f: lines = f.readlines()
-                    
-                    temp_lines = []
-                    keys_to_process = set(all_settings_to_apply.keys())
-                    
-                    for line in lines:
-                        stripped = line.strip()
-                        key_found = next((key for key in keys_to_process if stripped.startswith(key + "=")), None)
-                        
-                        if key_found:
-                            value = all_settings_to_apply[key_found]
-                            if value in ["High", "On", "MAX"]:
-                                continue
-                            else:
-                                temp_lines.append(f"{key_found}={value}\n")
-                            keys_to_process.remove(key_found)
-                        else:
-                            temp_lines.append(line)
-                    
-                    if keys_to_process:
-                        last_ea_line_idx = -1
-                        for i, line in reversed(list(enumerate(temp_lines))):
-                            if line.strip().startswith("EAres"):
-                                last_ea_line_idx = i
-                                break
-                        
-                        for key in sorted(list(keys_to_process)):
-                            value = all_settings_to_apply[key]
-                            if value not in ["High", "On", "MAX"]:
-                                insert_line = f"{key}={value}\n"
-                                if last_ea_line_idx != -1:
-                                    temp_lines.insert(last_ea_line_idx + 1, insert_line)
-                                else:
-                                    temp_lines.append(insert_line)
-
-                    with ini_file_path.open('w', encoding='utf-8') as f: f.writelines(temp_lines)
-                    logging.info(f"Successfully updated: {ini_file_path}")
-                except Exception as e:
-                    logging.error(f"Error updating {ini_file_path}: {e}")
+                if not _update_ini_file_robustly(ini_file_path, settings_to_update, keys_to_delete):
                     all_success = False
         
         if all_success:
