@@ -201,7 +201,7 @@ class GameSwitcher:
         logs_path = Path(self.app_data_path) / "VALORANT" / "Saved" / "Logs"
         if logs_path.exists():
             for filename in os.listdir(logs_path):
-                if filename.startswith("ShooterGame-backup") and filename.endswith(".log"):
+                if (filename.startswith("ShooterGame-backup") and filename.endswith(".log")) or filename.startswith("cef3-backup-"):
                     try:
                         (logs_path / filename).unlink()
                         logging.info(f"Successfully deleted log file: {filename}")
@@ -639,13 +639,17 @@ class GameSwitcher:
 
     def add_account_flow(self):
         if not self.is_admin(): return False
-        game = 'valorant'  # Default to valorant for this flow
+        game = 'valorant'
         self._terminate_processes()
         for item_name in self.riot_games_config["LoginData"].keys():
             riot_item_path = self.riot_client_data_path / item_name
             self._remove_junction_or_dir(riot_item_path)
         try:
-            subprocess.Popen([self.riot_games_config["ExeLocationDefault"]])
+            launch_args = self.GAMES[game]["launch_args"].split()
+            command = [self.riot_games_config["ExeLocationDefault"]] + launch_args
+            
+            creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+            subprocess.Popen(command, creationflags=creationflags, close_fds=True)
             return True
         except FileNotFoundError:
             return False
@@ -1049,7 +1053,7 @@ class GameSwitcher:
             return []
 
         for root, dirs, files in os.walk(valorant_config_path):
-            if "GameUserSettings.ini" in files and Path(root).name == "Windows":
+            if "GameUserSettings.ini" in files and Path(root).name.startswith("Windows"):
                 ini_file_path = Path(root) / "GameUserSettings.ini"
                 ini_files.append(ini_file_path)
                 logging.debug(f"Found: {ini_file_path}")
@@ -1066,7 +1070,7 @@ class GameSwitcher:
             return []
 
         for root, dirs, files in os.walk(valorant_config_path):
-            if "RiotUserSettings.ini" in files and Path(root).name == "Windows":
+            if "RiotUserSettings.ini" in files and Path(root).name.startswith("Windows"):
                 ini_file_path = Path(root) / "RiotUserSettings.ini"
                 ini_files.append(ini_file_path)
                 logging.debug(f"Found: {ini_file_path}")

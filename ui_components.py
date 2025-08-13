@@ -1835,6 +1835,12 @@ class AccountWidget(QWidget):
                               QWidget#AccountWidget[is_add_button="true"] QLabel#NameLabel { color: #c89f68; }""")
         self.init_ui(icon)
 
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(15)
+        shadow.setColor(QColor(0, 0, 0, 160))
+        shadow.setOffset(0, 5)
+        self.setGraphicsEffect(shadow)
+
         self.icon_anim = QPropertyAnimation(self, b"iconSize")
         self.icon_anim.setDuration(150)
         self.icon_anim.setEasingCurve(QEasingCurve.OutQuad)

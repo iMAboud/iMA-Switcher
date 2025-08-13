@@ -25,6 +25,7 @@ from PyQt5.QtWidgets import (
     QMenu,
     QAction,
     QDialog,
+    QGraphicsDropShadowEffect,
 )
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QFont, QColor, QImage
 from PyQt5.QtCore import Qt, QSize, QPoint, pyqtSignal, QTimer, QObject, QRunnable, QThreadPool
@@ -149,6 +150,7 @@ class ModernValorantSwitcher(QMainWindow):
     status_message_requested = pyqtSignal(str)
     
     switch_account_finished = pyqtSignal(bool, str, str, QPixmap, str, str, str, bool)
+    add_account_finished = pyqtSignal(bool)
     
     
     
@@ -184,6 +186,7 @@ class ModernValorantSwitcher(QMainWindow):
         self.status_message_requested.connect(self.status_label.setText)
         
         self.switch_account_finished.connect(self.on_switch_account_finished)
+        self.add_account_finished.connect(self.on_add_account_finished)
         
         
         
@@ -250,6 +253,11 @@ class ModernValorantSwitcher(QMainWindow):
         self.add_account_button.setStyleSheet(
             "QPushButton {background-color: #4f4a4b; border-radius: 20px;} QPushButton:hover { background-color: #d9b68b; }"
         )
+        add_shadow = QGraphicsDropShadowEffect(self)
+        add_shadow.setBlurRadius(15)
+        add_shadow.setColor(QColor(0, 0, 0, 160))
+        add_shadow.setOffset(0, 5)
+        self.add_account_button.setGraphicsEffect(add_shadow)
         bottom_layout.addWidget(self.add_account_button, 0, 1, Qt.AlignCenter)
 
         self.settings_button = HoverButton()
@@ -260,6 +268,11 @@ class ModernValorantSwitcher(QMainWindow):
         self.settings_button.setStyleSheet(
             "QPushButton {background-color: #4f4a4b; border-radius: 20px;} QPushButton:hover { background-color: #c89f68; }"
         )
+        settings_shadow = QGraphicsDropShadowEffect(self)
+        settings_shadow.setBlurRadius(15)
+        settings_shadow.setColor(QColor(0, 0, 0, 160))
+        settings_shadow.setOffset(0, 5)
+        self.settings_button.setGraphicsEffect(settings_shadow)
         bottom_layout.addWidget(self.settings_button, 0, 2, Qt.AlignRight)
 
         bottom_layout.setColumnStretch(0, 1)
@@ -699,6 +712,17 @@ class ModernValorantSwitcher(QMainWindow):
             except Exception as e:
                 logging.error(f"Could not create notification: {e}")
         self.refresh_accounts() # Refresh after any switch attempt
+
+    def on_add_account_finished(self, success):
+        if success:
+            self.status_label.setText("New account detected. Please save it.")
+            # Bring window to front
+            self.showNormal()
+            self.activateWindow()
+            self.raise_()
+            self.settings_handler.save_current_account()
+        else:
+            self.status_label.setText("Add account flow failed or was cancelled.")
 
     
 
