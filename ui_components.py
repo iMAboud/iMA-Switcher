@@ -1516,36 +1516,12 @@ class SettingsDropdownMenu(QWidget):
         options_btn.clicked.connect(lambda: self.execute_action(self.actions_handler.open_options_dialog))
         main_layout.addWidget(options_btn)
 
-        update_btn = QPushButton(" Check for Update")
-        update_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #4f4a4b;
-                color: #e0d6d1;
-                font-size: 13px;
-                font-weight: bold;
-                border: none;
-                border-radius: 12px;
-                padding: 8px 12px;
-                text-align: left;
-            }
-            QPushButton:hover {
-                background-color: #c89f68;
-                color: #2c2a2b;
-            }
-        """)
-        update_icon = Path(get_asset_path("Update.png"))
-        if update_icon.exists():
-            update_btn.setIcon(QIcon(str(update_icon)))
-            update_btn.setIconSize(QSize(18, 18))
-        update_btn.clicked.connect(lambda: self.execute_action(self.actions_handler.open_update_dialog))
-        main_layout.addWidget(update_btn)
-
         outer_layout = QVBoxLayout(self)
         outer_layout.setContentsMargins(0, 0, 0, 0)
         outer_layout.addWidget(self.main_widget)
 
         self.target_width = 220
-        self.target_height = 215
+        self.target_height = 175
         self.resize(self.target_width, self.target_height)
 
     def show_animated(self):
@@ -2369,13 +2345,9 @@ class OptionsDialog(PopupDialog):
         group_layout.setContentsMargins(15, 20, 15, 15)
 
         from game_switcher import APP_VERSION
-        version_label = QLabel(f"<b>Current Installed Version:</b> v{APP_VERSION}")
+        version_label = QLabel(f"<b>Current Version:</b> v{APP_VERSION}")
         version_label.setStyleSheet("font-size: 14px; color: #e0d6d1;")
         group_layout.addWidget(version_label)
-
-        repo_label = QLabel("<b>Official Repository:</b> github.com/iMAboud/iMA-Switcher")
-        repo_label.setStyleSheet("font-size: 12px; color: #b0a8a8;")
-        group_layout.addWidget(repo_label)
 
         check_btn = QPushButton("Check for Updates")
         check_btn.setStyleSheet("""
@@ -3684,17 +3656,17 @@ class UpdateDialog(PopupDialog):
         super().__init__("Software Update", parent)
         self.switcher = switcher_instance
         self.setFixedWidth(420)
-        self.setMinimumHeight(180)
+        self.setMinimumHeight(240)
 
         self.has_update = False
         self.download_url = None
         self.installer_path = None
         self.file_size = 0
 
-        self.signals = UpdateSignals()
-        self.signals.check_finished.connect(self.on_update_check_finished)
-        self.signals.progress.connect(self.on_download_progress)
-        self.signals.download_finished.connect(self.on_download_finished)
+        self.signals = UpdateSignals(self)
+        self.signals.check_finished.connect(self.on_update_check_finished, Qt.QueuedConnection)
+        self.signals.progress.connect(self.on_download_progress, Qt.QueuedConnection)
+        self.signals.download_finished.connect(self.on_download_finished, Qt.QueuedConnection)
 
         self.init_update_ui()
         self.start_check_for_updates()
@@ -3702,6 +3674,14 @@ class UpdateDialog(PopupDialog):
     def init_update_ui(self):
         self.content_layout.setContentsMargins(20, 15, 20, 20)
         self.content_layout.setSpacing(12)
+
+        logo_path = get_asset_path("app_icon.png")
+        if os.path.exists(logo_path):
+            logo_label = QLabel()
+            pix = QPixmap(logo_path).scaled(48, 48, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            logo_label.setPixmap(pix)
+            logo_label.setAlignment(Qt.AlignCenter)
+            self.content_layout.addWidget(logo_label)
 
         from game_switcher import APP_VERSION
         self.header_label = QLabel(f"<b>iMA Switcher</b> (Current: v{APP_VERSION})")
@@ -3794,11 +3774,15 @@ class UpdateDialog(PopupDialog):
             try:
                 import updater
                 has_update, current_sha, remote_sha, url, notes, size = updater.check_for_commit_update()
-                if not has_update and not remote_sha:
-                    has_update, remote_ver, url, notes, size = self.switcher.check_for_update()
-                    remote_sha = remote_ver
-                self.signals.check_finished.emit(has_update, remote_sha[:7] if remote_sha else "", url, notes, size)
+                if not has_update and not remote_sha and self.switcher and hasattr(self.switcher, 'check_for_update'):
+                    res = self.switcher.check_for_update()
+                    if res and len(res) >= 5:
+                        has_update, remote_ver, url, notes, size = res[0], res[1], res[2], res[3], res[4]
+                        remote_sha = str(remote_ver) if remote_ver else ""
+                clean_sha = str(remote_sha)[:7] if remote_sha else ""
+                self.signals.check_finished.emit(bool(has_update), clean_sha, str(url or ""), str(notes or ""), int(size or 0))
             except Exception as error:
+                logging.error(f"Update check worker exception: {error}")
                 self.signals.check_finished.emit(False, "", "", f"Error: {error}", 0)
 
         threading.Thread(target=_worker, daemon=True).start()
@@ -3809,20 +3793,16 @@ class UpdateDialog(PopupDialog):
         self.download_url = url
         self.file_size = size
 
-        import updater
-        current_sha = updater.get_current_commit()
-        display_current = current_sha[:7] if len(current_sha) >= 7 else current_sha
-
         if has_update:
-            self.setFixedSize(520, 380)
+            self.setFixedSize(520, 420)
             size_mb = size / (1024 * 1024) if size else 0
             size_str = f" ({size_mb:.1f} MB)" if size_mb > 0 else ""
             self.status_label.setText(f"🎉 New update available!{size_str}")
-            self.notes_edit.setPlainText(f"Commit Message:\n{notes}")
+            self.notes_edit.setPlainText(f"Release Details:\n{notes}")
             self.notes_edit.show()
             self.action_btn.setText("Update Now")
         else:
-            self.setFixedSize(420, 180)
+            self.setFixedSize(420, 240)
             self.status_label.setText("✓ You are on the latest version.")
             self.action_btn.setText("Check Again")
 
@@ -3873,11 +3853,19 @@ class UpdateDialog(PopupDialog):
 class InstallerDialog(PopupDialog):
     def __init__(self, parent=None):
         super().__init__("Install iMA Switcher", parent)
-        self.setFixedSize(500, 400)
+        self.setFixedSize(500, 470)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window) 
         
         self.content_layout.setContentsMargins(20, 10, 20, 20)
         self.content_layout.setSpacing(15)
+
+        logo_path = get_asset_path("app_icon.png")
+        if os.path.exists(logo_path):
+            logo_label = QLabel()
+            pix = QPixmap(logo_path).scaled(64, 64, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            logo_label.setPixmap(pix)
+            logo_label.setAlignment(Qt.AlignCenter)
+            self.content_layout.addWidget(logo_label)
 
         self.content_layout.addWidget(QLabel("Choose Installation Folder:"))
         
