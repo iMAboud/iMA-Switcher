@@ -182,13 +182,25 @@ def download_and_apply_update(download_url=EXE_DOWNLOAD_URL, progress_callback=N
         if getattr(sys, 'frozen', False):
             current_exe.rename(old_exe)
             temp_exe.rename(current_exe)
-            subprocess.Popen([str(current_exe)] + sys.argv[1:])
+
+            install_dir = str(current_exe.parent)
+            creationflags = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+            try:
+                subprocess.Popen(
+                    [str(current_exe)] + sys.argv[1:],
+                    cwd=install_dir,
+                    close_fds=True,
+                    creationflags=creationflags
+                )
+            except Exception as launch_err:
+                logging.error(f"Error launching detached update process: {launch_err}")
+                subprocess.Popen([str(current_exe)] + sys.argv[1:], cwd=install_dir)
+
             from PyQt5.QtWidgets import QApplication
             app_instance = QApplication.instance()
             if app_instance:
                 app_instance.quit()
-            else:
-                sys.exit(0)
+            sys.exit(0)
             return True, "Update applied successfully"
         else:
             return True, "Downloaded update (Dev Mode)"

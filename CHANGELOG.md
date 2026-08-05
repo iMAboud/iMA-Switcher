@@ -1,5 +1,5 @@
-### What's New in v1.0.21
+### What's New in v1.0.22
 
-- **Deadlock-Free Update Engine**: Eliminated cross-thread module import locks that caused PyInstaller compiled executables to freeze on update checks.
-- **SSL Fallback Handler**: Added automatic SSL verification fallback for Windows environments where PyInstaller bundle certificate paths fail.
-- **Instant Status Response**: Guaranteed non-blocking background thread execution returning clean "Up to date" or update notifications within seconds.
+- **Icon & Asset Retention Across Updates**: Configured detached process relaunch with explicit working directory (`cwd`), ensuring all logos, UI icons, and rank assets load instantly after auto-updating.
+- **Clean Process Handshake**: Added `close_fds` and process tree detachment (`DETACHED_PROCESS`) to resolve PyInstaller temporary directory cleanup warnings on restart.
+- **Deadlock-Free Update Engine**: Refactored update thread to guarantee non-blocking, sub-second update checks across all environments.
