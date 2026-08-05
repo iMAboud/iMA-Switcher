@@ -3691,6 +3691,28 @@ class UpdateSignals(QObject):
     progress = pyqtSignal(int, int, int)
     download_finished = pyqtSignal(bool)
 
+class UpdateCheckWorker(QThread):
+    finished = pyqtSignal(bool, str, str, str, int)
+
+    def __init__(self, switcher=None, parent=None):
+        super().__init__(parent)
+        self.switcher = switcher
+
+    def run(self):
+        try:
+            import updater
+            has_update, current_sha, remote_sha, url, notes, size = updater.check_for_commit_update()
+            if not has_update and not remote_sha and self.switcher and hasattr(self.switcher, 'check_for_update'):
+                res = self.switcher.check_for_update()
+                if res and len(res) >= 5:
+                    has_update, remote_ver, url, notes, size = res[0], res[1], res[2], res[3], res[4]
+                    remote_sha = str(remote_ver) if remote_ver else ""
+            clean_sha = str(remote_sha)[:7] if remote_sha else ""
+            self.finished.emit(bool(has_update), clean_sha, str(url or ""), str(notes or ""), int(size or 0))
+        except Exception as error:
+            logging.error(f"Update check worker exception: {error}")
+            self.finished.emit(False, "", "", f"Error: {error}", 0)
+
 class UpdateDialog(PopupDialog):
     def __init__(self, switcher_instance, parent=None, source_button=None):
         super().__init__("Software Update", parent)
@@ -3703,11 +3725,12 @@ class UpdateDialog(PopupDialog):
         self.download_url = None
         self.installer_path = None
         self.file_size = 0
+        self.check_worker = None
 
         self.signals = UpdateSignals(self)
-        self.signals.check_finished.connect(self.on_update_check_finished, Qt.QueuedConnection)
-        self.signals.progress.connect(self.on_download_progress, Qt.QueuedConnection)
-        self.signals.download_finished.connect(self.on_download_finished, Qt.QueuedConnection)
+        self.signals.check_finished.connect(self.on_update_check_finished)
+        self.signals.progress.connect(self.on_download_progress)
+        self.signals.download_finished.connect(self.on_download_finished)
 
         self.init_update_ui()
         self.start_check_for_updates()
@@ -3841,22 +3864,13 @@ class UpdateDialog(PopupDialog):
         self.timeout_timer.timeout.connect(self.on_check_timeout)
         self.timeout_timer.start(15000)
 
-        def _worker():
-            try:
-                import updater
-                has_update, current_sha, remote_sha, url, notes, size = updater.check_for_commit_update()
-                if not has_update and not remote_sha and self.switcher and hasattr(self.switcher, 'check_for_update'):
-                    res = self.switcher.check_for_update()
-                    if res and len(res) >= 5:
-                        has_update, remote_ver, url, notes, size = res[0], res[1], res[2], res[3], res[4]
-                        remote_sha = str(remote_ver) if remote_ver else ""
-                clean_sha = str(remote_sha)[:7] if remote_sha else ""
-                self.signals.check_finished.emit(bool(has_update), clean_sha, str(url or ""), str(notes or ""), int(size or 0))
-            except Exception as error:
-                logging.error(f"Update check worker exception: {error}")
-                self.signals.check_finished.emit(False, "", "", f"Error: {error}", 0)
+        if hasattr(self, 'check_worker') and self.check_worker and self.check_worker.isRunning():
+            self.check_worker.quit()
+            self.check_worker.wait()
 
-        threading.Thread(target=_worker, daemon=True).start()
+        self.check_worker = UpdateCheckWorker(self.switcher, self)
+        self.check_worker.finished.connect(self.on_update_check_finished)
+        self.check_worker.start()
 
     def on_check_timeout(self):
         self.action_btn.setEnabled(True)
