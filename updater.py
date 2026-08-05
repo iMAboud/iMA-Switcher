@@ -5,6 +5,8 @@ import threading
 import logging
 from pathlib import Path
 
+import re
+
 try:
     import requests
 except ImportError:

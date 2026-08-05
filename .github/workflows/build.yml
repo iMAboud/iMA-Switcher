@@ -43,8 +43,9 @@ jobs:
     - name: Extract Version Tag
       id: get_version
       run: |
-        $VER = python -c "from game_switcher import APP_VERSION; print(APP_VERSION)"
+        $VER = (python -c "from game_switcher import APP_VERSION; print(APP_VERSION)").Trim()
         echo "TAG_NAME=V$VER" >> $env:GITHUB_OUTPUT
+        echo "Detected APP_VERSION: $VER, Setting Tag: V$VER"
 
     - name: Release Executable
       uses: softprops/action-gh-release@v2
@@ -53,6 +54,8 @@ jobs:
         name: Version ${{ steps.get_version.outputs.TAG_NAME }}
         draft: false
         prerelease: false
+        make_latest: true
+        generate_release_notes: true
         files: |
           dist/iMA.Switcher.Installer.exe
           dist/commit.txt

@@ -3834,6 +3834,13 @@ class UpdateDialog(PopupDialog):
         self.action_btn.setEnabled(False)
         self.notes_edit.hide()
 
+        if hasattr(self, 'timeout_timer') and self.timeout_timer:
+            self.timeout_timer.stop()
+        self.timeout_timer = QTimer(self)
+        self.timeout_timer.setSingleShot(True)
+        self.timeout_timer.timeout.connect(self.on_check_timeout)
+        self.timeout_timer.start(15000)
+
         def _worker():
             try:
                 import updater
@@ -3851,7 +3858,15 @@ class UpdateDialog(PopupDialog):
 
         threading.Thread(target=_worker, daemon=True).start()
 
+    def on_check_timeout(self):
+        self.action_btn.setEnabled(True)
+        self.setFixedSize(420, 240)
+        self.status_label.setText("⚠️ Connection timed out. Please try again.")
+        self.action_btn.setText("Check Again")
+
     def on_update_check_finished(self, has_update, remote_sha, url, notes, size):
+        if hasattr(self, 'timeout_timer') and self.timeout_timer:
+            self.timeout_timer.stop()
         self.action_btn.setEnabled(True)
         self.has_update = has_update
         self.download_url = url
