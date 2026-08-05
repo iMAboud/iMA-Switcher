@@ -1,5 +1,5 @@
-### What's New in v1.0.23
+### What's New in v1.0.24
 
-- **Windows Batch Script Update Installer**: Solved `PermissionError: Access is Denied` by executing a 1-second delayed background script to replace the running executable after process exit.
-- **Detailed Error Logging**: Enhanced update dialog and log output to display exact exception details if a download or update fails.
-- **Release Tag Version Matching**: Fixed false-positive update flags by strictly matching release tags against `APP_VERSION`.
+- **PowerShell Elevated Updater Engine**: Implemented elevated PowerShell update installer to guarantee file replacement in protected directories (`Program Files`) with automatic UAC fallback.
+- **Eliminated Temp Directory Cleanup Warning**: Used `os._exit(0)` and cleared `_MEIPASS` environment variables on relaunch, completely suppressing PyInstaller's `Failed to remove temporary directory` popup dialog.
+- **Clean Icon & Asset Relaunch**: Ensured environment variables and working directory are sanitized prior to restart so all logos and UI icons display immediately on update completion.

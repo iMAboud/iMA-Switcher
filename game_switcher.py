@@ -20,7 +20,7 @@ from pathlib import Path
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import QEvent
 
-APP_VERSION = "1.0.23"
+APP_VERSION = "1.0.24"
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 

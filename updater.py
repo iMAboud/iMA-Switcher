@@ -188,29 +188,43 @@ def download_and_apply_update(download_url=EXE_DOWNLOAD_URL, progress_callback=N
 
         if getattr(sys, 'frozen', False):
             install_dir = current_exe.parent
-            batch_path = install_dir / "apply_update.bat"
+            ps_script_path = install_dir / "apply_update.ps1"
             
-            batch_cmd = f"""@echo off
-timeout /t 1 /nobreak > NUL
-move /y "{temp_exe}" "{current_exe}"
-start "" "{current_exe}"
-del "%~f0"
+            env = os.environ.copy()
+            env.pop('_MEIPASS2', None)
+            env.pop('_MEIPASS', None)
+
+            ps_content = f"""
+Start-Sleep -Seconds 2
+$temp = "{temp_exe}"
+$target = "{current_exe}"
+if (Test-Path $temp) {{
+    try {{
+        Copy-Item -Path $temp -Destination $target -Force
+        Remove-Item -Path $temp -Force -ErrorAction SilentlyContinue
+    }} catch {{
+        Start-Process powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -Command Copy-Item -Path '$temp' -Destination '$target' -Force; Remove-Item -Path '$temp' -Force" -Verb RunAs -Wait
+    }}
+}}
+Start-Process "$target"
+Remove-Item -Path "$PSCommandPath" -Force -ErrorAction SilentlyContinue
 """
-            batch_path.write_text(batch_cmd, encoding="utf-8")
+            ps_script_path.write_text(ps_content, encoding="utf-8")
 
             creationflags = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
             subprocess.Popen(
-                ["cmd.exe", "/c", str(batch_path)],
+                ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ps_script_path)],
                 cwd=str(install_dir),
                 close_fds=True,
-                creationflags=creationflags
+                creationflags=creationflags,
+                env=env
             )
 
             from PyQt5.QtWidgets import QApplication
             app_instance = QApplication.instance()
             if app_instance:
                 app_instance.quit()
-            sys.exit(0)
+            os._exit(0)
             return True, "Update applied successfully"
         else:
             return True, "Downloaded update (Dev Mode)"
