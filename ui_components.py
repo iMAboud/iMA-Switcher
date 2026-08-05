@@ -60,8 +60,14 @@ from PyQt5.QtCore import (
 def get_asset_path(filename):
     """Utility to resolve absolute path of assets across source and frozen builds."""
     if hasattr(sys, '_MEIPASS'):
+        p1 = os.path.join(sys._MEIPASS, filename)
+        if os.path.exists(p1):
+            return p1
         return os.path.join(sys._MEIPASS, 'Assets', filename)
     base_dir = os.path.dirname(os.path.abspath(__file__))
+    p2 = os.path.join(base_dir, filename)
+    if os.path.exists(p2):
+        return p2
     return os.path.join(base_dir, 'Assets', filename)
 
 def get_agent_icon_html(agent_name, switcher_base_dir, width=14, height=14):
@@ -2357,14 +2363,48 @@ class OptionsDialog(PopupDialog):
             }
             QPushButton:hover { background-color: #d9b68b; }
         """)
-        check_btn.clicked.connect(self.open_update_dialog)
+        self.update_check_btn = check_btn
+        check_btn.clicked.connect(lambda: self.open_update_dialog(source_button=self.update_check_btn))
         group_layout.addWidget(check_btn)
 
         main_layout.addWidget(group_box)
+
+        changelog_box = QGroupBox("Changelog", updates_tab)
+        changelog_box.setStyleSheet(group_style)
+        changelog_layout = QVBoxLayout(changelog_box)
+        changelog_layout.setSpacing(10)
+        changelog_layout.setContentsMargins(15, 20, 15, 15)
+
+        changelog_edit = QTextEdit()
+        changelog_edit.setReadOnly(True)
+        changelog_edit.setStyleSheet("""
+            QTextEdit {
+                background-color: #242223;
+                color: #e0d6d1;
+                border: 1px solid #4f4a4b;
+                border-radius: 8px;
+                padding: 10px;
+                font-size: 12px;
+            }
+        """)
+        
+        cl_path = get_asset_path("CHANGELOG.md")
+        if os.path.exists(cl_path):
+            try:
+                with open(cl_path, "r", encoding="utf-8") as f:
+                    changelog_edit.setMarkdown(f.read())
+            except Exception:
+                changelog_edit.setPlainText("Changelog information unavailable.")
+        else:
+            changelog_edit.setPlainText("Changelog information unavailable.")
+
+        changelog_layout.addWidget(changelog_edit)
+        main_layout.addWidget(changelog_box)
+
         self.add_page("Updates", "Update.png", updates_tab)
 
-    def open_update_dialog(self):
-        update_dialog = UpdateDialog(self.switcher, self)
+    def open_update_dialog(self, source_button=None):
+        update_dialog = UpdateDialog(self.switcher, self, source_button=source_button)
         update_dialog.exec_()
 
     def load_account_crosshair_info(self):
@@ -3652,9 +3692,10 @@ class UpdateSignals(QObject):
     download_finished = pyqtSignal(bool)
 
 class UpdateDialog(PopupDialog):
-    def __init__(self, switcher_instance, parent=None):
+    def __init__(self, switcher_instance, parent=None, source_button=None):
         super().__init__("Software Update", parent)
         self.switcher = switcher_instance
+        self.source_button = source_button
         self.setFixedWidth(420)
         self.setMinimumHeight(240)
 
@@ -3670,6 +3711,29 @@ class UpdateDialog(PopupDialog):
 
         self.init_update_ui()
         self.start_check_for_updates()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self.source_button and self.source_button.isVisible():
+            btn_glob = self.source_button.mapToGlobal(QPoint(0, 0))
+            btn_center_x = btn_glob.x() + self.source_button.width() // 2
+            btn_bottom_y = btn_glob.y() + self.source_button.height() + 8
+            
+            new_x = btn_center_x - self.width() // 2
+            new_y = btn_bottom_y
+
+            screen = QApplication.screenAt(btn_glob) or QApplication.primaryScreen()
+            if screen:
+                geom = screen.availableGeometry()
+                if new_x + self.width() > geom.right() - 10:
+                    new_x = geom.right() - self.width() - 10
+                if new_x < geom.left() + 10:
+                    new_x = geom.left() + 10
+                if new_y + self.height() > geom.bottom() - 10:
+                    new_y = btn_glob.y() - self.height() - 8
+            self.move(new_x, new_y)
+        else:
+            self.center_on_parent()
 
     def init_update_ui(self):
         self.content_layout.setContentsMargins(20, 15, 20, 20)

@@ -60,6 +60,21 @@ def resolve_download_url():
         pass
     return EXE_DOWNLOAD_URL, 0
 
+def is_newer_version(remote_ver, local_ver):
+    if not remote_ver or not local_ver:
+        return False
+    def parse(v):
+        v = str(v).lstrip('vV').strip()
+        parts = []
+        for x in v.split('.'):
+            try:
+                num = re.sub(r'\D', '', x)
+                parts.append(int(num) if num else 0)
+            except Exception:
+                parts.append(0)
+        return parts
+    return parse(remote_ver) > parse(local_ver)
+
 def check_for_commit_update():
     if requests is None:
         return False, get_current_commit(), "", EXE_DOWNLOAD_URL, "Requests library unavailable", 0
@@ -67,26 +82,55 @@ def check_for_commit_update():
     current_sha = get_current_commit()
     headers = {"User-Agent": "iMA-Switcher-App", "Accept": "application/vnd.github.v3+json"}
     
+    commit_has_update = False
+    remote_sha = ""
+    commit_message = ""
+    
     try:
         response = requests.get(COMMIT_URL, headers=headers, timeout=6)
         if response.status_code != 200:
             response = requests.get(COMMIT_FALLBACK_URL, headers=headers, timeout=6)
             
-        if response.status_code != 200:
-            return False, current_sha, "", EXE_DOWNLOAD_URL, f"GitHub API error {response.status_code}", 0
-
-        commit_data = response.json()
-        remote_sha = commit_data.get("sha", "").strip()
-        commit_message = commit_data.get("commit", {}).get("message", "New commit published on GitHub.")
-
-        has_update = bool(remote_sha and current_sha != "dev_build" and remote_sha[:7] != current_sha[:7])
-        download_url, asset_size = resolve_download_url()
-
-        return has_update, current_sha, remote_sha, download_url, commit_message, asset_size
-
+        if response.status_code == 200:
+            commit_data = response.json()
+            remote_sha = commit_data.get("sha", "").strip()
+            commit_message = commit_data.get("commit", {}).get("message", "New commit published on GitHub.")
+            if remote_sha and current_sha != "dev_build" and (current_sha == "unknown_legacy_build" or remote_sha[:7] != current_sha[:7]):
+                commit_has_update = True
     except Exception as error:
         logging.warning(f"Error checking commit update: {error}")
-        return False, current_sha, "", EXE_DOWNLOAD_URL, str(error), 0
+
+    tag_has_update = False
+    download_url, asset_size = EXE_DOWNLOAD_URL, 0
+    tag_name = ""
+    try:
+        rel_res = requests.get(RELEASES_URL, headers=headers, timeout=6)
+        if rel_res.status_code == 200:
+            rel_data = rel_res.json()
+            tag_name = rel_data.get("tag_name", "")
+            rel_notes = rel_data.get("body", "")
+            if rel_notes and not commit_message:
+                commit_message = rel_notes
+            for asset in rel_data.get("assets", []):
+                if asset.get("name", "").endswith(".exe"):
+                    download_url = asset.get("browser_download_url")
+                    asset_size = asset.get("size", 0)
+                    break
+            
+            try:
+                from game_switcher import APP_VERSION
+                if tag_name and is_newer_version(tag_name, APP_VERSION):
+                    tag_has_update = True
+            except Exception:
+                pass
+    except Exception as error:
+        logging.warning(f"Error checking release tag update: {error}")
+
+    has_update = commit_has_update or tag_has_update
+    if not commit_message:
+        commit_message = f"New version {tag_name} available!" if tag_name else "New update published on GitHub."
+
+    return has_update, current_sha, remote_sha or tag_name, download_url, commit_message, asset_size
 
 def download_and_apply_update(download_url=EXE_DOWNLOAD_URL, progress_callback=None):
     if requests is None:

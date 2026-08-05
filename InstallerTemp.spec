@@ -8,6 +8,8 @@ if os.path.exists('credentials.json'):
     datas_list.append(('credentials.json', '.'))
 if os.path.exists('commit.txt'):
     datas_list.append(('commit.txt', '.'))
+if os.path.exists('CHANGELOG.md'):
+    datas_list.append(('CHANGELOG.md', '.'))
 
 a = Analysis(
     ['main.pyw'],
