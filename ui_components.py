@@ -3814,13 +3814,13 @@ class UpdateDialog(PopupDialog):
             self.setFixedSize(520, 380)
             size_mb = size / (1024 * 1024) if size else 0
             size_str = f" ({size_mb:.1f} MB)" if size_mb > 0 else ""
-            self.status_label.setText(f"🎉 New update available!{size_str}<br>Remote Commit: <b>{remote_sha}</b>")
+            self.status_label.setText(f"🎉 New update available!{size_str}")
             self.notes_edit.setPlainText(f"Commit Message:\n{notes}")
             self.notes_edit.show()
             self.action_btn.setText("Update Now")
         else:
-            self.setFixedSize(420, 200)
-            self.status_label.setText(f"✓ App is up to date!<br><font color='#b0a8a8'>Build Commit: {display_current}</font>")
+            self.setFixedSize(420, 180)
+            self.status_label.setText("✓ You are on the latest version.")
             self.action_btn.setText("Check Again")
 
     def on_action_button_clicked(self):
