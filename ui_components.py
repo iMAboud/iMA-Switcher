@@ -3689,7 +3689,7 @@ class HoverButton(QPushButton):
 class UpdateSignals(QObject):
     check_finished = pyqtSignal(bool, str, str, str, int)
     progress = pyqtSignal(int, int, int)
-    download_finished = pyqtSignal(bool)
+    download_finished = pyqtSignal(bool, str)
 
 class UpdateCheckWorker(QThread):
     finished = pyqtSignal(bool, str, str, str, int)
@@ -3923,7 +3923,7 @@ class UpdateDialog(PopupDialog):
         def _download_worker():
             import updater
             success, msg = updater.download_and_apply_update(self.download_url, progress_callback=_progress_cb)
-            self.signals.download_finished.emit(success)
+            self.signals.download_finished.emit(bool(success), str(msg or ""))
 
         threading.Thread(target=_download_worker, daemon=True).start()
 
@@ -3933,12 +3933,14 @@ class UpdateDialog(PopupDialog):
         t_mb = total / (1024 * 1024)
         self.status_label.setText(f"Downloading update... {d_mb:.1f} MB / {t_mb:.1f} MB ({pct}%)")
 
-    def on_download_finished(self, success):
+    def on_download_finished(self, success, error_msg):
         if success:
             self.status_label.setText("✓ Download complete! Restarting app...")
             self.progress_bar.setValue(100)
         else:
-            self.status_label.setText("❌ Download failed. Please try again.")
+            logging.error(f"Update download/apply failed: {error_msg}")
+            display_err = error_msg if error_msg else "Unknown error"
+            self.status_label.setText(f"❌ Update failed: {display_err}")
             self.action_btn.setEnabled(True)
             self.action_btn.setText("Retry Update")
 

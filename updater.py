@@ -105,34 +105,18 @@ def check_for_commit_update(local_version=None):
     current_sha = get_current_commit()
     headers = {"User-Agent": "iMA-Switcher-App", "Accept": "application/vnd.github.v3+json"}
     
-    commit_has_update = False
-    remote_sha = ""
-    commit_message = ""
-    
-    try:
-        response = _safe_get(COMMIT_URL, headers=headers, timeout=6)
-        if not response:
-            response = _safe_get(COMMIT_FALLBACK_URL, headers=headers, timeout=6)
-            
-        if response and response.status_code == 200:
-            commit_data = response.json()
-            remote_sha = commit_data.get("sha", "").strip()
-            commit_message = commit_data.get("commit", {}).get("message", "New commit published on GitHub.")
-            if remote_sha and current_sha != "dev_build" and (current_sha == "unknown_legacy_build" or remote_sha[:7] != current_sha[:7]):
-                commit_has_update = True
-    except Exception as error:
-        logging.warning(f"Error checking commit update: {error}")
-
-    tag_has_update = False
     download_url, asset_size = EXE_DOWNLOAD_URL, 0
     tag_name = ""
+    commit_message = ""
+    tag_has_update = False
+
     try:
         rel_res = _safe_get(RELEASES_URL, headers=headers, timeout=6)
         if rel_res and rel_res.status_code == 200:
             rel_data = rel_res.json()
             tag_name = rel_data.get("tag_name", "")
             rel_notes = rel_data.get("body", "")
-            if rel_notes and not commit_message:
+            if rel_notes:
                 commit_message = rel_notes
             for asset in rel_data.get("assets", []):
                 if asset.get("name", "").endswith(".exe"):
@@ -145,7 +129,22 @@ def check_for_commit_update(local_version=None):
     except Exception as error:
         logging.warning(f"Error checking release tag update: {error}")
 
-    has_update = commit_has_update or tag_has_update
+    remote_sha = ""
+    if not tag_has_update:
+        try:
+            response = _safe_get(COMMIT_URL, headers=headers, timeout=6)
+            if not response:
+                response = _safe_get(COMMIT_FALLBACK_URL, headers=headers, timeout=6)
+                
+            if response and response.status_code == 200:
+                commit_data = response.json()
+                remote_sha = commit_data.get("sha", "").strip()
+                if not commit_message:
+                    commit_message = commit_data.get("commit", {}).get("message", "New commit published on GitHub.")
+        except Exception as error:
+            logging.warning(f"Error checking commit update: {error}")
+
+    has_update = tag_has_update
     if not commit_message:
         commit_message = f"New version {tag_name} available!" if tag_name else "New update published on GitHub."
 
@@ -157,22 +156,30 @@ def download_and_apply_update(download_url=EXE_DOWNLOAD_URL, progress_callback=N
 
     current_exe = Path(sys.executable) if getattr(sys, 'frozen', False) else Path(__file__).parent / "iMA Switcher.exe"
     temp_exe = current_exe.with_suffix(".tmp")
-    old_exe = current_exe.with_suffix(".old")
 
     try:
-        if old_exe.exists():
+        if temp_exe.exists():
             try:
-                old_exe.unlink()
+                temp_exe.unlink()
             except Exception:
                 pass
 
-        response = requests.get(download_url, stream=True, timeout=20)
-        response.raise_for_status()
-        total_bytes = int(response.headers.get('content-length', 0))
+        res = None
+        try:
+            res = requests.get(download_url, stream=True, timeout=30)
+            res.raise_for_status()
+        except Exception as ssl_err:
+            logging.warning(f"Standard download failed, trying SSL fallback: {ssl_err}")
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            res = requests.get(download_url, stream=True, timeout=30, verify=False)
+            res.raise_for_status()
+
+        total_bytes = int(res.headers.get('content-length', 0))
         downloaded_bytes = 0
 
         with open(temp_exe, "wb") as file_handle:
-            for chunk in response.iter_content(chunk_size=65536):
+            for chunk in res.iter_content(chunk_size=65536):
                 if chunk:
                     file_handle.write(chunk)
                     downloaded_bytes += len(chunk)
@@ -180,21 +187,24 @@ def download_and_apply_update(download_url=EXE_DOWNLOAD_URL, progress_callback=N
                         progress_callback(downloaded_bytes, total_bytes)
 
         if getattr(sys, 'frozen', False):
-            current_exe.rename(old_exe)
-            temp_exe.rename(current_exe)
+            install_dir = current_exe.parent
+            batch_path = install_dir / "apply_update.bat"
+            
+            batch_cmd = f"""@echo off
+timeout /t 1 /nobreak > NUL
+move /y "{temp_exe}" "{current_exe}"
+start "" "{current_exe}"
+del "%~f0"
+"""
+            batch_path.write_text(batch_cmd, encoding="utf-8")
 
-            install_dir = str(current_exe.parent)
             creationflags = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-            try:
-                subprocess.Popen(
-                    [str(current_exe)] + sys.argv[1:],
-                    cwd=install_dir,
-                    close_fds=True,
-                    creationflags=creationflags
-                )
-            except Exception as launch_err:
-                logging.error(f"Error launching detached update process: {launch_err}")
-                subprocess.Popen([str(current_exe)] + sys.argv[1:], cwd=install_dir)
+            subprocess.Popen(
+                ["cmd.exe", "/c", str(batch_path)],
+                cwd=str(install_dir),
+                close_fds=True,
+                creationflags=creationflags
+            )
 
             from PyQt5.QtWidgets import QApplication
             app_instance = QApplication.instance()
@@ -212,7 +222,7 @@ def download_and_apply_update(download_url=EXE_DOWNLOAD_URL, progress_callback=N
                 temp_exe.unlink()
             except Exception:
                 pass
-        return False, str(error)
+        return False, f"{type(error).__name__}: {error}"
 
 def start_background_auto_updater(on_update_found_callback=None):
     def _updater_worker():
