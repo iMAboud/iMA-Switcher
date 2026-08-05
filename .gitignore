@@ -1,2 +1,20 @@
+# Credentials and Tokens
+credentials.json
+token.pickle
+token.json
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Build and distribution artifacts
 build/
 dist/
+commit.txt
+
+# IDE and editor specific
+.idea/
+.vscode/
+*.swp

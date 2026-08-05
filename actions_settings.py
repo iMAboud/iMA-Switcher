@@ -2,14 +2,57 @@ import os
 import threading
 import logging
 from PyQt5.QtWidgets import QMessageBox, QFileDialog, QDialog
+from PyQt5.QtCore import QThread, pyqtSignal, QTimer
 from ui_components import (
     SaveAccountDialog, ExportIMAMenuDialog, OptionsDialog, 
     CustomMessageDialog, ConfirmDeleteDialog, BackupRestoreDialog, 
-    BackupRestoreSelectionDialog, IMAMenuPathDialog
+    BackupRestoreSelectionDialog, IMAMenuPathDialog, UpdateDialog
 )
-from google_drive_api import GoogleDriveAPI
 import tempfile
+import importlib
 from pathlib import Path
+
+class GoogleDriveBackupWorker(QThread):
+    finished = pyqtSignal(bool, str)
+    
+    def __init__(self, switcher, temp_file_path, backup_filename_zip):
+        super().__init__()
+        self.switcher = switcher
+        self.temp_file_path = temp_file_path
+        self.backup_filename_zip = backup_filename_zip
+
+    def run(self):
+        try:
+            if not self.switcher.backup_profiles(self.temp_file_path):
+                raise Exception("Failed to create the local zip archive for backup.")
+            from google_drive_api import GoogleDriveAPI
+            drive_api = GoogleDriveAPI(self.switcher.user_data_dir)
+            drive_api.upload_file(self.temp_file_path, self.backup_filename_zip)
+            self.finished.emit(True, self.backup_filename_zip)
+        except Exception as e:
+            self.finished.emit(False, str(e))
+
+class GoogleDriveRestoreWorker(QThread):
+    finished = pyqtSignal(bool, object, str)
+
+    def __init__(self, switcher):
+        super().__init__()
+        self.switcher = switcher
+
+    def run(self):
+        try:
+            from google_drive_api import GoogleDriveAPI
+            drive_api = GoogleDriveAPI(self.switcher.user_data_dir)
+            backup_file = drive_api.find_latest_backup("iMA-Switcher_")
+            if backup_file:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as temp_file:
+                    temp_file_path = temp_file.name
+                drive_api.download_file(backup_file['id'], temp_file_path)
+                self.finished.emit(True, backup_file, temp_file_path)
+            else:
+                self.finished.emit(True, None, None)
+        except Exception as e:
+            self.finished.emit(False, None, str(e))
 
 class SettingsActions:
     def __init__(self, parent):
@@ -27,7 +70,7 @@ class SettingsActions:
     def save_current_account(self):
         dialog = SaveAccountDialog(self.parent, switcher_instance=self.switcher)
         if dialog.exec_() == QDialog.Accepted:
-            name, game, in_game_name, in_game_tag = dialog.get_details()
+            name, game, in_game_name, in_game_tag, puuid = dialog.get_details()
             if not name:
                 self.parent.status_label.setText("Account name cannot be empty.")
                 return
@@ -35,7 +78,7 @@ class SettingsActions:
                 logging.warning(f"Attempted to save account '{name}', but an account with that name already exists.")
                 QMessageBox.warning(self.parent, "Account Exists", f'An account named "{name}" already exists. Please choose a different name.')
                 return
-            self.switcher.save_account(name, game, in_game_name=in_game_name, in_game_tag=in_game_tag)
+            self.switcher.save_account(name, game, in_game_name=in_game_name, in_game_tag=in_game_tag, puuid=puuid)
             self.parent.status_label.setText(f"Account '{name}' saved for {game.capitalize()}. ")
             self.parent.load_accounts()
 
@@ -74,40 +117,33 @@ class SettingsActions:
                 logging.error(f"Failed to backup profiles to {path}")
 
     def _backup_google_drive(self):
-        temp_file_path = None
-        try:
-            backup_filename_base = self.switcher.get_backup_filename()
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as temp_file:
-                temp_file_path = temp_file.name
-            
-            if self.switcher.backup_profiles(temp_file_path):
-                drive_api = GoogleDriveAPI(self.switcher.user_data_dir)
-                backup_filename_zip = f"{backup_filename_base}.zip"
-                drive_api.upload_file(temp_file_path, backup_filename_zip)
-                
-                msg_dialog = CustomMessageDialog("Backup Successful", "Profiles backed up to Google Drive.", self.parent)
-                msg_dialog.exec_()
-                logging.info(f"Profiles backed up to Google Drive: {backup_filename_zip}")
-            else:
-                self.parent.status_label.setText("Backup failed.")
-                logging.error("Failed to create backup file.")
-                QMessageBox.critical(self.parent, "Backup Failed", "Could not create the backup file.")
+        self.parent.status_label.setText("Preparing backup for Google Drive...")
+        backup_filename_base = self.switcher.get_backup_filename()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as temp_file:
+            temp_file_path = temp_file.name
+        
+        backup_filename_zip = f"{backup_filename_base}.zip"
+        self.backup_worker = GoogleDriveBackupWorker(self.switcher, temp_file_path, backup_filename_zip)
+        self.backup_worker.finished.connect(self._on_backup_google_drive_finished)
+        self.backup_worker.start()
 
-        except (IOError, ConnectionAbortedError) as e:
+    def _on_backup_google_drive_finished(self, success, result):
+        if success:
+            msg_dialog = CustomMessageDialog("Backup Successful", "Profiles backed up to Google Drive.", self.parent)
+            msg_dialog.exec_()
+            self.parent.status_label.setText("Backup to Google Drive complete.")
+            logging.info(f"Profiles backed up to Google Drive: {result}")
+        else:
             self.parent.status_label.setText("Google Drive backup failed.")
-            logging.error(f"Google Drive backup failed: {e}")
-            QMessageBox.critical(self.parent, "Google Drive Error", str(e))
-        except Exception as e:
-            self.parent.status_label.setText("Google Drive backup failed.")
-            logging.error(f"An unexpected error occurred during Google Drive backup: {e}")
-            QMessageBox.critical(self.parent, "Google Drive Error", f"An unexpected error occurred: {e}")
-        finally:
-            if temp_file_path and Path(temp_file_path).exists():
+            logging.error(f"Google Drive backup failed: {result}")
+            QMessageBox.critical(self.parent, "Google Drive Error", f"Error: {result}")
+        
+        if hasattr(self, 'backup_worker') and self.backup_worker.temp_file_path:
+            if Path(self.backup_worker.temp_file_path).exists():
                 try:
-                    Path(temp_file_path).unlink()
-                    logging.info(f"Successfully cleaned up temp file: {temp_file_path}")
-                except OSError as e:
-                    logging.error(f"Failed to clean up temp file {temp_file_path}: {e}")
+                    Path(self.backup_worker.temp_file_path).unlink()
+                except OSError:
+                    pass
 
     def _handle_restore_selection(self):
         dialog = BackupRestoreDialog(self.parent, mode='restore')
@@ -124,35 +160,30 @@ class SettingsActions:
             self._confirm_and_restore(path)
 
     def _restore_google_drive(self):
-        temp_file_path = None
-        try:
-            drive_api = GoogleDriveAPI(self.switcher.user_data_dir)
-            backup_file = drive_api.find_latest_backup("iMA-Switcher_")
+        self.parent.status_label.setText("Connecting to Google Drive...")
+        self.restore_worker = GoogleDriveRestoreWorker(self.switcher)
+        self.restore_worker.finished.connect(self._on_restore_google_drive_finished)
+        self.restore_worker.start()
+
+    def _on_restore_google_drive_finished(self, success, backup_file, error_msg_or_path):
+        if success:
             if backup_file:
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as temp_file:
-                    temp_file_path = temp_file.name
-                
-                drive_api.download_file(backup_file['id'], temp_file_path)
-                self._confirm_and_restore(temp_file_path, backup_file['modifiedTime'])
+                temp_file_path = error_msg_or_path
+                self.parent.status_label.setText("Restoring from Google Drive...")
+                self._confirm_and_restore(temp_file_path, backup_file.get('modifiedTime'))
+                if Path(temp_file_path).exists():
+                    try:
+                        Path(temp_file_path).unlink()
+                    except OSError:
+                        pass
+                self.parent.status_label.setText("Ready.")
             else:
+                self.parent.status_label.setText("Ready.")
                 QMessageBox.warning(self.parent, "No Backup Found", "No backup file found on your Google Drive.")
-        except (IOError, ConnectionAbortedError) as e:
+        else:
             self.parent.status_label.setText("Google Drive restore failed.")
-            logging.error(f"Google Drive restore failed: {e}")
-            QMessageBox.critical(self.parent, "Google Drive Error", str(e))
-        except Exception as e:
-            self.parent.status_label.setText("Google Drive restore failed.")
-            logging.error(f"An unexpected error occurred during Google Drive restore: {e}")
-            QMessageBox.critical(self.parent, "Google Drive Error", f"An unexpected error occurred: {e}")
-        finally:
-            if temp_file_path and Path(temp_file_path).exists():
-                try:
-                    Path(temp_file_path).unlink()
-                    logging.info(f"Successfully cleaned up temp file: {temp_file_path}")
-                except OSError as e:
-                    logging.error(f"Failed to clean up temp file {temp_file_path}: {e}")
-                except Exception as e:
-                    logging.error(f"An unexpected error occurred while cleaning up temp file {temp_file_path}: {e}")
+            logging.error(f"Google Drive restore failed: {error_msg_or_path}")
+            QMessageBox.critical(self.parent, "Google Drive Error", f"Error: {error_msg_or_path}")
 
     def _confirm_and_restore(self, path, modified_time=None):
         message = "Are you sure you want to overwrite\ncurrent settings?"
@@ -185,20 +216,27 @@ class SettingsActions:
             return
 
         ima_config = self.switcher.get_ima_config()
+        saved_path = ima_config.get("ima_menu_path")
+        ima_menu_path = self.switcher.find_ima_menu_path(saved_path=saved_path)
 
-        # Dialog to get settings from user
+        valo_nss_exists = False
+        if ima_menu_path and (ima_menu_path / "imports" / "valo.nss").exists():
+            valo_nss_exists = True
+
+        if not valo_nss_exists or not ima_config.get("menu_icon_path"):
+            default_icon_path = Path(self.switcher.base_dir) / "Assets" / "valorant" / "5.png"
+            if default_icon_path.exists():
+                ima_config["menu_icon_path"] = str(default_icon_path)
+
         dialog = ExportIMAMenuDialog(accounts_data, self.parent, default_settings=ima_config)
         if dialog.exec_() != QDialog.Accepted:
             return
 
         settings = dialog.get_settings()
 
-        # Determine and validate iMA Menu path
-        ima_menu_path_str = ima_config.get("ima_menu_path") or r"C:\Program Files\iMA Menu"
-        ima_menu_path = Path(ima_menu_path_str)
-
-        if not (ima_menu_path / "shell.nss").exists():
-            path_dialog = IMAMenuPathDialog(self.parent, default_path=ima_menu_path_str)
+        if not ima_menu_path:
+            default_prompt_path = saved_path or r"C:\Program Files\iMA Menu"
+            path_dialog = IMAMenuPathDialog(self.parent, default_path=default_prompt_path)
             if path_dialog.exec_() == QDialog.Accepted:
                 new_path_str = path_dialog.get_path()
                 if not new_path_str or not (Path(new_path_str) / "shell.nss").exists():
@@ -206,14 +244,20 @@ class SettingsActions:
                     return
                 ima_menu_path = Path(new_path_str)
             else:
-                return # User cancelled
+                return
+
+        ui_settings = ima_config.get("ui_settings", {})
+        ui_settings["show_rank_tips"] = settings.get("show_rank_tips", False)
+        ui_settings["show_rr_in_tip"] = settings.get("show_rr_in_tip", False)
+        ui_settings["tip_delay"] = settings.get("tip_delay", 1.0)
 
         # All checks passed, now save all settings together
         self.switcher.set_ima_config({
             "title": settings["title"],
             "menu_icon_path": settings["menu_icon_path"],
             "ordered_accounts": settings["ordered_accounts"],
-            "ima_menu_path": str(ima_menu_path) # Save the validated path
+            "ima_menu_path": str(ima_menu_path), # Save the validated path
+            "ui_settings": ui_settings
         })
 
         output_dir = ima_menu_path / "imports"
@@ -234,9 +278,9 @@ class SettingsActions:
             if not success:
                 QMessageBox.warning(self.parent, "Shell Script Warning", message)
 
-            msg_dialog = CustomMessageDialog("Export Successful", "Accounts added to iMA Menu", self.parent)
-            msg_dialog.exec_()
             self.parent.load_accounts() # Refresh accounts in UI after export
+            self.parent.status_label.setText("Accounts added to iMA Menu.")
+            QTimer.singleShot(3000, lambda: self.parent.status_label.setText("Ready."))
             logging.info(f"Successfully exported iMA Menu script to {output_dir}")
 
         except (IOError, OSError) as e:
@@ -250,4 +294,8 @@ class SettingsActions:
         self.options_dialog = OptionsDialog(self.switcher, self.parent)
         self.options_dialog.settings_applied.connect(self.parent.load_accounts)
         self.options_dialog.show()
+
+    def open_update_dialog(self):
+        self.update_dialog = UpdateDialog(self.switcher, self.parent)
+        self.update_dialog.show()
 

@@ -1,0 +1,51 @@
+name: Build & Publish Latest Executable
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller PyQt5 requests Pillow pywin32 jsonschema google-api-python-client google-auth-httplib2 google-auth-oauthlib
+
+    - name: Write Commit SHA
+      run: |
+        echo ${{ github.sha }} > commit.txt
+
+    - name: Build Executable with PyInstaller
+      run: |
+        python build.py
+
+    - name: Prepare Release Asset
+      run: |
+        copy "dist\iMA Switcher Installer.exe" "dist\iMA.Switcher.Installer.exe"
+        echo ${{ github.sha }} > dist\commit.txt
+
+    - name: Release Latest Executable
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: latest
+        name: Latest Build
+        draft: false
+        prerelease: false
+        files: |
+          dist/iMA.Switcher.Installer.exe
+          dist/commit.txt
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

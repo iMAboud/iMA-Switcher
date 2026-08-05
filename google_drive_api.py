@@ -25,16 +25,33 @@ class GoogleDriveAPI:
         creds = None
         try:
             if self.token_file.exists():
-                with self.token_file.open('rb') as token:
-                    creds = pickle.load(token)
+                try:
+                    with self.token_file.open('rb') as token:
+                        creds = pickle.load(token)
+                except Exception as pe:
+                    logging.warning(f"Could not load token.pickle: {pe}. Re-authenticating...")
+                    creds = None
+
             if not creds or not creds.valid:
                 if creds and creds.expired and creds.refresh_token:
-                    creds.refresh(Request())
-                else:
-                    flow = InstalledAppFlow.from_client_secrets_file(self.credentials_file, self.scopes)
-                    creds = flow.run_local_server(port=0)
-                with self.token_file.open('wb') as token:
-                    pickle.dump(creds, token)
+                    try:
+                        creds.refresh(Request())
+                    except Exception as re:
+                        logging.warning(f"Could not refresh Google token: {re}. Re-authenticating...")
+                        creds = None
+
+                if not creds or not creds.valid:
+                    if not self.credentials_file.exists():
+                        raise FileNotFoundError(f"Google Drive credentials file not found at {self.credentials_file}")
+                    flow = InstalledAppFlow.from_client_secrets_file(str(self.credentials_file), self.scopes)
+                    creds = flow.run_local_server(port=0, host='127.0.0.1')
+
+                try:
+                    with self.token_file.open('wb') as token:
+                        pickle.dump(creds, token)
+                except Exception as pe:
+                    logging.warning(f"Could not save token.pickle: {pe}")
+
             return build('drive', 'v3', credentials=creds)
         except (HttpError, pickle.PickleError, FileNotFoundError, Exception) as e:
             logging.error(f"Failed to get Google Drive service: {e}")
@@ -43,7 +60,7 @@ class GoogleDriveAPI:
     def upload_file(self, file_path, file_name):
         try:
             file_metadata = {'name': file_name}
-            media = MediaFileUpload(file_path, mimetype='application/zip')
+            media = MediaFileUpload(file_path, mimetype='application/zip', resumable=True)
             file = self.service.files().create(body=file_metadata, media_body=media, fields='id').execute()
             return file.get('id')
         except HttpError as e:

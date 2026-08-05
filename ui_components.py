@@ -1,5 +1,10 @@
+import sys
+import copy
 import logging
 import os
+import threading
+import time
+from datetime import datetime
 from pathlib import Path
 from PyQt5.QtWidgets import (
     QWidget,
@@ -28,6 +33,10 @@ from PyQt5.QtWidgets import (
     QGroupBox,
     QFormLayout,
     QDoubleSpinBox,
+    QStackedWidget,
+    QInputDialog,
+    QProgressBar,
+    QTextEdit,
 )
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QPainterPath
 from PyQt5.QtCore import (
@@ -42,11 +51,33 @@ from PyQt5.QtCore import (
     QTimer,
     QPointF,
     pyqtProperty,
+    QThread,
+    QEvent,
+    QObject,
 )
 
 
 def get_asset_path(filename):
-    return str(Path(__file__).parent / "Assets" / filename)
+    """Utility to resolve absolute path of assets across source and frozen builds."""
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, 'Assets', filename)
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_dir, 'Assets', filename)
+
+def get_agent_icon_html(agent_name, switcher_base_dir, width=14, height=14):
+    if not agent_name or str(agent_name).lower() == "unknown":
+        return "⚔️ "
+    agents_dir = Path(switcher_base_dir) / "Agents"
+    agent_path = agents_dir / f"{agent_name}.png"
+    if not agent_path.exists():
+        for f in agents_dir.glob("*.png"):
+            if f.stem.lower() == str(agent_name).lower():
+                agent_path = f
+                break
+    if agent_path.exists():
+        clean_path = str(agent_path).replace("\\", "/")
+        return f"<img src='{clean_path}' width='{width}' height='{height}'> "
+    return "⚔️ "
 
 def get_icon_path(filename):
     return str(Path(__file__).parent / "icons" / filename)
@@ -64,19 +95,378 @@ def get_icon_paths_from_folder(folder_path):
     return icon_paths
 
 
+class CrosshairCanvasWidget(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(220, 220)
+        self.bg_type = "Dark Grid"
+        self.zoom = 1.0
+        self.profile = {}
+
+    def set_profile(self, profile):
+        self.profile = profile or {}
+        self.update()
+
+    def set_bg(self, bg_name):
+        self.bg_type = bg_name
+        self.update()
+
+    def set_zoom(self, zoom_val):
+        self.zoom = float(zoom_val)
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, False)
+
+        w = self.width()
+        h = self.height()
+        cx = w / 2.0
+        cy = h / 2.0
+
+        if self.bg_type == "Light Grid":
+            painter.fillRect(0, 0, w, h, QColor("#e8e2de"))
+            painter.setPen(QColor("#d4ceca"))
+            for x in range(0, w, 20): painter.drawLine(x, 0, x, h)
+            for y in range(0, h, 20): painter.drawLine(0, y, w, y)
+        else: # Dark Grid (Default)
+            painter.fillRect(0, 0, w, h, QColor("#1f1d1e"))
+            painter.setPen(QColor("#2d292a"))
+            for x in range(0, w, 20): painter.drawLine(x, 0, x, h)
+            for y in range(0, h, 20): painter.drawLine(0, y, w, y)
+
+        if not self.profile:
+            return
+
+        primary = self.profile.get("primary", {})
+        preset_colors = [
+            QColor(255, 255, 255), QColor(0, 255, 0), QColor(127, 255, 0),
+            QColor(190, 255, 0), QColor(255, 255, 0), QColor(0, 255, 255),
+            QColor(255, 0, 255), QColor(255, 0, 0),
+        ]
+
+        # Resolution of exact color
+        p_col_dict = primary.get("primaryColor")
+        if isinstance(p_col_dict, dict) and 'r' in p_col_dict:
+            main_color = QColor(
+                int(p_col_dict.get('r', 255)),
+                int(p_col_dict.get('g', 255)),
+                int(p_col_dict.get('b', 255)),
+                int(p_col_dict.get('a', 255))
+            )
+        elif primary.get("bUseCustomColor", False):
+            custom_hex = primary.get("customColor", "#00FF88FF")
+            main_color = QColor(custom_hex) if isinstance(custom_hex, str) and custom_hex.startswith("#") else QColor(0, 255, 136)
+        else:
+            color_idx = primary.get("color", 0)
+            if isinstance(color_idx, int) and 0 <= color_idx < len(preset_colors):
+                main_color = preset_colors[color_idx]
+            elif isinstance(color_idx, dict):
+                main_color = QColor(color_idx.get('r', 0), color_idx.get('g', 255), color_idx.get('b', 136), color_idx.get('a', 255))
+            else:
+                main_color = QColor(255, 255, 255)
+
+        scale = self.zoom
+        b_outline = primary.get("bOutlineEnabled", True)
+        outline_op = float(primary.get("outlineOpacity", 1.0))
+        outline_thick = float(primary.get("outlineThickness", 1)) * scale
+        outline_color = QColor(0, 0, 0, int(outline_op * 255))
+
+        def draw_rect(x_center, y_center, rect_w, rect_h, color):
+            rx = cx + x_center * scale - (rect_w * scale) / 2.0
+            ry = cy + y_center * scale - (rect_h * scale) / 2.0
+            rw = rect_w * scale
+            rh = rect_h * scale
+
+            if b_outline and outline_thick > 0:
+                out_x = rx - outline_thick
+                out_y = ry - outline_thick
+                out_w = rw + outline_thick * 2
+                out_h = rh + outline_thick * 2
+                painter.fillRect(QRectF(out_x, out_y, out_w, out_h), outline_color)
+
+            painter.fillRect(QRectF(rx, ry, rw, rh), color)
+
+        # 1. Outer Lines (Strict Boolean Check)
+        outer = primary.get("outerLines", {})
+        o_len = float(outer.get("lineLength", 0))
+        o_op = float(outer.get("lineOpacity", 1.0))
+        is_outer_enabled = outer.get("bDisplayOuterLines", outer.get("bbDisplayOuterLines", False))
+        if is_outer_enabled and o_len > 0 and o_op > 0:
+            o_thick = float(outer.get("lineThickness", 2))
+            o_off = float(outer.get("lineOffset", 10))
+            show_top = outer.get("bShowTopLine", True)
+            line_col = QColor(main_color.red(), main_color.green(), main_color.blue(), int(o_op * 255))
+
+            draw_rect(-(o_off + o_len / 2.0), 0, o_len, o_thick, line_col)
+            draw_rect((o_off + o_len / 2.0), 0, o_len, o_thick, line_col)
+            draw_rect(0, (o_off + o_len / 2.0), o_thick, o_len, line_col)
+            if show_top: draw_rect(0, -(o_off + o_len / 2.0), o_thick, o_len, line_col)
+
+        # 2. Inner Lines
+        inner = primary.get("innerLines", {})
+        i_len = float(inner.get("lineLength", 0))
+        i_op = float(inner.get("lineOpacity", 1.0))
+        is_inner_enabled = inner.get("bDisplayInnerLines", inner.get("bbDisplayInnerLines", True))
+        if is_inner_enabled and i_len > 0 and i_op > 0:
+            i_thick = float(inner.get("lineThickness", 2))
+            i_off = float(inner.get("lineOffset", 3))
+            show_top = inner.get("bShowTopLine", True)
+            line_col = QColor(main_color.red(), main_color.green(), main_color.blue(), int(i_op * 255))
+
+            draw_rect(-(i_off + i_len / 2.0), 0, i_len, i_thick, line_col)
+            draw_rect((i_off + i_len / 2.0), 0, i_len, i_thick, line_col)
+            draw_rect(0, (i_off + i_len / 2.0), i_thick, i_len, line_col)
+            if show_top: draw_rect(0, -(i_off + i_len / 2.0), i_thick, i_len, line_col)
+
+        # 3. Center Dot (Rendered as Anti-Aliased Circle)
+        if primary.get("bDisplayCenterDot", False):
+            dot_op = float(primary.get("centerDotOpacity", 1.0))
+            dot_size = float(primary.get("centerDotSize", 2))
+            dot_col = QColor(main_color.red(), main_color.green(), main_color.blue(), int(dot_op * 255))
+
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            rx = cx - (dot_size * scale) / 2.0
+            ry = cy - (dot_size * scale) / 2.0
+            rw = dot_size * scale
+            rh = dot_size * scale
+
+            if b_outline and outline_thick > 0:
+                out_x = rx - outline_thick
+                out_y = ry - outline_thick
+                out_w = rw + outline_thick * 2
+                out_h = rh + outline_thick * 2
+                painter.setBrush(outline_color)
+                painter.setPen(Qt.NoPen)
+                painter.drawEllipse(QRectF(out_x, out_y, out_w, out_h))
+
+            painter.setBrush(dot_col)
+            painter.setPen(Qt.NoPen)
+            painter.drawEllipse(QRectF(rx, ry, rw, rh))
+            painter.setRenderHint(QPainter.Antialiasing, False)
+
+
+class ValorantCrosshairCodeParser:
+    @staticmethod
+    def parse_code(code_str: str) -> dict:
+        code_str = code_str.strip()
+        if not code_str:
+            return {}
+        tokens = code_str.split(";")
+        profile = {
+            "profileName": "Imported Profile",
+            "primary": {
+                "color": 0,
+                "bUseCustomColor": False,
+                "customColor": "#00FF88FF",
+                "bOutlineEnabled": True,
+                "outlineOpacity": 1.0,
+                "outlineThickness": 1,
+                "bDisplayCenterDot": False,
+                "centerDotOpacity": 1.0,
+                "centerDotSize": 2,
+                "innerLines": {
+                    "bDisplayInnerLines": True,
+                    "lineOpacity": 1.0,
+                    "lineLength": 6,
+                    "lineThickness": 2,
+                    "lineOffset": 3,
+                    "bShowTopLine": True
+                },
+                "outerLines": {
+                    "bDisplayOuterLines": False,
+                    "lineOpacity": 0.35,
+                    "lineLength": 2,
+                    "lineThickness": 2,
+                    "lineOffset": 10,
+                    "bShowTopLine": True
+                }
+            }
+        }
+        primary = profile["primary"]
+        inner = primary["innerLines"]
+        outer = primary["outerLines"]
+
+        i = 0
+        while i < len(tokens):
+            t = tokens[i]
+            if t == "c" and i + 1 < len(tokens):
+                try: primary["color"] = int(tokens[i+1])
+                except: pass
+                i += 1
+            elif t == "u" and i + 1 < len(tokens):
+                primary["bUseCustomColor"] = True
+                c_val = tokens[i+1]
+                if not c_val.startswith("#"): c_val = "#" + c_val
+                primary["customColor"] = c_val
+                i += 1
+            elif t == "b" and i + 1 < len(tokens):
+                primary["bOutlineEnabled"] = (tokens[i+1] == "1")
+                i += 1
+            elif t == "o" and i + 1 < len(tokens):
+                try: primary["outlineOpacity"] = float(tokens[i+1])
+                except: pass
+                i += 1
+            elif t == "t" and i + 1 < len(tokens):
+                try: primary["outlineThickness"] = int(tokens[i+1])
+                except: pass
+                i += 1
+            elif t == "d" and i + 1 < len(tokens):
+                primary["bDisplayCenterDot"] = (tokens[i+1] == "1")
+                i += 1
+            elif t == "a" and i + 1 < len(tokens):
+                try: primary["centerDotOpacity"] = float(tokens[i+1])
+                except: pass
+                i += 1
+            elif t == "z" and i + 1 < len(tokens):
+                try: primary["centerDotSize"] = int(tokens[i+1])
+                except: pass
+                i += 1
+            elif (t == "h" or t == "0h") and i + 1 < len(tokens):
+                inner["bDisplayInnerLines"] = (tokens[i+1] == "1")
+                i += 1
+            elif t == "0t" and i + 1 < len(tokens):
+                try: inner["lineThickness"] = int(tokens[i+1])
+                except: pass
+                inner["bDisplayInnerLines"] = True
+                i += 1
+            elif t == "0l" and i + 1 < len(tokens):
+                try: inner["lineLength"] = int(tokens[i+1])
+                except: pass
+                inner["bDisplayInnerLines"] = True
+                i += 1
+            elif t == "0o" and i + 1 < len(tokens):
+                try: inner["lineOffset"] = int(tokens[i+1])
+                except: pass
+                i += 1
+            elif t == "0a" and i + 1 < len(tokens):
+                try: inner["lineOpacity"] = float(tokens[i+1])
+                except: pass
+                i += 1
+            elif t == "0s" and i + 1 < len(tokens):
+                inner["bShowTopLine"] = (tokens[i+1] == "1")
+                i += 1
+            elif t == "1h" and i + 1 < len(tokens):
+                outer["bDisplayOuterLines"] = (tokens[i+1] == "1")
+                i += 1
+            elif t == "1b" and i + 1 < len(tokens):
+                # 1b in Valorant is Outer Line Outline Enabled, outer lines active!
+                outer["bDisplayOuterLines"] = True
+                i += 1
+            elif t == "1t" and i + 1 < len(tokens):
+                try: outer["lineThickness"] = int(tokens[i+1])
+                except: pass
+                outer["bDisplayOuterLines"] = True
+                i += 1
+            elif t == "1l" and i + 1 < len(tokens):
+                try: outer["lineLength"] = int(tokens[i+1])
+                except: pass
+                outer["bDisplayOuterLines"] = True
+                i += 1
+            elif t == "1o" and i + 1 < len(tokens):
+                try: outer["lineOffset"] = int(tokens[i+1])
+                except: pass
+                outer["bDisplayOuterLines"] = True
+                i += 1
+            elif t == "1a" and i + 1 < len(tokens):
+                try: outer["lineOpacity"] = float(tokens[i+1])
+                except: pass
+                outer["bDisplayOuterLines"] = True
+                i += 1
+            elif t == "1s" and i + 1 < len(tokens):
+                outer["bShowTopLine"] = (tokens[i+1] == "1")
+                i += 1
+            i += 1
+        return profile
+
+    @staticmethod
+    def export_code(profile: dict) -> str:
+        primary = profile.get("primary", {})
+        inner = primary.get("innerLines", {})
+        outer = primary.get("outerLines", {})
+        parts = ["0", "P"]
+
+        if primary.get("bUseCustomColor", False):
+            custom_hex = primary.get("customColor", "#00FF88FF").replace("#", "")
+            parts.extend(["c", "8", "u", custom_hex])
+        else:
+            c_idx = primary.get("color", 0)
+            parts.extend(["c", str(c_idx)])
+
+        if not primary.get("bOutlineEnabled", True):
+            parts.extend(["b", "0"])
+        else:
+            op = primary.get("outlineOpacity", 1.0)
+            if op != 1.0: parts.extend(["o", f"{op:.3f}".rstrip('0').rstrip('.')])
+            th = primary.get("outlineThickness", 1)
+            if th != 1: parts.extend(["t", str(th)])
+
+        if primary.get("bDisplayCenterDot", False):
+            parts.extend(["d", "1"])
+            d_op = primary.get("centerDotOpacity", 1.0)
+            if d_op != 1.0: parts.extend(["a", f"{d_op:.3f}".rstrip('0').rstrip('.')])
+            d_sz = primary.get("centerDotSize", 2)
+            if d_sz != 2: parts.extend(["z", str(d_sz)])
+
+        if not inner.get("bDisplayInnerLines", True):
+            parts.extend(["h", "0"])
+        else:
+            parts.extend(["0t", str(inner.get("lineThickness", 2))])
+            parts.extend(["0l", str(inner.get("lineLength", 6))])
+            parts.extend(["0o", str(inner.get("lineOffset", 3))])
+            i_op = inner.get("lineOpacity", 1.0)
+            if i_op != 1.0: parts.extend(["0a", f"{i_op:.3f}".rstrip('0').rstrip('.')])
+            if not inner.get("bShowTopLine", True): parts.extend(["0s", "0"])
+
+        if outer.get("bDisplayOuterLines", False):
+            parts.extend(["1b", "1"])
+            parts.extend(["1t", str(outer.get("lineThickness", 2))])
+            parts.extend(["1l", str(outer.get("lineLength", 2))])
+            parts.extend(["1o", str(outer.get("lineOffset", 10))])
+            o_op = outer.get("lineOpacity", 0.35)
+            if o_op != 1.0: parts.extend(["1a", f"{o_op:.3f}".rstrip('0').rstrip('.')])
+            if not outer.get("bShowTopLine", True): parts.extend(["1s", "0"])
+        else:
+            parts.extend(["1b", "0"])
+
+        return ";".join(parts)
+
+
 class LaunchNotificationWidget(QWidget):
     def __init__(self, account_name, icon_pixmap, in_game_name=None, in_game_tag=None, rank=None, use_rank_icons=False, parent=None, standalone=False, switcher_instance=None):
         super().__init__(parent)
         self.switcher_instance = switcher_instance
-        super().__init__(parent)
+        self.standalone = standalone
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool | Qt.CustomizeWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground); self.setAttribute(Qt.WA_DeleteOnClose)
         self.setup_ui(account_name, icon_pixmap, in_game_name, in_game_tag, rank, use_rank_icons)
         self.center_on_screen()
-        if standalone:
-            QTimer.singleShot(6000, self.close_and_exit)
+        
+        # Set initial opacity to 0
+        self.setWindowOpacity(0.0)
+        
+        # Fade in animation
+        self.fade_in_anim = QPropertyAnimation(self, b"windowOpacity")
+        self.fade_in_anim.setDuration(500)
+        self.fade_in_anim.setStartValue(0.0)
+        self.fade_in_anim.setEndValue(1.0)
+        self.fade_in_anim.setEasingCurve(QEasingCurve.InOutQuad)
+        self.fade_in_anim.start()
+
+        # Trigger fade out 500ms before the 6000ms total duration
+        QTimer.singleShot(5500, self.start_fade_out)
+
+    def start_fade_out(self):
+        self.fade_out_anim = QPropertyAnimation(self, b"windowOpacity")
+        self.fade_out_anim.setDuration(500)
+        self.fade_out_anim.setStartValue(self.windowOpacity())
+        self.fade_out_anim.setEndValue(0.0)
+        self.fade_out_anim.setEasingCurve(QEasingCurve.InOutQuad)
+        if self.standalone:
+            self.fade_out_anim.finished.connect(self.close_and_exit)
         else:
-            QTimer.singleShot(6000, self.close)
+            self.fade_out_anim.finished.connect(self.close)
+        self.fade_out_anim.start()
 
     def close_and_exit(self):
         """Closes the widget and quits the QApplication."""
@@ -85,17 +475,43 @@ class LaunchNotificationWidget(QWidget):
         if app_instance:
             app_instance.quit()
 
+    def _add_shadow_effect(self, widget):
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(15)
+        shadow.setColor(QColor(0, 0, 0, 200))
+        shadow.setOffset(0, 3)
+        widget.setGraphicsEffect(shadow)
+
     def setup_ui(self, name, pixmap, in_game_name, in_game_tag, rank, use_rank_icons):
-        self.setFixedSize(300, 350)
+        self.setFixedSize(320, 380)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setContentsMargins(10, 10, 10, 10)
         layout.setAlignment(Qt.AlignCenter)
-        
-        shadow = QGraphicsDropShadowEffect(blurRadius=25, color=QColor(0, 0, 0, 180), offset=QPoint(0, 5))
-        self.setGraphicsEffect(shadow)
+
+        splash_pixmap = pixmap
+        if self.switcher_instance:
+            base_dir = Path(self.switcher_instance.base_dir)
+            game_config = self.switcher_instance._load_game_config(name)
+            orig_name = game_config.get("original_icon_name")
+            
+            candidate_names = []
+            if orig_name:
+                candidate_names.append(orig_name)
+            
+            account_data = self.switcher_instance.get_saved_accounts().get(name)
+            if account_data and account_data[0]:
+                candidate_names.append(Path(account_data[0]).name)
+
+            for cand in candidate_names:
+                full_body_candidate = base_dir / "icons" / cand
+                if full_body_candidate.exists():
+                    splash_pixmap = self.switcher_instance.get_qicon_from_path(str(full_body_candidate)).pixmap(180, 180)
+                    break
+
         icon_label = QLabel(self)
-        icon_label.setPixmap(pixmap.scaled(180, 180, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        icon_label.setPixmap(splash_pixmap.scaled(180, 180, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         icon_label.setAlignment(Qt.AlignCenter)
+        self._add_shadow_effect(icon_label)
         layout.addWidget(icon_label); layout.addSpacing(15)
         
         name_layout = QHBoxLayout()
@@ -103,16 +519,18 @@ class LaunchNotificationWidget(QWidget):
 
         # Rank icon next to name
         if rank and not use_rank_icons: # Only show if not already using rank icon as main icon
-            rank_icon_path = Path(get_asset_path(f"{rank.lower().replace(" ", "_")}.png"))
+            rank_icon_path = Path(get_asset_path(f"{rank.lower().replace(' ', '_')}.png"))
             if rank_icon_path.exists():
                 rank_pixmap = self.switcher_instance.get_qicon_from_path(rank_icon_path).pixmap(24, 24)
                 rank_label = QLabel(self)
                 rank_label.setPixmap(rank_pixmap)
+                self._add_shadow_effect(rank_label)
                 name_layout.addWidget(rank_label)
 
         name_label = QLabel(name, self)
         name_label.setAlignment(Qt.AlignCenter)
         name_label.setStyleSheet("color: white; font-size: 28px; font-weight: bold; text-align: center;")
+        self._add_shadow_effect(name_label)
         name_layout.addWidget(name_label)
         layout.addLayout(name_layout)
 
@@ -120,15 +538,19 @@ class LaunchNotificationWidget(QWidget):
             in_game_label = QLabel(f"{in_game_name}#{in_game_tag}", self)
             in_game_label.setAlignment(Qt.AlignCenter)
             in_game_label.setStyleSheet("color: #b0a8a8; font-size: 16px; text-align: center;")
+            self._add_shadow_effect(in_game_label)
             layout.addWidget(in_game_label)
         elif in_game_name:
             in_game_label = QLabel(in_game_name, self)
             in_game_label.setAlignment(Qt.AlignCenter)
             in_game_label.setStyleSheet("color: #b0a8a8; font-size: 16px; text-align: center;")
+            self._add_shadow_effect(in_game_label)
             layout.addWidget(in_game_label)
 
     def center_on_screen(self):
-        self.move(QDesktopWidget().availableGeometry().center() - self.frameGeometry().center())
+        screen = QApplication.primaryScreen()
+        if screen:
+            self.move(screen.availableGeometry().center() - self.frameGeometry().center())
 
 class ValueSlider(QWidget):
     valueChanged = pyqtSignal(float)
@@ -243,13 +665,106 @@ class RadioButtonGroup(QWidget):
     def get_state(self):
         return self.btn_true.isChecked()
 
+class PopupDialog(QDialog):
+    def __init__(self, title, parent):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+
+        
+        self.main_widget = QWidget(objectName="popup_widget")
+        self.main_widget.setStyleSheet("#popup_widget { background-color: #2c2a2b; border-radius: 15px; border: 1px solid #c89f68; } QLabel { color: #FFFFFF; }")
+        
+        popup_layout = QVBoxLayout(self.main_widget)
+        popup_layout.setContentsMargins(0, 0, 0, 0)
+        popup_layout.setSpacing(0)
+
+        self.title_bar = CustomTitleBar(title, self, is_dialog=True)
+        popup_layout.addWidget(self.title_bar)
+        
+        self.content_layout = QVBoxLayout()
+        self.content_layout.setContentsMargins(15, 10, 15, 15)
+        popup_layout.addLayout(self.content_layout)
+
+        main_v_layout = QVBoxLayout(self)
+        main_v_layout.setContentsMargins(0,0,0,0)
+        main_v_layout.addWidget(self.main_widget)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.center_on_parent()
+        
+    def center_on_parent(self):
+        if self.parent():
+            parent_geom = self.parent().geometry()
+            self.move(parent_geom.center() - self.rect().center())
+
+class ValorantIconPickerDialog(PopupDialog):
+    def __init__(self, parent=None, switcher_instance=None):
+        super().__init__("Select Valorant Menu Icon", parent)
+        self.switcher = switcher_instance
+        self.selected_icon_path = None
+        self.setFixedSize(380, 420)
+
+        self.content_layout.setSpacing(15)
+        self.content_layout.setAlignment(Qt.AlignTop)
+
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll_area.setStyleSheet("background-color: #3a3637; border: 1px solid #4f4a4b; border-radius: 10px;")
+
+        grid_container = QWidget()
+        grid_container.setStyleSheet("background-color: #3a3637;")
+        self.grid_layout = QGridLayout(grid_container)
+        self.grid_layout.setSpacing(12)
+        self.grid_layout.setContentsMargins(12, 12, 12, 12)
+        scroll_area.setWidget(grid_container)
+        
+        self.content_layout.addWidget(scroll_area)
+
+        base_dir = self.switcher.base_dir if self.switcher else Path(__file__).parent
+        valorant_dir = Path(base_dir) / "Assets" / "valorant"
+        icon_files = get_icon_paths_from_folder(str(valorant_dir))
+        
+        for i, icon_path in enumerate(icon_files):
+            row, col = i // 3, i % 3
+            btn = QPushButton()
+            btn.setFixedSize(90, 90)
+            if self.switcher:
+                icon = self.switcher.get_qicon_from_path(icon_path)
+            else:
+                icon = QIcon(icon_path)
+            btn.setIcon(icon)
+            btn.setIconSize(QSize(70, 70))
+            btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #4a4647;
+                    border: 2px solid #4f4a4b;
+                    border-radius: 12px;
+                }
+                QPushButton:hover {
+                    background-color: #5a5556;
+                    border-color: #c89f68;
+                }
+            """)
+            btn.clicked.connect(lambda _, path=icon_path: self._select(path))
+            self.grid_layout.addWidget(btn, row, col, Qt.AlignCenter)
+
+    def _select(self, path):
+        self.selected_icon_path = path
+        self.accept()
+
+    def get_selected_icon_path(self):
+        return self.selected_icon_path
+
 class ExportIMAMenuDialog(QDialog):
     def __init__(self, accounts_data, parent=None, default_settings=None):
         super().__init__(parent)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
         self.setAttribute(Qt.WA_TranslucentBackground)
 
-        self.setMinimumWidth(450)
+        self.setMinimumWidth(750)
         default_settings = default_settings or {}
         
         main_layout = QVBoxLayout(self)
@@ -282,22 +797,22 @@ class ExportIMAMenuDialog(QDialog):
 
             QScrollBar:vertical {
                 border: none;
-                background-color: #2c2a2b; /* Match the main background */
+                background-color: #2c2a2b;
                 width: 14px;
                 margin: 0px 0 0px 0;
                 border-radius: 0px;
             }
             QScrollBar::handle:vertical {
-                background-color: #e0d6d1; /* The color of the scroll handle */
+                background-color: #e0d6d1;
                 min-height: 30px;
                 border-radius: 7px;
-                border: 1px solid #c89f68; /* Optional: border for the handle */
+                border: 1px solid #c89f68;
             }
             QScrollBar::handle:vertical:hover {
-                background-color: #c89f68; /* Handle color on hover */
+                background-color: #c89f68;
             }
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-                height: 0px; /* Hide the top and bottom arrows */
+                height: 0px;
             }
             QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
                 background: none;
@@ -318,17 +833,49 @@ class ExportIMAMenuDialog(QDialog):
         content_layout.setSpacing(15)
         container_layout.addWidget(content_area)
 
+        top_layout = QHBoxLayout()
+        top_layout.setSpacing(20)
+        content_layout.addLayout(top_layout)
+        
+        left_layout = QVBoxLayout()
+        left_layout.setSpacing(15)
+        top_layout.addLayout(left_layout, 5)
+        
+        right_layout = QVBoxLayout()
+        right_layout.setSpacing(10)
+        top_layout.addLayout(right_layout, 4)
+
         self.accounts_data = accounts_data
         self.menu_icon_path = default_settings.get("menu_icon_path", "")
+        if not self.menu_icon_path:
+            base_dir = parent.switcher.base_dir if (parent and hasattr(parent, 'switcher')) else Path(__file__).parent
+            default_icon = Path(base_dir) / "Assets" / "valorant" / "5.png"
+            if default_icon.exists():
+                self.menu_icon_path = str(default_icon)
         
-        content_layout.addWidget(QLabel("Menu Title:"))
+        left_layout.addWidget(QLabel("Menu Title:"))
         self.title_edit = QLineEdit(default_settings.get("title", "Valorant"))
-        content_layout.addWidget(self.title_edit)
+        left_layout.addWidget(self.title_edit)
         
-        content_layout.addWidget(QLabel("Menu Icon:"))
+        left_layout.addWidget(QLabel("Menu Icon:"))
         icon_layout = QHBoxLayout()
+        icon_layout.setSpacing(8)
         self.icon_path_edit = QLineEdit(self.menu_icon_path)
         self.icon_path_edit.setPlaceholderText("Optional: Select an icon for the main menu")
+        self.icon_path_edit.textChanged.connect(self.update_icon_preview)
+
+        self.icon_preview_btn = QPushButton()
+        self.icon_preview_btn.setFixedSize(40, 40)
+        self.icon_preview_btn.setIconSize(QSize(28, 28))
+        self.icon_preview_btn.setToolTip("Click to choose a Valorant menu icon style")
+        self.icon_preview_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px;
+            }
+            QPushButton:hover { background-color: #5a5556; border-color: #d9b68b; }
+        """)
+        self.icon_preview_btn.clicked.connect(self.open_valorant_icon_picker)
+
         browse_button = QPushButton("Browse...")
         browse_button.setStyleSheet("""
             QPushButton {
@@ -338,16 +885,81 @@ class ExportIMAMenuDialog(QDialog):
             QPushButton:hover { background-color: #d9b68b; }
         """)
         browse_button.clicked.connect(self.select_icon)
+
         icon_layout.addWidget(self.icon_path_edit)
+        icon_layout.addWidget(self.icon_preview_btn)
         icon_layout.addWidget(browse_button)
-        content_layout.addLayout(icon_layout)
+        left_layout.addLayout(icon_layout)
+        self.update_icon_preview(self.menu_icon_path)
         
-        content_layout.addWidget(QLabel("Arrange Accounts (Drag & Drop):"))
+        settings_group = QGroupBox("iMA Menu Settings")
+        settings_group.setStyleSheet("""
+            QGroupBox {
+                color: #FFFFFF; font-weight: bold; border: 1px solid #c89f68; border-radius: 8px; margin-top: 10px;
+            }
+            QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; padding: 0 10px; left: 10px; }
+        """)
+        settings_layout = QGridLayout(settings_group)
+        settings_layout.setSpacing(10)
+        
+        ui_settings = default_settings.get("ui_settings", {})
+        self.show_rank_tips_toggle = RadioButtonGroup("On", "Off")
+        self.show_rank_tips_toggle.set_state(ui_settings.get("show_rank_tips", False))
+        settings_layout.addWidget(QLabel("Show Rank Tips:"), 0, 0)
+        settings_layout.addWidget(self.show_rank_tips_toggle, 0, 1)
+
+        self.show_rr_in_tip_toggle = RadioButtonGroup("On", "Off")
+        self.show_rr_in_tip_toggle.set_state(ui_settings.get("show_rr_in_tip", False))
+        settings_layout.addWidget(QLabel("Show Current RR in Tip:"), 1, 0)
+        settings_layout.addWidget(self.show_rr_in_tip_toggle, 1, 1)
+
+        self.tip_delay_slider = ValueSlider(0.0, 2.0, 0.1)
+        self.tip_delay_slider.setValue(ui_settings.get("tip_delay", 1.0))
+        settings_layout.addWidget(QLabel("Tip Delay (seconds):"), 2, 0)
+        settings_layout.addWidget(self.tip_delay_slider, 2, 1)
+        
+        left_layout.addWidget(settings_group)
+        left_layout.addStretch()
+        
+        right_layout.addWidget(QLabel("Arrange Accounts (Drag & Drop):"))
         self.accounts_list = QListWidget()
         self.accounts_list.setDragDropMode(QAbstractItemView.InternalMove)
         self.accounts_list.setIconSize(QSize(32, 32))
+        self.accounts_list.setStyleSheet("""
+            QListWidget {
+                background-color: #3a3637;
+                border: 1px solid #c89f68;
+                border-radius: 12px;
+                padding: 8px;
+                outline: none;
+            }
+            QListWidget::item {
+                background-color: #4f4a4b;
+                color: #e0d6d1;
+                font-weight: bold;
+                font-size: 14px;
+                border-radius: 10px;
+                padding: 8px 12px;
+                margin-bottom: 4px;
+                border: 2px dashed transparent;
+            }
+            QListWidget::item:hover {
+                background-color: #5a5556;
+                border: 2px dashed #c89f68;
+            }
+            QListWidget::item:selected {
+                background-color: #c89f68;
+                color: #2c2a2b;
+                border: 2px solid #d9b68b;
+            }
+            QListWidget::drop-indicator {
+                border: 2px dashed #c89f68;
+                border-radius: 8px;
+                background-color: rgba(200, 159, 104, 0.25);
+            }
+        """)
         self.populate_accounts(default_settings.get("ordered_accounts"))
-        content_layout.addWidget(self.accounts_list)
+        right_layout.addWidget(self.accounts_list)
         
         button_layout = QHBoxLayout()
         button_layout.setSpacing(15)
@@ -389,6 +1001,25 @@ class ExportIMAMenuDialog(QDialog):
             parent_geom = self.parent().geometry()
             self.move(parent_geom.center() - self.rect().center())
 
+    def update_icon_preview(self, path_text):
+        self.menu_icon_path = path_text.strip()
+        switcher = self.parent().switcher if (self.parent() and hasattr(self.parent(), 'switcher')) else None
+        if self.menu_icon_path and Path(self.menu_icon_path).exists():
+            if switcher:
+                icon = switcher.get_qicon_from_path(self.menu_icon_path)
+            else:
+                icon = QIcon(self.menu_icon_path)
+            self.icon_preview_btn.setIcon(icon)
+        else:
+            self.icon_preview_btn.setIcon(QIcon())
+
+    def open_valorant_icon_picker(self):
+        switcher = self.parent().switcher if (self.parent() and hasattr(self.parent(), 'switcher')) else None
+        picker = ValorantIconPickerDialog(self, switcher_instance=switcher)
+        if picker.exec_() == QDialog.Accepted and picker.get_selected_icon_path():
+            chosen = picker.get_selected_icon_path()
+            self.icon_path_edit.setText(chosen)
+
     def populate_accounts(self, ordered_list=None):
         if ordered_list is None: ordered_list = sorted(self.accounts_data.keys())
         all_accounts = set(self.accounts_data.keys()); current_accounts = set(ordered_list)
@@ -397,14 +1028,32 @@ class ExportIMAMenuDialog(QDialog):
         for name in sorted(list(all_accounts - current_accounts)): self._add_item(name, self.accounts_data[name][0])
 
     def _add_item(self, name, icon_path):
-        item = QListWidgetItem(name); item.setIcon(self.parent().switcher.get_qicon_from_path(icon_path or "")); self.accounts_list.addItem(item)
+        item = QListWidgetItem(name)
+        switcher = self.parent().switcher if (self.parent() and hasattr(self.parent(), 'switcher')) else None
+        if switcher:
+            account_data = self.accounts_data.get(name)
+            rank = account_data[2] if account_data else None
+            ui_settings = switcher.get_ima_config().get("ui_settings", {})
+            use_rank_icons = ui_settings.get("use_rank_icons", False)
+            resolved_icon_path = switcher.get_icon_path_for_account(name, rank, use_rank_icons, account_icon_path=icon_path)
+            item.setIcon(switcher.get_qicon_from_path(resolved_icon_path))
+        else:
+            item.setIcon(QIcon(icon_path or ""))
+        self.accounts_list.addItem(item)
 
     def select_icon(self):
         path, _ = QFileDialog.getOpenFileName(self, "Select Icon", "", "Icon Files (*.ico *.png)")
         if path: self.menu_icon_path = path; self.icon_path_edit.setText(path)
 
     def get_settings(self):
-        return {"title": self.title_edit.text(), "menu_icon_path": self.menu_icon_path, "ordered_accounts": [self.accounts_list.item(i).text() for i in range(self.accounts_list.count())]}
+        return {
+            "title": self.title_edit.text(), 
+            "menu_icon_path": self.menu_icon_path, 
+            "ordered_accounts": [self.accounts_list.item(i).text() for i in range(self.accounts_list.count())],
+            "show_rank_tips": self.show_rank_tips_toggle.get_state(),
+            "show_rr_in_tip": self.show_rr_in_tip_toggle.get_state(),
+            "tip_delay": self.tip_delay_slider.value()
+        }
 
 class PopupDialog(QDialog):
     def __init__(self, title, parent):
@@ -559,6 +1208,11 @@ class SaveAccountDialog(PopupDialog):
         in_game_name_tag_layout.addWidget(self.in_game_tag_edit)
         self.content_layout.addLayout(in_game_name_tag_layout)
 
+        self.puuid_edit = QLineEdit()
+        self.puuid_edit.setPlaceholderText("PUUID (optional)")
+        self.puuid_edit.setStyleSheet("background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 10px; color: #e0d6d1;")
+        self.content_layout.addWidget(self.puuid_edit)
+
         self.content_layout.addWidget(QLabel("Select Game:"))
         self.game_combo = QComboBox()
         self.game_combo.setStyleSheet("""
@@ -604,6 +1258,8 @@ class SaveAccountDialog(PopupDialog):
             
         self.content_layout.addWidget(self.game_combo)
 
+        self.content_layout.addSpacing(20)
+
         button_layout = QHBoxLayout()
         button_layout.setSpacing(15)
         button_layout.addStretch()
@@ -636,7 +1292,7 @@ class SaveAccountDialog(PopupDialog):
         self.content_layout.addLayout(button_layout)
 
     def get_details(self):
-        return self.name_edit.text().strip(), self.game_combo.currentData(), self.in_game_name_edit.text().strip(), self.in_game_tag_edit.text().strip()
+        return self.name_edit.text().strip(), self.game_combo.currentData(), self.in_game_name_edit.text().strip(), self.in_game_tag_edit.text().strip(), self.puuid_edit.text().strip()
 
 class BackupRestoreSelectionDialog(PopupDialog):
     def __init__(self, parent=None):
@@ -727,27 +1383,261 @@ class BackupRestoreDialog(PopupDialog):
     def get_selection(self):
         return self.selection
 
-class SettingsDialog(PopupDialog):
+class SettingsDropdownMenu(QWidget):
+    def __init__(self, settings_button, actions_handler, parent=None):
+        super().__init__(parent)
+        self.settings_button = settings_button
+        self.actions_handler = actions_handler
+        self.is_closing = False
+
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool | Qt.NoDropShadowWindowHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+
+        self.main_widget = QWidget(self)
+        self.main_widget.setObjectName("settings_dropdown_widget")
+        self.main_widget.setStyleSheet("""
+            #settings_dropdown_widget {
+                background-color: #2c2a2b;
+                border-radius: 15px;
+                border: 1px solid #4f4a4b;
+            }
+            QPushButton {
+                background-color: #4f4a4b;
+                color: #e0d6d1;
+                font-size: 13px;
+                font-weight: bold;
+                border: none;
+                border-radius: 12px;
+                padding: 8px 12px;
+            }
+            QPushButton:hover {
+                background-color: #c89f68;
+                color: #2c2a2b;
+            }
+        """)
+
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(20)
+        shadow.setColor(QColor(0, 0, 0, 180))
+        shadow.setOffset(0, 4)
+        self.main_widget.setGraphicsEffect(shadow)
+
+        main_layout = QVBoxLayout(self.main_widget)
+        main_layout.setContentsMargins(10, 10, 10, 10)
+        main_layout.setSpacing(8)
+
+        row1 = QHBoxLayout()
+        row1.setSpacing(6)
+
+        add_btn = QPushButton(" Add")
+        add_icon = Path(get_asset_path("Add.png"))
+        if add_icon.exists():
+            add_btn.setIcon(QIcon(str(add_icon)))
+            add_btn.setIconSize(QSize(16, 16))
+        add_btn.clicked.connect(lambda: self.execute_action(self.actions_handler.add_account))
+        row1.addWidget(add_btn)
+
+        save_btn = QPushButton(" Save")
+        save_icon = Path(get_asset_path("Save.png"))
+        if save_icon.exists():
+            save_btn.setIcon(QIcon(str(save_icon)))
+            save_btn.setIconSize(QSize(16, 16))
+        save_btn.clicked.connect(lambda: self.execute_action(self.actions_handler.save_current_account))
+        row1.addWidget(save_btn)
+
+        main_layout.addLayout(row1)
+
+        row2 = QHBoxLayout()
+        row2.setSpacing(6)
+
+        backup_btn = QPushButton(" Backup")
+        backup_icon = Path(get_asset_path("Backup.png"))
+        if backup_icon.exists():
+            backup_btn.setIcon(QIcon(str(backup_icon)))
+            backup_btn.setIconSize(QSize(16, 16))
+        backup_btn.clicked.connect(lambda: self.execute_action(self.actions_handler._handle_backup_selection))
+        row2.addWidget(backup_btn)
+
+        restore_btn = QPushButton(" Restore")
+        restore_icon = Path(get_asset_path("Restore.png"))
+        if restore_icon.exists():
+            restore_btn.setIcon(QIcon(str(restore_icon)))
+            restore_btn.setIconSize(QSize(16, 16))
+        restore_btn.clicked.connect(lambda: self.execute_action(self.actions_handler._handle_restore_selection))
+        row2.addWidget(restore_btn)
+
+        main_layout.addLayout(row2)
+
+        ima_btn = QPushButton(" iMA Menu")
+        ima_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4f4a4b;
+                color: #e0d6d1;
+                font-size: 13px;
+                font-weight: bold;
+                border: none;
+                border-radius: 12px;
+                padding: 8px 12px;
+                text-align: left;
+            }
+            QPushButton:hover {
+                background-color: #c89f68;
+                color: #2c2a2b;
+            }
+        """)
+        ima_icon = Path(get_asset_path("ima.png"))
+        if ima_icon.exists():
+            ima_btn.setIcon(QIcon(str(ima_icon)))
+            ima_btn.setIconSize(QSize(18, 18))
+        ima_btn.clicked.connect(lambda: self.execute_action(self.actions_handler.export_ima_menu))
+        main_layout.addWidget(ima_btn)
+
+        options_btn = QPushButton(" Options")
+        options_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4f4a4b;
+                color: #e0d6d1;
+                font-size: 13px;
+                font-weight: bold;
+                border: none;
+                border-radius: 12px;
+                padding: 8px 12px;
+                text-align: left;
+            }
+            QPushButton:hover {
+                background-color: #c89f68;
+                color: #2c2a2b;
+            }
+        """)
+        options_icon = Path(get_asset_path("Options.png"))
+        if options_icon.exists():
+            options_btn.setIcon(QIcon(str(options_icon)))
+            options_btn.setIconSize(QSize(18, 18))
+        options_btn.clicked.connect(lambda: self.execute_action(self.actions_handler.open_options_dialog))
+        main_layout.addWidget(options_btn)
+
+        update_btn = QPushButton(" Check for Update")
+        update_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4f4a4b;
+                color: #e0d6d1;
+                font-size: 13px;
+                font-weight: bold;
+                border: none;
+                border-radius: 12px;
+                padding: 8px 12px;
+                text-align: left;
+            }
+            QPushButton:hover {
+                background-color: #c89f68;
+                color: #2c2a2b;
+            }
+        """)
+        update_icon = Path(get_asset_path("Update.png"))
+        if update_icon.exists():
+            update_btn.setIcon(QIcon(str(update_icon)))
+            update_btn.setIconSize(QSize(18, 18))
+        update_btn.clicked.connect(lambda: self.execute_action(self.actions_handler.open_update_dialog))
+        main_layout.addWidget(update_btn)
+
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.addWidget(self.main_widget)
+
+        self.target_width = 220
+        self.target_height = 215
+        self.resize(self.target_width, self.target_height)
+
+    def show_animated(self):
+        if self.settings_button:
+            btn_global = self.settings_button.mapToGlobal(QPoint(0, self.settings_button.height() + 4))
+            x_pos = btn_global.x()
+            y_pos = btn_global.y()
+        else:
+            x_pos, y_pos = 100, 100
+
+        self.setGeometry(x_pos, y_pos, self.target_width, 0)
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+        self.anim = QPropertyAnimation(self, b"geometry")
+        self.anim.setDuration(180)
+        self.anim.setStartValue(QRect(x_pos, y_pos, self.target_width, 0))
+        self.anim.setEndValue(QRect(x_pos, y_pos, self.target_width, self.target_height))
+        self.anim.setEasingCurve(QEasingCurve.OutCubic)
+        self.anim.start()
+
+    def execute_action(self, action_func):
+        self.close_animated(callback=action_func)
+
+    def close_animated(self, callback=None):
+        if self.is_closing:
+            return
+        self.is_closing = True
+
+        if self.settings_button:
+            btn_global = self.settings_button.mapToGlobal(QPoint(0, self.settings_button.height() + 4))
+            x_pos = btn_global.x()
+            y_pos = btn_global.y()
+        else:
+            x_pos, y_pos = self.x(), self.y()
+
+        self.anim = QPropertyAnimation(self, b"geometry")
+        self.anim.setDuration(150)
+        self.anim.setStartValue(self.geometry())
+        self.anim.setEndValue(QRect(x_pos, y_pos, self.target_width, 0))
+        self.anim.setEasingCurve(QEasingCurve.InCubic)
+
+        def on_finished():
+            self.close()
+            if callback:
+                callback()
+
+        self.anim.finished.connect(on_finished)
+        self.anim.start()
+
+    def changeEvent(self, event):
+        if event.type() == QEvent.ActivationChange and not self.isActiveWindow():
+            if not self.is_closing:
+                self.close_animated()
+        super().changeEvent(event)
+
+class SettingsDialog:
     def __init__(self, actions, parent):
-        super().__init__("Settings", parent)
-        self.content_layout.setSpacing(10)
-        button_style = """QPushButton { background-color: #4f4a4b; color: #e0d6d1; font-size: 15px; font-weight: bold; border: none; border-radius: 15px; padding: 10px 20px; text-align: left; } QPushButton:hover { background-color: #c89f68; } QPushButton::icon { width: 24px; height: 24px; } """
-        for text, (action_func, icon_name) in actions.items():
-            icon_path = Path(get_asset_path(icon_name))
-            button = QPushButton(text)
-            button.setStyleSheet(button_style)
-            if icon_path.exists():
-                button.setIcon(QIcon(str(icon_path)))
-            button.clicked.connect(lambda _, func=action_func: (self.close(), func()))
-            self.content_layout.addWidget(button)
+        self.parent = parent
+    def exec_(self):
+        if hasattr(self.parent, 'settings_handler'):
+            menu = SettingsDropdownMenu(
+                settings_button=getattr(self.parent.title_bar, 'settings_button', None),
+                actions_handler=self.parent.settings_handler,
+                parent=self.parent
+            )
+            menu.show_animated()
 
 class OptionsDialog(PopupDialog):
-    settings_applied = pyqtSignal() # New signal
+    settings_applied = pyqtSignal()
 
     def __init__(self, switcher_instance, parent=None):
         super().__init__("Options", parent)
         self.switcher = switcher_instance
-        self.setFixedSize(600, 700)
+        self.setFixedSize(760, 680)
+
+        open_folder_btn = HoverButton()
+        open_folder_btn.setFixedSize(30, 30)
+        open_folder_btn.setIconSize(QSize(18, 18))
+        open_folder_path = get_asset_path("Open.png")
+        if os.path.exists(open_folder_path):
+            open_folder_btn.setIcon(QIcon(open_folder_path))
+        open_folder_btn.setToolTip("Open Profiles Folder")
+        open_folder_btn.setStyleSheet("QPushButton { background-color: #4f4a4b; border: none; border-radius: 15px; } QPushButton:hover { background-color: #c89f68; }")
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(15)
+        shadow.setColor(QColor(0, 0, 0, 160))
+        shadow.setOffset(0, 2)
+        open_folder_btn.setGraphicsEffect(shadow)
+        open_folder_btn.clicked.connect(self.open_profiles_folder)
+        self.title_bar.add_header_button(open_folder_btn)
 
         self.quality_settings_map = {
             "sg.ViewDistanceQuality": "View Distance", "sg.AntiAliasingQuality": "Anti-Aliasing",
@@ -783,50 +1673,82 @@ class OptionsDialog(PopupDialog):
             #popup_widget { background-color: #2c2a2b; border-radius: 15px; border: 1px solid #4f4a4b; }
             QLabel { color: #e0d6d1; font-weight: normal; }
             QGroupBox {
-                color: #FFFFFF; /* This is for the content of the groupbox, not the title */
-                font-size: 14px;
+                color: #FFFFFF;
+                font-size: 13px;
                 font-weight: bold;
-                border: 1px solid #c89f68; /* Coffee colored border */
+                border: 1px solid #c89f68;
                 border-radius: 8px;
                 margin-top: 10px;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
                 subcontrol-position: top left;
-                padding: 0 10px;
+                padding: 0 8px;
                 left: 10px;
-                color: #FFFFFF; /* Explicitly white for the title */
+                color: #FFFFFF;
             }
         """)
 
         self.content_layout.setSpacing(10)
-        self.tab_widget = QTabWidget()
-        self.tab_widget.setStyleSheet("""
-            QTabWidget::pane { border: 1px solid #4f4a4b; border-top: 1px solid #4f4a4b; border-radius: 8px; }
-            QTabBar::tab { 
-                background-color: #3a3637; color: #e0d6d1; padding: 8px 12px; font-weight: bold;
-                border: 1px solid #4f4a4b; border-bottom: none; border-top-left-radius: 8px; border-top-right-radius: 8px;
+        
+        # Horizontal Body Layout: Sidebar + Stack
+        body_layout = QHBoxLayout()
+        body_layout.setSpacing(15)
+
+        # Left Sidebar Navigation List
+        self.nav_list = QListWidget()
+        self.nav_list.setFixedWidth(170)
+        self.nav_list.setStyleSheet("""
+            QListWidget {
+                background-color: #232122;
+                border: 1px solid #4f4a4b;
+                border-radius: 10px;
+                outline: none;
+                padding: 5px;
             }
-            QTabBar::tab:hover { background-color: #4f4a4b; }
-            QTabBar::tab:selected { background-color: #c89f68; color: #2c2a2b; }
+            QListWidget::item {
+                color: #e0d6d1;
+                font-size: 13px;
+                font-weight: bold;
+                padding: 10px;
+                border-radius: 6px;
+                margin-bottom: 4px;
+            }
+            QListWidget::item:hover {
+                background-color: #3a3637;
+                color: #ffffff;
+            }
+            QListWidget::item:selected {
+                background-color: #c89f68;
+                color: #2c2a2b;
+            }
         """)
-        self.content_layout.addWidget(self.tab_widget)
+        body_layout.addWidget(self.nav_list)
 
-        self.setup_ui_tab()
-        self.setup_account_tab()
-        self.setup_graphics_tab()
-        self.setup_audio_tab()
-        self.setup_advanced_tab()
+        # Right Pages Stack
+        self.pages_widget = QStackedWidget()
+        self.pages_widget.setStyleSheet("""
+            QStackedWidget {
+                background-color: #343031;
+                border: 1px solid #4f4a4b;
+                border-radius: 10px;
+            }
+        """)
+        body_layout.addWidget(self.pages_widget)
 
-        self.original_tab_icons = []
-        for i in range(self.tab_widget.count()):
-            self.original_tab_icons.append(self.tab_widget.tabIcon(i))
+        self.content_layout.addLayout(body_layout)
 
-        self.tab_widget.setIconSize(QSize(32, 32))
-        self.hovered_tab_index = -1
-        self.tab_widget.tabBar().setMouseTracking(True)
-        self.tab_widget.tabBar().installEventFilter(self)
-        self.tab_widget.currentChanged.connect(self.on_tab_changed)
+        # Setup pages
+        self.setup_ui_tab()          # Page 0: Display
+        self.setup_account_tab()     # Page 1: Rank & Account
+        self.setup_graphics_tab()    # Page 2: Graphics
+        self.setup_audio_tab()       # Page 3: Audio
+        self.setup_advanced_tab()    # Page 4: Quality Presets & Riot Client
+        self.setup_crosshairs_tab()  # Page 5: Crosshair Manager
+        self.setup_updates_tab()     # Page 6: Software Updates
+
+        self.nav_list.currentRowChanged.connect(self.pages_widget.setCurrentIndex)
+        self.nav_list.setCurrentRow(0)
 
         self.status_label = QLabel("")
         self.status_label.setStyleSheet("color: #e0d6d1; font-size: 12px; padding-top: 5px;")
@@ -854,7 +1776,7 @@ class OptionsDialog(PopupDialog):
                 background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 10px 20px;
             }
             QPushButton:hover {
-                background-color: #d9b68b; /* Brighter coffee color */
+                background-color: #d9b68b;
             }
         """)
         apply_button.clicked.connect(self.apply_settings)
@@ -863,7 +1785,24 @@ class OptionsDialog(PopupDialog):
         button_layout.addStretch()
         self.content_layout.addLayout(button_layout)
 
+        self.populate_account_combos()
         self.load_current_settings()
+
+    def add_page(self, title, icon_file, widget):
+        item = QListWidgetItem(title)
+        icon_p = get_asset_path(icon_file)
+        if Path(icon_p).exists():
+            item.setIcon(QIcon(icon_p))
+        self.nav_list.addItem(item)
+        self.pages_widget.addWidget(widget)
+
+    def populate_account_combos(self):
+        accounts = list(self.switcher.get_saved_accounts().keys())
+        if hasattr(self, 'crosshair_account_combo'):
+            self.crosshair_account_combo.blockSignals(True)
+            self.crosshair_account_combo.clear()
+            self.crosshair_account_combo.addItems(accounts)
+            self.crosshair_account_combo.blockSignals(False)
 
     def setup_account_tab(self):
         account_tab = QWidget()
@@ -872,24 +1811,25 @@ class OptionsDialog(PopupDialog):
         main_layout.setSpacing(15)
         main_layout.setAlignment(Qt.AlignTop)
 
-        rank_update_group = QGroupBox("Rank Update Settings")
-        rank_update_group.setStyleSheet("""
+        group_style = """
             QGroupBox {
-                color: #FFFFFF;
-                font-size: 14px;
-                font-weight: bold;
-                border: 1px solid #c89f68;
-                border-radius: 8px;
-                margin-top: 10px;
+                color: #FFFFFF; font-size: 13px; font-weight: bold;
+                border: 1px solid #c89f68; border-radius: 8px; margin-top: 10px;
             }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                padding: 0 10px;
-                left: 10px;
-                color: #FFFFFF;
+            QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; padding: 0 8px; left: 10px; color: #FFFFFF; }
+        """
+        combo_style = """
+            QComboBox { 
+                background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 8px; color: #e0d6d1; font-weight: bold;
             }
-        """)
+            QComboBox:hover { border: 1px solid #d9b68b; }
+            QComboBox QAbstractItemView { 
+                background-color: #3a3637; border: 1px solid #c89f68; selection-background-color: #c89f68; color: #e0d6d1; selection-color: #2c2a2b; padding: 5px;
+            }
+        """
+
+        rank_update_group = QGroupBox("Rank Update Settings")
+        rank_update_group.setStyleSheet(group_style)
         rank_update_layout = QGridLayout(rank_update_group)
         rank_update_layout.setSpacing(10)
 
@@ -905,32 +1845,45 @@ class OptionsDialog(PopupDialog):
         self.rank_check_region_combo.addItem("Brazil (br)", "br")
         self.rank_check_region_combo.addItem("Korea (kr)", "kr")
         self.rank_check_region_combo.addItem("Latin America (latam)", "latam")
-        self.rank_check_region_combo.setStyleSheet("""
-            QComboBox { 
-                background-color: #4a4647; 
-                border: 1px solid #c89f68; 
-                border-radius: 8px; 
-                padding: 8px; 
-                color: #e0d6d1; 
-                font-weight: bold;
-            }
-            QComboBox:hover { border: 1px solid #d9b68b; }
-            QComboBox::drop-down { border: none; }
-            QComboBox::down-arrow { image: none; }
-            QComboBox QAbstractItemView { 
-                background-color: #3a3637; 
-                border: 1px solid #c89f68; 
-                selection-background-color: #c89f68;
-                color: #e0d6d1;
-                selection-color: #2c2a2b;
-                padding: 5px;
-            }
-        """)
+        self.rank_check_region_combo.setStyleSheet(combo_style)
         rank_update_layout.addWidget(self.rank_check_region_combo, 1, 1)
         main_layout.addWidget(rank_update_group)
 
+        rank_features_group = QGroupBox("Rank Features")
+        rank_features_group.setStyleSheet(group_style)
+        rank_features_layout = QGridLayout(rank_features_group)
+        rank_features_layout.setSpacing(10)
+
+        self.use_rank_icons_toggle = RadioButtonGroup("On", "Off")
+        rank_features_layout.addWidget(QLabel("Use Rank for Account Icon:"), 0, 0)
+        rank_features_layout.addWidget(self.use_rank_icons_toggle, 0, 1)
+
+        main_layout.addWidget(rank_features_group)
+
+        notif_group = QGroupBox("Notifications")
+        notif_group.setStyleSheet(group_style)
+        notif_layout = QGridLayout(notif_group)
+        notif_layout.setSpacing(10)
+
+        self.show_splash_notification_toggle = RadioButtonGroup("On", "Off")
+        notif_layout.addWidget(QLabel("Show Splash Notification:"), 0, 0)
+        notif_layout.addWidget(self.show_splash_notification_toggle, 0, 1)
+
+        preview_splash_btn = QPushButton("Preview Splash Screen")
+        preview_splash_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #c89f68; color: #2c2a2b; font-weight: bold;
+                border-radius: 8px; padding: 10px; border: none; font-size: 13px;
+            }
+            QPushButton:hover { background-color: #d9b68b; }
+            QPushButton:pressed { background-color: #b88f58; }
+        """)
+        preview_splash_btn.clicked.connect(self.preview_splash_screen)
+        notif_layout.addWidget(preview_splash_btn, 1, 0, 1, 2)
+        main_layout.addWidget(notif_group)
+
         main_layout.addStretch()
-        self.tab_widget.addTab(account_tab, QIcon(get_asset_path("Settings.png")), "Account")
+        self.add_page("Rank & Account", "Settings.png", account_tab)
 
     def setup_graphics_tab(self):
         graphics_tab = QWidget()
@@ -946,23 +1899,11 @@ class OptionsDialog(PopupDialog):
         
         combo_style = """
             QComboBox { 
-                background-color: #4a4647; 
-                border: 1px solid #c89f68; 
-                border-radius: 8px; 
-                padding: 8px; 
-                color: #e0d6d1; 
-                font-weight: bold;
+                background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 8px; color: #e0d6d1; font-weight: bold;
             }
             QComboBox:hover { border: 1px solid #d9b68b; }
-            QComboBox::drop-down { border: none; }
-            QComboBox::down-arrow { image: none; /* Can add a custom arrow icon here */ }
             QComboBox QAbstractItemView { 
-                background-color: #3a3637; 
-                border: 1px solid #c89f68; 
-                selection-background-color: #c89f68;
-                color: #e0d6d1;
-                selection-color: #2c2a2b;
-                padding: 5px;
+                background-color: #3a3637; border: 1px solid #c89f68; selection-background-color: #c89f68; color: #e0d6d1; selection-color: #2c2a2b; padding: 5px;
             }
         """
 
@@ -989,7 +1930,7 @@ class OptionsDialog(PopupDialog):
         
         layout.addLayout(form_layout)
         layout.addStretch()
-        self.tab_widget.addTab(graphics_tab, QIcon(get_asset_path("Graphics.png")), "Graphics")
+        self.add_page("Graphics", "Graphics.png", graphics_tab)
 
     def setup_audio_tab(self):
         audio_tab = QWidget()
@@ -1035,7 +1976,7 @@ class OptionsDialog(PopupDialog):
         main_layout.addWidget(voice_group)
 
         main_layout.addStretch()
-        self.tab_widget.addTab(audio_tab, QIcon(get_asset_path("Audio.png")), "Audio")
+        self.add_page("Audio", "Audio.png", audio_tab)
 
     def setup_advanced_tab(self):
         advanced_tab = QWidget()
@@ -1086,8 +2027,25 @@ class OptionsDialog(PopupDialog):
             grid_layout.addWidget(spin_box, row, col + 1, Qt.AlignLeft)
 
         layout.addLayout(grid_layout)
+
+        riot_client_group = QGroupBox("Riot Client Behavior")
+        riot_client_group.setStyleSheet("""
+            QGroupBox {
+                color: #FFFFFF; font-size: 13px; font-weight: bold;
+                border: 1px solid #c89f68; border-radius: 8px; margin-top: 10px;
+            }
+            QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; padding: 0 10px; left: 10px; color: #FFFFFF; }
+        """)
+        riot_client_layout = QGridLayout(riot_client_group)
+        riot_client_layout.setSpacing(10)
+
+        self.show_riot_client_toggle = RadioButtonGroup("Show", "Hide")
+        riot_client_layout.addWidget(QLabel("Riot Client Window:"), 0, 0)
+        riot_client_layout.addWidget(self.show_riot_client_toggle, 0, 1)
+        layout.addWidget(riot_client_group)
+
         layout.addStretch()
-        self.tab_widget.addTab(advanced_tab, QIcon(get_asset_path("Advanced.png")), "Advanced")
+        self.add_page("Quality Presets", "Advanced.png", advanced_tab)
 
     def setup_ui_tab(self):
         ui_tab = QWidget()
@@ -1096,25 +2054,16 @@ class OptionsDialog(PopupDialog):
         main_layout.setSpacing(15)
         main_layout.setAlignment(Qt.AlignTop)
 
-        # Top Group (Show in UI)
-        top_group = QGroupBox("Show in UI")
-        top_group.setStyleSheet("""
+        group_style = """
             QGroupBox {
-                color: #FFFFFF;
-                font-size: 14px;
-                font-weight: bold;
-                border: 1px solid #c89f68; /* Coffee colored border */
-                border-radius: 8px;
-                margin-top: 10px;
+                color: #FFFFFF; font-size: 13px; font-weight: bold;
+                border: 1px solid #c89f68; border-radius: 8px; margin-top: 10px;
             }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                padding: 0 10px;
-                left: 10px;
-                color: #FFFFFF; /* Explicitly white for the title */
-            }
-        """)
+            QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; padding: 0 8px; left: 10px; color: #FFFFFF; }
+        """
+
+        top_group = QGroupBox("Show in UI")
+        top_group.setStyleSheet(group_style)
         top_layout = QGridLayout(top_group)
         top_layout.setSpacing(10)
 
@@ -1137,83 +2086,527 @@ class OptionsDialog(PopupDialog):
         self.show_last_game_rr_toggle = RadioButtonGroup("On", "Off")
         top_layout.addWidget(QLabel("Last Game's RR:"), 4, 0)
         top_layout.addWidget(self.show_last_game_rr_toggle, 4, 1)
-        
-        self.use_rank_icons_toggle = RadioButtonGroup("On", "Off")
-        top_layout.addWidget(QLabel("Use Rank for Account Icon:"), 5, 0)
-        top_layout.addWidget(self.use_rank_icons_toggle, 5, 1)
 
-        # Bottom Group (Menu & Rank Settings)
-        bottom_group = QGroupBox("Menu & Rank Settings")
-        bottom_group.setStyleSheet("""
-            QGroupBox {
-                color: #FFFFFF;
-                font-size: 14px;
-                font-weight: bold;
-                border: 1px solid #c89f68; /* Coffee colored border */
-                border-radius: 8px;
-                margin-top: 10px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                padding: 0 10px;
-                left: 10px;
-                color: #FFFFFF; /* Explicitly white for the title */
-            }
-        """)
+        self.show_last_match_info_toggle = RadioButtonGroup("On", "Off")
+        top_layout.addWidget(QLabel("Last Game's Agent & Map:"), 5, 0)
+        top_layout.addWidget(self.show_last_match_info_toggle, 5, 1)
+
+        bottom_group = QGroupBox("Layout Settings")
+        bottom_group.setStyleSheet(group_style)
         bottom_layout = QGridLayout(bottom_group)
         bottom_layout.setSpacing(10)
 
-        self.show_rank_tips_toggle = RadioButtonGroup("On", "Off")
-        bottom_layout.addWidget(QLabel("Show Rank Tips (iMA Menu):"), 0, 0)
-        bottom_layout.addWidget(self.show_rank_tips_toggle, 0, 1)
-
-        self.tip_delay_slider = ValueSlider(0.0, 2.0, 0.1)
-        bottom_layout.addWidget(QLabel("Tip Delay (seconds):"), 1, 0)
-        bottom_layout.addWidget(self.tip_delay_slider, 1, 1)
-
-        bottom_layout.addWidget(QLabel("Grid Size (Columns):"), 2, 0)
+        bottom_layout.addWidget(QLabel("Grid Size (Columns):"), 0, 0)
         self.grid_size_combo = QComboBox()
         self.grid_size_combo.addItems(["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"])
         self.grid_size_combo.setStyleSheet("""
             QComboBox { 
-                background-color: #4a4647; 
-                border: 1px solid #c89f68; 
-                border-radius: 8px; 
-                padding: 8px; 
-                color: #e0d6d1; 
-                font-weight: bold;
+                background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 8px; color: #e0d6d1; font-weight: bold;
             }
             QComboBox:hover { border: 1px solid #d9b68b; }
-            QComboBox::drop-down { border: none; }
-            QComboBox::down-arrow { image: none; }
             QComboBox QAbstractItemView { 
-                background-color: #3a3637; 
-                border: 1px solid #c89f68; 
-                selection-background-color: #c89f68;
-                color: #e0d6d1;
-                selection-color: #2c2a2b;
-                padding: 5px;
+                background-color: #3a3637; border: 1px solid #c89f68; selection-background-color: #c89f68; color: #e0d6d1; selection-color: #2c2a2b; padding: 5px;
             }
         """)
-        bottom_layout.addWidget(self.grid_size_combo, 2, 1)
+        bottom_layout.addWidget(self.grid_size_combo, 0, 1)
 
         main_layout.addWidget(top_group)
         main_layout.addWidget(bottom_group)
-        
         main_layout.addStretch()
 
-        self.tab_widget.setIconSize(QSize(32, 32))
-        self.tab_widget.addTab(ui_tab, QIcon(get_asset_path("app_icon.png")), "UI")
+        self.add_page("Display", "app_icon.png", ui_tab)
 
-    def eventFilter(self, obj, event):
-        return super().eventFilter(obj, event)
+    def setup_crosshairs_tab(self):
+        crosshair_page = QWidget()
+        layout = QVBoxLayout(crosshair_page)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
 
-    def on_tab_changed(self, index):
-        # When the tab is changed by clicking, restore all icons to their original state
-        for i in range(self.tab_widget.count()):
-            if self.original_tab_icons and i < len(self.original_tab_icons):
-                 self.tab_widget.setTabIcon(i, self.original_tab_icons[i])
+        combo_style = """
+            QComboBox { 
+                background-color: #4a4647; border: 1px solid #c89f68; border-radius: 6px; padding: 4px 8px; color: #e0d6d1; font-weight: bold;
+            }
+            QComboBox:hover { border: 1px solid #d9b68b; }
+            QComboBox QAbstractItemView { 
+                background-color: #3a3637; border: 1px solid #c89f68; selection-background-color: #c89f68; color: #e0d6d1; selection-color: #2c2a2b; padding: 4px;
+            }
+        """
+        btn_style = """
+            QPushButton {
+                background-color: #4a4647; color: #e0d6d1; font-weight: bold; font-size: 11px;
+                border-radius: 6px; padding: 6px 12px; border: 1px solid #6b6365;
+            }
+            QPushButton:hover { background-color: #5a5556; border-color: #c89f68; }
+            QPushButton:pressed { background-color: #3a3637; }
+        """
+        gold_btn_style = """
+            QPushButton {
+                background-color: #c89f68; color: #2c2a2b; font-weight: bold; font-size: 11px;
+                border-radius: 6px; padding: 6px 12px; border: none;
+            }
+            QPushButton:hover { background-color: #d9b68b; }
+            QPushButton:pressed { background-color: #b88f58; }
+        """
+
+        top_bar = QHBoxLayout()
+        top_bar.setSpacing(10)
+        
+        top_bar.addWidget(QLabel("Account:"))
+        self.crosshair_account_combo = QComboBox()
+        self.crosshair_account_combo.setStyleSheet(combo_style)
+        top_bar.addWidget(self.crosshair_account_combo, 1)
+
+        top_bar.addWidget(QLabel("Profile:"))
+        self.crosshair_profile_combo = QComboBox()
+        self.crosshair_profile_combo.setStyleSheet(combo_style)
+        top_bar.addWidget(self.crosshair_profile_combo, 1)
+
+
+
+
+        layout.addLayout(top_bar)
+
+        main_split = QHBoxLayout()
+        main_split.setSpacing(12)
+
+        left_col = QVBoxLayout()
+        left_col.setSpacing(6)
+
+        self.ch_canvas = CrosshairCanvasWidget()
+        left_col.addWidget(self.ch_canvas, 0, Qt.AlignCenter)
+
+        bg_bar = QHBoxLayout()
+        bg_bar.setSpacing(6)
+        bg_bar.addWidget(QLabel("BG:"))
+        self.ch_bg_combo = QComboBox()
+        self.ch_bg_combo.setStyleSheet(combo_style)
+        self.ch_bg_combo.addItems(["Dark Grid", "Light Grid"])
+        bg_bar.addWidget(self.ch_bg_combo)
+
+        bg_bar.addWidget(QLabel("Zoom:"))
+        self.ch_zoom_combo = QComboBox()
+        self.ch_zoom_combo.setStyleSheet(combo_style)
+        self.ch_zoom_combo.addItems(["1x", "2x"])
+        bg_bar.addWidget(self.ch_zoom_combo)
+        left_col.addLayout(bg_bar)
+        left_col.addStretch()
+
+        main_split.addLayout(left_col, 0)
+
+        self.ch_controls_tab = QTabWidget()
+        self.ch_controls_tab.setUsesScrollButtons(False)
+        self.ch_controls_tab.setStyleSheet("""
+            QTabWidget::pane { border: 1px solid #4f4a4b; border-radius: 6px; background-color: #2c2a2b; }
+            QTabBar::tab { 
+                background: #3a3637; color: #b0a6a0; padding: 4px 6px; 
+                border-top-left-radius: 4px; border-top-right-radius: 4px; 
+                font-size: 10px; font-weight: bold; min-width: 50px;
+            }
+            QTabBar::tab:selected { background: #c89f68; color: #2c2a2b; }
+        """)
+
+        # Tab 1: Primary & Color
+        tab_color = QWidget()
+        layout_color = QFormLayout(tab_color)
+        layout_color.setSpacing(6)
+        
+        self.ch_color_combo = QComboBox()
+        self.ch_color_combo.setStyleSheet(combo_style)
+        self.ch_color_combo.addItems(["White", "Green", "Yellow Green", "Green Yellow", "Yellow", "Cyan", "Pink", "Red", "Custom Hex"])
+        layout_color.addRow(QLabel("Color Preset:"), self.ch_color_combo)
+
+        self.ch_custom_hex_edit = QLineEdit("#00FF88FF")
+        self.ch_custom_hex_edit.setStyleSheet("QLineEdit { background-color: #4a4647; border: 1px solid #c89f68; border-radius: 4px; padding: 4px; color: #e0d6d1; }")
+        layout_color.addRow(QLabel("Custom Hex:"), self.ch_custom_hex_edit)
+
+        self.ch_dot_enable_cb = QCheckBox("Enable Center Dot")
+        self.ch_dot_enable_cb.setStyleSheet("color: #e0d6d1; font-weight: bold;")
+        layout_color.addRow(self.ch_dot_enable_cb)
+
+        self.ch_dot_opacity_slider = ValueSlider(0, 100)
+        layout_color.addRow(QLabel("Dot Opacity:"), self.ch_dot_opacity_slider)
+
+        self.ch_dot_size_slider = ValueSlider(1, 6)
+        layout_color.addRow(QLabel("Dot Size (px):"), self.ch_dot_size_slider)
+
+        self.ch_controls_tab.addTab(tab_color, "Color & Dot")
+
+        # Tab 2: Outlines
+        tab_outlines = QWidget()
+        layout_outlines = QFormLayout(tab_outlines)
+        layout_outlines.setSpacing(6)
+
+        self.ch_outline_enable_cb = QCheckBox("Enable Outlines")
+        self.ch_outline_enable_cb.setStyleSheet("color: #e0d6d1; font-weight: bold;")
+        layout_outlines.addRow(self.ch_outline_enable_cb)
+
+        self.ch_outline_opacity_slider = ValueSlider(0, 100)
+        layout_outlines.addRow(QLabel("Outline Opacity:"), self.ch_outline_opacity_slider)
+
+        self.ch_outline_thick_slider = ValueSlider(1, 6)
+        layout_outlines.addRow(QLabel("Outline Thickness:"), self.ch_outline_thick_slider)
+
+        self.ch_controls_tab.addTab(tab_outlines, "Outlines")
+
+        # Tab 3: Inner Lines
+        tab_inner = QWidget()
+        layout_inner = QFormLayout(tab_inner)
+        layout_inner.setSpacing(5)
+
+        self.ch_inner_enable_cb = QCheckBox("Show Inner Lines")
+        self.ch_inner_enable_cb.setStyleSheet("color: #e0d6d1; font-weight: bold;")
+        layout_inner.addRow(self.ch_inner_enable_cb)
+
+        self.ch_inner_opacity_slider = ValueSlider(0, 100)
+        layout_inner.addRow(QLabel("Opacity:"), self.ch_inner_opacity_slider)
+
+        self.ch_inner_len_slider = ValueSlider(0, 20)
+        layout_inner.addRow(QLabel("Length:"), self.ch_inner_len_slider)
+
+        self.ch_inner_thick_slider = ValueSlider(1, 10)
+        layout_inner.addRow(QLabel("Thickness:"), self.ch_inner_thick_slider)
+
+        self.ch_inner_off_slider = ValueSlider(0, 20)
+        layout_inner.addRow(QLabel("Offset:"), self.ch_inner_off_slider)
+
+        self.ch_inner_top_cb = QCheckBox("Show Top Line")
+        self.ch_inner_top_cb.setStyleSheet("color: #e0d6d1;")
+        layout_inner.addRow(self.ch_inner_top_cb)
+
+        self.ch_controls_tab.addTab(tab_inner, "Inner")
+
+        # Tab 4: Outer Lines
+        tab_outer = QWidget()
+        layout_outer = QFormLayout(tab_outer)
+        layout_outer.setSpacing(5)
+
+        self.ch_outer_enable_cb = QCheckBox("Show Outer Lines")
+        self.ch_outer_enable_cb.setStyleSheet("color: #e0d6d1; font-weight: bold;")
+        layout_outer.addRow(self.ch_outer_enable_cb)
+
+        self.ch_outer_opacity_slider = ValueSlider(0, 100)
+        layout_outer.addRow(QLabel("Opacity:"), self.ch_outer_opacity_slider)
+
+        self.ch_outer_len_slider = ValueSlider(0, 20)
+        layout_outer.addRow(QLabel("Length:"), self.ch_outer_len_slider)
+
+        self.ch_outer_thick_slider = ValueSlider(1, 10)
+        layout_outer.addRow(QLabel("Thickness:"), self.ch_outer_thick_slider)
+
+        self.ch_outer_off_slider = ValueSlider(0, 20)
+        layout_outer.addRow(QLabel("Offset:"), self.ch_outer_off_slider)
+
+        self.ch_outer_top_cb = QCheckBox("Show Top Line")
+        self.ch_outer_top_cb.setStyleSheet("color: #e0d6d1;")
+        layout_outer.addRow(self.ch_outer_top_cb)
+
+        self.ch_controls_tab.addTab(tab_outer, "Outer")
+
+        main_split.addWidget(self.ch_controls_tab, 1)
+        layout.addLayout(main_split)
+
+        action_bar = QHBoxLayout()
+        action_bar.setSpacing(8)
+
+        btn_import = QPushButton("Import Code")
+        btn_import.setStyleSheet(btn_style)
+        btn_import.clicked.connect(self.on_import_crosshair_code)
+        action_bar.addWidget(btn_import)
+
+        btn_export = QPushButton("Copy Code")
+        btn_export.setStyleSheet(btn_style)
+        btn_export.clicked.connect(self.on_export_crosshair_code)
+        action_bar.addWidget(btn_export)
+
+
+
+        layout.addLayout(action_bar)
+
+        self.ch_bg_combo.currentIndexChanged.connect(lambda: self.ch_canvas.set_bg(self.ch_bg_combo.currentText()))
+        self.ch_zoom_combo.currentIndexChanged.connect(lambda: self.ch_canvas.set_zoom(2.0 if "2" in self.ch_zoom_combo.currentText() else 1.0))
+
+        self.ch_updating_controls = False
+        for widget in [self.ch_color_combo, self.ch_custom_hex_edit, self.ch_dot_enable_cb,
+                       self.ch_dot_opacity_slider, self.ch_dot_size_slider, self.ch_outline_enable_cb,
+                       self.ch_outline_opacity_slider, self.ch_outline_thick_slider, self.ch_inner_enable_cb,
+                       self.ch_inner_opacity_slider, self.ch_inner_len_slider, self.ch_inner_thick_slider,
+                       self.ch_inner_off_slider, self.ch_inner_top_cb, self.ch_outer_enable_cb,
+                       self.ch_outer_opacity_slider, self.ch_outer_len_slider, self.ch_outer_thick_slider,
+                       self.ch_outer_off_slider, self.ch_outer_top_cb]:
+            if isinstance(widget, ValueSlider):
+                widget.valueChanged.connect(self.update_active_profile_from_controls)
+            elif isinstance(widget, QCheckBox):
+                widget.stateChanged.connect(self.update_active_profile_from_controls)
+            elif isinstance(widget, QComboBox):
+                widget.currentIndexChanged.connect(self.update_active_profile_from_controls)
+            elif isinstance(widget, QLineEdit):
+                widget.textChanged.connect(self.update_active_profile_from_controls)
+
+        self.crosshair_account_combo.currentIndexChanged.connect(self.load_account_crosshair_info)
+        self.crosshair_profile_combo.currentIndexChanged.connect(self.on_crosshair_profile_selected)
+
+        self.add_page("Crosshair", "crosshair.png", crosshair_page)
+
+    def setup_updates_tab(self):
+        updates_tab = QWidget()
+        main_layout = QVBoxLayout(updates_tab)
+        main_layout.setContentsMargins(15, 15, 15, 15)
+        main_layout.setSpacing(15)
+        main_layout.setAlignment(Qt.AlignTop)
+
+        group_style = """
+            QGroupBox {
+                color: #FFFFFF; font-size: 13px; font-weight: bold;
+                border: 1px solid #c89f68; border-radius: 8px; margin-top: 10px;
+            }
+            QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; padding: 0 8px; left: 10px; color: #FFFFFF; }
+        """
+
+        group_box = QGroupBox("App Version & Updates", updates_tab)
+        group_box.setStyleSheet(group_style)
+        group_layout = QVBoxLayout(group_box)
+        group_layout.setSpacing(12)
+        group_layout.setContentsMargins(15, 20, 15, 15)
+
+        from game_switcher import APP_VERSION
+        version_label = QLabel(f"<b>Current Installed Version:</b> v{APP_VERSION}")
+        version_label.setStyleSheet("font-size: 14px; color: #e0d6d1;")
+        group_layout.addWidget(version_label)
+
+        repo_label = QLabel("<b>Official Repository:</b> github.com/iMAboud/iMA-Switcher")
+        repo_label.setStyleSheet("font-size: 12px; color: #b0a8a8;")
+        group_layout.addWidget(repo_label)
+
+        check_btn = QPushButton("Check for Updates")
+        check_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #c89f68; color: #2c2a2b; font-weight: bold;
+                border-radius: 8px; padding: 10px 20px; font-size: 13px;
+            }
+            QPushButton:hover { background-color: #d9b68b; }
+        """)
+        check_btn.clicked.connect(self.open_update_dialog)
+        group_layout.addWidget(check_btn)
+
+        main_layout.addWidget(group_box)
+        self.add_page("Updates", "Update.png", updates_tab)
+
+    def open_update_dialog(self):
+        update_dialog = UpdateDialog(self.switcher, self)
+        update_dialog.exec_()
+
+    def load_account_crosshair_info(self):
+        acc = self.crosshair_account_combo.currentText()
+        if not acc:
+            return
+
+        self._last_selected_crosshair_acc = acc
+
+        data = self.switcher.get_account_crosshairs(acc)
+        if not data or 'profiles' not in data or not data['profiles']:
+            default_p = ValorantCrosshairCodeParser.parse_code("0;P;c;1;h;1;0t;2;0l;6;0o;3;0a;1")
+            default_p["profileName"] = "Primary Crosshair"
+            data = {"currentProfile": 0, "profiles": [default_p]}
+            
+
+        self._current_crosshair_data = copy.deepcopy(data)
+        self.crosshair_profile_combo.blockSignals(True)
+        self.crosshair_profile_combo.clear()
+
+        profiles = data.get('profiles', [])
+        for i, p in enumerate(profiles):
+            name = p.get('profileName', f"Profile {i+1}")
+            self.crosshair_profile_combo.addItem(name, i)
+
+        curr_idx = data.get('currentProfile', 0)
+        if 0 <= curr_idx < len(profiles):
+            self.crosshair_profile_combo.setCurrentIndex(curr_idx)
+        elif len(profiles) > 0:
+            self.crosshair_profile_combo.setCurrentIndex(0)
+
+        self.crosshair_profile_combo.blockSignals(False)
+        self.on_crosshair_profile_selected()
+
+    def on_crosshair_profile_selected(self):
+        if getattr(self, 'ch_updating_controls', False):
+            return
+        idx = self.crosshair_profile_combo.currentIndex()
+        if not hasattr(self, '_current_crosshair_data') or not self._current_crosshair_data:
+            self.ch_canvas.set_profile({})
+            return
+        profiles = self._current_crosshair_data.get('profiles', [])
+        if not (0 <= idx < len(profiles)):
+            self.ch_canvas.set_profile({})
+            return
+
+        p = profiles[idx]
+        self.ch_canvas.set_profile(p)
+
+        primary = p.get('primary', {})
+        inner = primary.get('innerLines', {})
+        outer = primary.get('outerLines', {})
+
+        self.ch_updating_controls = True
+
+        p_col_dict = primary.get("primaryColor")
+        if isinstance(p_col_dict, dict) and 'r' in p_col_dict:
+            r, g, b = int(p_col_dict.get('r', 255)), int(p_col_dict.get('g', 255)), int(p_col_dict.get('b', 255))
+            if r == 255 and g == 255 and b == 255: self.ch_color_combo.setCurrentIndex(0)
+            elif r == 0 and g == 255 and b == 0: self.ch_color_combo.setCurrentIndex(1)
+            elif r == 127 and g == 255 and b == 0: self.ch_color_combo.setCurrentIndex(2)
+            elif r == 190 and g == 255 and b == 0: self.ch_color_combo.setCurrentIndex(3)
+            elif r == 255 and g == 255 and b == 0: self.ch_color_combo.setCurrentIndex(4)
+            elif r == 0 and g == 255 and b == 255: self.ch_color_combo.setCurrentIndex(5)
+            elif r == 255 and g == 0 and b == 255: self.ch_color_combo.setCurrentIndex(6)
+            elif r == 255 and g == 0 and b == 0: self.ch_color_combo.setCurrentIndex(7)
+            else:
+                self.ch_color_combo.setCurrentIndex(8)
+                self.ch_custom_hex_edit.setText(f"#{r:02X}{g:02X}{b:02X}FF")
+        elif primary.get('bUseCustomColor', False):
+            self.ch_color_combo.setCurrentIndex(8)
+            custom_hex = primary.get('customColor', '#00FF88FF')
+            if isinstance(custom_hex, str): self.ch_custom_hex_edit.setText(custom_hex)
+        else:
+            color_idx = primary.get('color', 0)
+            if isinstance(color_idx, int) and 0 <= color_idx <= 7:
+                self.ch_color_combo.setCurrentIndex(color_idx)
+            else:
+                self.ch_color_combo.setCurrentIndex(0)
+
+        self.ch_dot_enable_cb.setChecked(primary.get('bDisplayCenterDot', False))
+        self.ch_dot_opacity_slider.setValue(int(float(primary.get('centerDotOpacity', 1.0)) * 100))
+        self.ch_dot_size_slider.setValue(int(primary.get('centerDotSize', 2)))
+
+        self.ch_outline_enable_cb.setChecked(primary.get('bOutlineEnabled', True))
+        self.ch_outline_opacity_slider.setValue(int(float(primary.get('outlineOpacity', 1.0)) * 100))
+        self.ch_outline_thick_slider.setValue(int(primary.get('outlineThickness', 1)))
+
+        self.ch_inner_enable_cb.setChecked(inner.get('bbDisplayInnerLines', inner.get('bDisplayInnerLines', True)))
+        self.ch_inner_opacity_slider.setValue(int(float(inner.get('lineOpacity', 1.0)) * 100))
+        self.ch_inner_len_slider.setValue(int(inner.get('lineLength', 6)))
+        self.ch_inner_thick_slider.setValue(int(inner.get('lineThickness', 2)))
+        self.ch_inner_off_slider.setValue(int(inner.get('lineOffset', 3)))
+        self.ch_inner_top_cb.setChecked(inner.get('bShowTopLine', True))
+
+        self.ch_outer_enable_cb.setChecked(outer.get('bbDisplayOuterLines', outer.get('bDisplayOuterLines', False)))
+        self.ch_outer_opacity_slider.setValue(int(float(outer.get('lineOpacity', 0.35)) * 100))
+        self.ch_outer_len_slider.setValue(int(outer.get('lineLength', 2)))
+        self.ch_outer_thick_slider.setValue(int(outer.get('lineThickness', 2)))
+        self.ch_outer_off_slider.setValue(int(outer.get('lineOffset', 10)))
+        self.ch_outer_top_cb.setChecked(outer.get('bShowTopLine', True))
+
+        self.ch_updating_controls = False
+
+    def update_active_profile_from_controls(self):
+        if getattr(self, 'ch_updating_controls', False):
+            return
+        idx = self.crosshair_profile_combo.currentIndex()
+        if not hasattr(self, '_current_crosshair_data') or not self._current_crosshair_data:
+            return
+        profiles = self._current_crosshair_data.get('profiles', [])
+        if not (0 <= idx < len(profiles)):
+            return
+
+        p = profiles[idx]
+        if 'primary' not in p or not isinstance(p['primary'], dict):
+            p['primary'] = {}
+        primary = p['primary']
+
+        if 'innerLines' not in primary or not isinstance(primary['innerLines'], dict):
+            primary['innerLines'] = {}
+        inner = primary['innerLines']
+
+        if 'outerLines' not in primary or not isinstance(primary['outerLines'], dict):
+            primary['outerLines'] = {}
+        outer = primary['outerLines']
+
+        color_idx = self.ch_color_combo.currentIndex()
+        preset_colors = [
+            {"r": 255, "g": 255, "b": 255, "a": 255},
+            {"r": 0, "g": 255, "b": 0, "a": 255},
+            {"r": 127, "g": 255, "b": 0, "a": 255},
+            {"r": 190, "g": 255, "b": 0, "a": 255},
+            {"r": 255, "g": 255, "b": 0, "a": 255},
+            {"r": 0, "g": 255, "b": 255, "a": 255},
+            {"r": 255, "g": 0, "b": 255, "a": 255},
+            {"r": 255, "g": 0, "b": 0, "a": 255},
+        ]
+        if color_idx == 8:
+            primary['bUseCustomColor'] = True
+            primary['color'] = 8
+            hex_val = self.ch_custom_hex_edit.text().strip() or "#00FF88FF"
+            primary['customColor'] = hex_val
+            try:
+                qc = QColor(hex_val)
+                primary['primaryColor'] = {"r": qc.red(), "g": qc.green(), "b": qc.blue(), "a": 255}
+            except: pass
+        else:
+            primary['bUseCustomColor'] = False
+            primary['color'] = color_idx
+            if 0 <= color_idx < len(preset_colors):
+                primary['primaryColor'] = preset_colors[color_idx]
+
+        primary['bDisplayCenterDot'] = self.ch_dot_enable_cb.isChecked()
+        primary['centerDotOpacity'] = float(self.ch_dot_opacity_slider.value()) / 100.0
+        primary['centerDotSize'] = self.ch_dot_size_slider.value()
+
+        primary['bOutlineEnabled'] = self.ch_outline_enable_cb.isChecked()
+        primary['outlineOpacity'] = float(self.ch_outline_opacity_slider.value()) / 100.0
+        primary['outlineThickness'] = self.ch_outline_thick_slider.value()
+
+        inner['bDisplayInnerLines'] = self.ch_inner_enable_cb.isChecked()
+        inner['lineOpacity'] = float(self.ch_inner_opacity_slider.value()) / 100.0
+        inner['lineLength'] = self.ch_inner_len_slider.value()
+        inner['lineThickness'] = self.ch_inner_thick_slider.value()
+        inner['lineOffset'] = self.ch_inner_off_slider.value()
+        inner['bShowTopLine'] = self.ch_inner_top_cb.isChecked()
+
+        outer['bDisplayOuterLines'] = self.ch_outer_enable_cb.isChecked()
+        outer['lineOpacity'] = float(self.ch_outer_opacity_slider.value()) / 100.0
+        outer['lineLength'] = self.ch_outer_len_slider.value()
+        outer['lineThickness'] = self.ch_outer_thick_slider.value()
+        outer['lineOffset'] = self.ch_outer_off_slider.value()
+        outer['bShowTopLine'] = self.ch_outer_top_cb.isChecked()
+
+        self.ch_canvas.set_profile(p)
+
+    def on_import_crosshair_code(self):
+        code, ok = QInputDialog.getText(self, "Import Valorant Crosshair Code", "Paste Crosshair Profile Code (e.g., 0;P;c;5;o;1;...):")
+        if not ok or not code.strip():
+            return
+
+        imported_profile = ValorantCrosshairCodeParser.parse_code(code)
+        if not imported_profile:
+            self.status_label.setText("Failed to parse crosshair code.")
+            return
+
+        idx = self.crosshair_profile_combo.currentIndex()
+        if not hasattr(self, '_current_crosshair_data') or not self._current_crosshair_data:
+            self._current_crosshair_data = {"currentProfile": 0, "profiles": []}
+
+        profiles = self._current_crosshair_data.get('profiles', [])
+        if 0 <= idx < len(profiles):
+            imported_profile["profileName"] = profiles[idx].get("profileName", "Imported Profile")
+            profiles[idx] = imported_profile
+        else:
+            imported_profile["profileName"] = f"Profile {len(profiles)+1}"
+            profiles.append(imported_profile)
+            self._current_crosshair_data['currentProfile'] = len(profiles) - 1
+
+        self.on_crosshair_profile_selected()
+        self.status_label.setText("Crosshair code imported! Click 'Save to Account' to persist.")
+
+    def on_export_crosshair_code(self):
+        idx = self.crosshair_profile_combo.currentIndex()
+        if not hasattr(self, '_current_crosshair_data') or not self._current_crosshair_data:
+            return
+        profiles = self._current_crosshair_data.get('profiles', [])
+        if not (0 <= idx < len(profiles)):
+            return
+
+        code = ValorantCrosshairCodeParser.export_code(profiles[idx])
+        QApplication.clipboard().setText(code)
+        self.status_label.setText(f"Copied code to clipboard: {code}")
 
     def set_all_qualities(self, value):
         for spin_box in self.spin_boxes.values():
@@ -1254,17 +2647,21 @@ class OptionsDialog(PopupDialog):
                 audio_settings_to_save[key] = "True" if control.get_state() else "False"
 
         ui_settings_to_save = {
-            "show_game_icons": self.show_game_icons_toggle.get_state(),
-            "show_rank_tips": self.show_rank_tips_toggle.get_state(),
-            "tip_delay": self.tip_delay_slider.value(),
-            "use_rank_icons": self.use_rank_icons_toggle.get_state(),
-            "show_rank_icon_left": self.show_rank_icon_left_toggle.get_state(),
-            "show_name_tag": self.show_name_tag_toggle.get_state(),
-            "show_current_rr": self.show_current_rr_toggle.get_state(),
-            "show_last_game_rr": self.show_last_game_rr_toggle.get_state(),
-            "rank_check_region": self.rank_check_region_combo.currentData(),
-            "auto_rank_update": self.auto_rank_update_toggle.get_state(),
-            "grid_size": int(self.grid_size_combo.currentText()),
+            "show_game_icons": self.show_game_icons_toggle.get_state() if hasattr(self, 'show_game_icons_toggle') else True,
+            "use_rank_icons": self.use_rank_icons_toggle.get_state() if hasattr(self, 'use_rank_icons_toggle') else False,
+            "show_rank_icon_left": self.show_rank_icon_left_toggle.get_state() if hasattr(self, 'show_rank_icon_left_toggle') else False,
+            "show_name_tag": self.show_name_tag_toggle.get_state() if hasattr(self, 'show_name_tag_toggle') else True,
+            "show_current_rr": self.show_current_rr_toggle.get_state() if hasattr(self, 'show_current_rr_toggle') else True,
+            "show_last_game_rr": self.show_last_game_rr_toggle.get_state() if hasattr(self, 'show_last_game_rr_toggle') else True,
+            "show_last_match_info": self.show_last_match_info_toggle.get_state() if hasattr(self, 'show_last_match_info_toggle') else True,
+            "rank_check_region": self.rank_check_region_combo.currentData() if hasattr(self, 'rank_check_region_combo') else "eu",
+            "auto_rank_update": self.auto_rank_update_toggle.get_state() if hasattr(self, 'auto_rank_update_toggle') else True,
+            "grid_size": int(self.grid_size_combo.currentText()) if hasattr(self, 'grid_size_combo') else 4,
+            "show_splash_notification": self.show_splash_notification_toggle.get_state() if hasattr(self, 'show_splash_notification_toggle') else True,
+            "show_riot_client": self.show_riot_client_toggle.get_state() if hasattr(self, 'show_riot_client_toggle') else False,
+            "unified_settings_enabled": self.unified_enabled_toggle.get_state() if hasattr(self, 'unified_enabled_toggle') else False,
+            "master_account": self.master_account_combo.currentText() if hasattr(self, 'master_account_combo') else "",
+            "sync_keybinds": self.sync_keybinds_toggle.get_state() if hasattr(self, 'sync_keybinds_toggle') else False,
         }
 
         settings_to_save = {
@@ -1277,9 +2674,14 @@ class OptionsDialog(PopupDialog):
         self.switcher.save_graphics_settings(settings_to_save)
         success, message = self.switcher.update_all_game_user_settings(settings_to_save)
         self.switcher.update_ima_menu_if_enabled('update', None)
+
+        if hasattr(self, 'on_save_crosshairs_clicked'):
+            self.on_save_crosshairs_clicked()
+        if hasattr(self, 'save_account_controls'):
+            self.save_account_controls()
         
         if success:
-            self.status_label.setText("Settings applied successfully to all accounts.")
+            self.status_label.setText("Settings applied successfully.")
             self.settings_applied.emit()
         else:
             self.status_label.setText(f"Failed to apply settings: {message}")
@@ -1300,7 +2702,7 @@ class OptionsDialog(PopupDialog):
                 if value == "0": combo_box.setCurrentText("Off")
                 elif value == "2": combo_box.setCurrentText("On + Boost")
                 else: combo_box.setCurrentText("On")
-            else: # Texture, Detail, UI Quality
+            else:
                 value = riot_settings.get(key, "High")
                 if value == "0": combo_box.setCurrentText("Low")
                 elif value == "1": combo_box.setCurrentText("Med")
@@ -1327,15 +2729,16 @@ class OptionsDialog(PopupDialog):
                     control.set_state(value_str.lower() == 'true')
         
         ui_settings = self.switcher.get_ima_config().get("ui_settings", {})
-        self.show_game_icons_toggle.set_state(ui_settings.get("show_game_icons", True))
-        self.show_rank_tips_toggle.set_state(ui_settings.get("show_rank_tips", False))
-        self.tip_delay_slider.setValue(ui_settings.get("tip_delay", 1.0))
-        self.use_rank_icons_toggle.set_state(ui_settings.get("use_rank_icons", False))
-        self.show_rank_icon_left_toggle.set_state(ui_settings.get("show_rank_icon_left", False))
-        self.show_name_tag_toggle.set_state(ui_settings.get("show_name_tag", True))
-        self.show_current_rr_toggle.set_state(ui_settings.get("show_current_rr", True))
-        self.show_last_game_rr_toggle.set_state(ui_settings.get("show_last_game_rr", True))
-        self.grid_size_combo.setCurrentText(str(ui_settings.get("grid_size", 4)))
+        if hasattr(self, 'show_game_icons_toggle'): self.show_game_icons_toggle.set_state(ui_settings.get("show_game_icons", True))
+        if hasattr(self, 'use_rank_icons_toggle'): self.use_rank_icons_toggle.set_state(ui_settings.get("use_rank_icons", False))
+        if hasattr(self, 'show_rank_icon_left_toggle'): self.show_rank_icon_left_toggle.set_state(ui_settings.get("show_rank_icon_left", False))
+        if hasattr(self, 'show_name_tag_toggle'): self.show_name_tag_toggle.set_state(ui_settings.get("show_name_tag", True))
+        if hasattr(self, 'show_current_rr_toggle'): self.show_current_rr_toggle.set_state(ui_settings.get("show_current_rr", True))
+        if hasattr(self, 'show_last_game_rr_toggle'): self.show_last_game_rr_toggle.set_state(ui_settings.get("show_last_game_rr", True))
+        if hasattr(self, 'show_last_match_info_toggle'): self.show_last_match_info_toggle.set_state(ui_settings.get("show_last_match_info", True))
+        if hasattr(self, 'grid_size_combo'): self.grid_size_combo.setCurrentText(str(ui_settings.get("grid_size", 4)))
+        if hasattr(self, 'show_splash_notification_toggle'): self.show_splash_notification_toggle.set_state(ui_settings.get("show_splash_notification", True))
+        if hasattr(self, 'show_riot_client_toggle'): self.show_riot_client_toggle.set_state(ui_settings.get("show_riot_client", False))
         
 
         # Account tab settings
@@ -1346,64 +2749,190 @@ class OptionsDialog(PopupDialog):
             index = self.rank_check_region_combo.findText(saved_region)
         if index != -1:
             self.rank_check_region_combo.setCurrentIndex(index)
-        
+
+        self.load_account_crosshair_info()
         self.status_label.setText("Loaded saved settings.")
 
+    def open_profiles_folder(self):
+        if hasattr(self.switcher, 'profiles_dir') and self.switcher.profiles_dir:
+            os.startfile(str(self.switcher.profiles_dir))
+
+    def preview_splash_screen(self):
+        accounts = self.switcher.get_saved_accounts()
+        if not accounts:
+            self.status_label.setText("No accounts available to preview.")
+            return
+
+        account_names = list(accounts.keys())
+        if not hasattr(self, "_preview_account_index"):
+            self._preview_account_index = 0
+        else:
+            self._preview_account_index = (self._preview_account_index + 1) % len(account_names)
+
+        account_name = account_names[self._preview_account_index]
+        account_data = accounts[account_name]
+        icon_source_path, game, rank, in_game_name, in_game_tag, current_rr, last_game_rr = account_data
+
+        use_rank_icons = self.use_rank_icons_toggle.get_state()
+        icon_path_str = self.switcher.get_icon_path_for_account(account_name, rank, use_rank_icons, icon_source_path)
+        account_icon = self.switcher.get_qicon_from_path(icon_path_str)
+        pixmap = account_icon.pixmap(180, 180)
+
+        if hasattr(self, "_preview_notification") and self._preview_notification:
+            try:
+                self._preview_notification.close()
+            except RuntimeError:
+                pass
+
+        self._preview_notification = LaunchNotificationWidget(
+            account_name,
+            pixmap,
+            in_game_name=in_game_name if self.show_name_tag_toggle.get_state() else None,
+            in_game_tag=in_game_tag if self.show_name_tag_toggle.get_state() else None,
+            rank=rank,
+            use_rank_icons=use_rank_icons,
+            standalone=False,
+            switcher_instance=self.switcher
+        )
+        self._preview_notification.show()
+        self.status_label.setText(f"Previewing splash for '{account_name}' ({self._preview_account_index + 1}/{len(account_names)})")
+
 class CustomTitleBar(QWidget):
-    def __init__(self, title, parent, is_dialog=False):
+    def __init__(self, title_or_parent, parent_or_is_dialog=None, is_dialog=False):
+        if isinstance(title_or_parent, QWidget):
+            parent = title_or_parent
+            is_dialog = parent_or_is_dialog if isinstance(parent_or_is_dialog, bool) else False
+            title = ""
+        else:
+            title = str(title_or_parent)
+            parent = parent_or_is_dialog
+            is_dialog = is_dialog
+
         super().__init__(parent)
         self.parent_window = parent
-        self.setFixedHeight(40)
+        self.setFixedHeight(44)
 
         if is_dialog:
-            self.setStyleSheet(
-"""
-background-color: #2c2a2b;
-border-top-left-radius: 15px;
-border-top-right-radius: 15px;
-border-bottom: 1px solid #4f4a4b;
-"""
-)
+            self.setStyleSheet("background-color: #2c2a2b; border-top-left-radius: 20px; border-top-right-radius: 20px; border-bottom: 1px solid #4f4a4b;")
         else:
-            self.setStyleSheet("background-color: #2c2a2b; border-top-left-radius: 15px; border-top-right-radius: 15px;")
+            self.setStyleSheet("background-color: #2c2a2b; border-top-left-radius: 20px; border-top-right-radius: 20px;")
         
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(15, 0, 5, 0)
-        layout.setSpacing(10)
-        
-        title_label = QLabel(title)
-        title_label.setStyleSheet("color: #e0d6d1; font-size: 16px; font-weight: bold; background: transparent;")
-        layout.addWidget(title_label)
+        layout.setContentsMargins(12, 0, 12, 0)
+        layout.setSpacing(8)
 
         if not is_dialog:
+            logo_path = get_asset_path("app_icon.png")
+            if not os.path.exists(logo_path) and hasattr(parent, 'switcher'):
+                logo_path = str(parent.switcher.base_dir / "Assets" / "app_icon.png")
+            
+            self.logo_label = QLabel()
+            if os.path.exists(logo_path):
+                pixmap = QPixmap(logo_path).scaled(28, 28, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                self.logo_label.setPixmap(pixmap)
+            layout.addWidget(self.logo_label)
+
+            self.settings_button = HoverButton()
+            self.settings_button.setFixedSize(30, 30)
+            self.settings_button.setIconSize(QSize(18, 18))
+            self.settings_button.setStyleSheet("QPushButton { background-color: #4f4a4b; border: none; border-radius: 15px; } QPushButton:hover { background-color: #c89f68; }")
+            if hasattr(parent, 'create_gear_icon'):
+                self.settings_button.setIcon(parent.create_gear_icon(QColor("#e0d6d1")))
+            layout.addWidget(self.settings_button)
+
+            layout.addStretch()
+
+            self.status_label = QLabel("Ready")
+            self.status_label.setStyleSheet("color: #e0d6d1; font-size: 12px; font-weight: bold; background: transparent;")
+            self.status_label.setAlignment(Qt.AlignCenter)
+            layout.addWidget(self.status_label)
+
+            layout.addStretch()
+
+            self.add_account_button = HoverButton()
+            self.add_account_button.setFixedSize(30, 30)
+            self.add_account_button.setIconSize(QSize(18, 18))
+            self.add_account_button.setStyleSheet("QPushButton { background-color: #4f4a4b; border: none; border-radius: 15px; } QPushButton:hover { background-color: #c89f68; }")
+            if hasattr(parent, 'create_add_icon'):
+                self.add_account_button.setIcon(parent.create_add_icon(QColor("#e0d6d1"), QColor("#c89f68")))
+            add_shadow = QGraphicsDropShadowEffect(self)
+            add_shadow.setBlurRadius(15)
+            add_shadow.setColor(QColor(0, 0, 0, 160))
+            add_shadow.setOffset(0, 2)
+            self.add_account_button.setGraphicsEffect(add_shadow)
+            layout.addWidget(self.add_account_button)
+
             refresh_icon_path = get_asset_path("Refresh.png")
             self.refresh_button = QPushButton(QIcon(refresh_icon_path), "")
-            self.refresh_button.setFixedSize(QSize(30, 30))
-            self.refresh_button.setIconSize(QSize(20, 20))
-            self.refresh_button.setStyleSheet("""QPushButton { background-color: #4f4a4b; border: none; border-radius: 15px; } QPushButton:hover { background-color: #c89f68; }""")
+            self.refresh_button.setFixedSize(30, 30)
+            self.refresh_button.setIconSize(QSize(18, 18))
+            self.refresh_button.setStyleSheet("QPushButton { background-color: #4f4a4b; border: none; border-radius: 15px; } QPushButton:hover { background-color: #c89f68; }")
+            refresh_shadow = QGraphicsDropShadowEffect(self)
+            refresh_shadow.setBlurRadius(15)
+            refresh_shadow.setColor(QColor(0, 0, 0, 160))
+            refresh_shadow.setOffset(0, 2)
+            self.refresh_button.setGraphicsEffect(refresh_shadow)
             layout.addWidget(self.refresh_button)
 
-        layout.addStretch() # This stretch should be before minimize and close
-
-        if not is_dialog: # Minimize button only for main app
             self.minimize_button = QPushButton("−")
-            self.minimize_button.setFixedSize(QSize(30, 30))
-            self.minimize_button.setStyleSheet("""QPushButton { background-color: #4f4a4b; color: #e0d6d1; font-size: 20px; font-weight: bold; border: none; border-radius: 15px; } QPushButton:hover { background-color: #c89f68; }""")
+            self.minimize_button.setFixedSize(30, 30)
+            self.minimize_button.setStyleSheet("QPushButton { background-color: #4f4a4b; color: #e0d6d1; font-size: 18px; font-weight: bold; border: none; border-radius: 15px; } QPushButton:hover { background-color: #c89f68; }")
             self.minimize_button.clicked.connect(self.parent_window.showMinimized)
+            minimize_shadow = QGraphicsDropShadowEffect(self)
+            minimize_shadow.setBlurRadius(15)
+            minimize_shadow.setColor(QColor(0, 0, 0, 160))
+            minimize_shadow.setOffset(0, 2)
+            self.minimize_button.setGraphicsEffect(minimize_shadow)
             layout.addWidget(self.minimize_button)
-        
-        # Removed close button from CustomTitleBar as it's handled by window flags
-        # close_button = QPushButton("✕")
-        # close_button.setFixedSize(QSize(30, 30))
-        # close_button.clicked.connect(self.parent_window.close)
-        # close_button.setStyleSheet("QPushButton { background-color: #f38ba8; color: #ffffff; font-size: 18px; font-weight: bold; border: none; border-radius: 15px; } QPushButton:hover { background-color: #e67e80; }")
-        # layout.addWidget(close_button)
-        
-        close_button = QPushButton("✕")
-        close_button.setFixedSize(QSize(30, 30))
-        close_button.clicked.connect(self.parent_window.close)
-        close_button.setStyleSheet("QPushButton { background-color: #f38ba8; color: #ffffff; font-size: 18px; font-weight: bold; border: none; border-radius: 15px; } QPushButton:hover { background-color: #e67e80; }")
-        layout.addWidget(close_button)
+
+            x_icon_path = get_asset_path("x.png")
+            close_button = QPushButton()
+            if os.path.exists(x_icon_path):
+                close_button.setIcon(QIcon(x_icon_path))
+                close_button.setIconSize(QSize(14, 14))
+            else:
+                close_button.setText("✕")
+            close_button.setFixedSize(30, 30)
+            close_button.clicked.connect(self.parent_window.close)
+            close_button.setStyleSheet("QPushButton { background-color: #f38ba8; border: none; border-radius: 15px; } QPushButton:hover { background-color: #e67e80; }")
+            close_shadow = QGraphicsDropShadowEffect(self)
+            close_shadow.setBlurRadius(15)
+            close_shadow.setColor(QColor(0, 0, 0, 160))
+            close_shadow.setOffset(0, 2)
+            close_button.setGraphicsEffect(close_shadow)
+            layout.addWidget(close_button)
+
+        else:
+            title_label = QLabel(title)
+            title_label.setStyleSheet("color: #e0d6d1; font-size: 15px; font-weight: bold; background: transparent;")
+            layout.addWidget(title_label)
+
+            layout.addStretch()
+
+            x_icon_path = get_asset_path("x.png")
+            close_button = QPushButton()
+            if os.path.exists(x_icon_path):
+                close_button.setIcon(QIcon(x_icon_path))
+                close_button.setIconSize(QSize(14, 14))
+            else:
+                close_button.setText("✕")
+            close_button.setFixedSize(30, 30)
+            close_button.clicked.connect(self.parent_window.close)
+            close_button.setStyleSheet("QPushButton { background-color: #f38ba8; border: none; border-radius: 15px; } QPushButton:hover { background-color: #e67e80; }")
+            close_shadow = QGraphicsDropShadowEffect(self)
+            close_shadow.setBlurRadius(15)
+            close_shadow.setColor(QColor(0, 0, 0, 160))
+            close_shadow.setOffset(0, 2)
+            close_button.setGraphicsEffect(close_shadow)
+            layout.addWidget(close_button)
+
+    def add_header_button(self, button):
+        lay = self.layout()
+        count = lay.count()
+        if count > 0:
+            lay.insertWidget(count - 1, button)
+        else:
+            lay.addWidget(button)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -1577,8 +3106,12 @@ class IconPickerDialog(PopupDialog):
         QTimer.singleShot(50, self.populate_icon_grid)
 
     def populate_icon_grid(self):
-        icons_path = Path(self.switcher.base_dir) / "icons"
-        icon_files = get_icon_paths_from_folder(str(icons_path))
+        agents_path = Path(self.switcher.base_dir) / "Agents"
+        if not agents_path.exists():
+            agents_path = Path(self.switcher.base_dir) / "icons"
+        valorant_icons_path = Path(self.switcher.base_dir) / "Assets" / "valorant"
+        icon_files = get_icon_paths_from_folder(str(agents_path))
+        icon_files.extend(get_icon_paths_from_folder(str(valorant_icons_path)))
         
         for i, icon_path in enumerate(icon_files):
             row, col = i // 4, i % 4
@@ -1821,16 +3354,17 @@ class AccountWidget(QWidget):
         self.in_game_tag = in_game_tag
         self.current_rr = current_rr
         self.last_game_rr = last_game_rr
+        self.switcher = switcher_instance
         self.setObjectName("AccountWidget")
-        self.setFixedSize(120, 140)
+        self.setFixedSize(160, 195)
         self.is_selected, self.is_hovered = False, False
         self.is_add_button = is_add_button
         self.icon = icon  # Store the icon
-        self.setStyleSheet("""QWidget#AccountWidget { background-color: #3a3637; border-radius: 15px; border: 3px solid transparent; } 
+        self.setStyleSheet("""QWidget#AccountWidget { background-color: #3a3637; border-radius: 20px; border: 3px solid transparent; } 
                               QWidget#AccountWidget[selected="true"] { border-color: #c89f68; } 
                               QLabel#NameLabel { color: #e0d6d1; font-size: 13px; font-weight: bold; } 
                               QWidget#AccountWidget[selected="true"] QLabel#NameLabel { color: #c89f68; } 
-                              QWidget#AccountWidget[is_add_button="true"] { background-color: #4f4a4b; border: 3px dashed #c89f68; } 
+                              QWidget#AccountWidget[is_add_button="true"] { background-color: #4f4a4b; border: 3px dashed #c89f68; border-radius: 20px; } 
                               QWidget#AccountWidget[is_add_button="true"]:hover { background-color: #5a5556; } 
                               QWidget#AccountWidget[is_add_button="true"] QLabel#NameLabel { color: #c89f68; }""")
         self.init_ui(icon)
@@ -1853,34 +3387,53 @@ class AccountWidget(QWidget):
 
     iconSize = pyqtProperty(QSize, _get_icon_size, _set_icon_size)
 
+    def _add_shadow_effect(self, widget):
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(10)
+        shadow.setColor(QColor(0, 0, 0, 180))
+        shadow.setOffset(0, 2)
+        widget.setGraphicsEffect(shadow)
+
     def init_ui(self, icon):
         self.main_layout = QVBoxLayout(self)
-        self.main_layout.setContentsMargins(5, 5, 5, 5)
-        self.main_layout.setSpacing(0)
+        self.main_layout.setContentsMargins(6, 6, 6, 6)
+        self.main_layout.setSpacing(2)
         self.main_layout.setAlignment(Qt.AlignCenter)
 
         self.current_rr_label = QLabel(self)
         self.current_rr_label.setAlignment(Qt.AlignCenter)
         self.current_rr_label.setStyleSheet("color: white; font-size: 14px; font-weight: bold;")
-        self.main_layout.addWidget(self.current_rr_label)
+        self._add_shadow_effect(self.current_rr_label)
+        self.main_layout.addWidget(self.current_rr_label, 0, Qt.AlignCenter)
 
         self.icon_label = QLabel(self)
         self.icon_label.setAlignment(Qt.AlignCenter)
         self.set_icon(icon, 70)
-        self.main_layout.addWidget(self.icon_label)
+        self._add_shadow_effect(self.icon_label)
+        self.main_layout.addWidget(self.icon_label, 0, Qt.AlignCenter)
 
         self.name_label = QLabel(self.account_name, self, objectName="NameLabel")
         self.name_label.setAlignment(Qt.AlignCenter)
-        self.main_layout.addWidget(self.name_label)
+        self._add_shadow_effect(self.name_label)
+        self.main_layout.addWidget(self.name_label, 0, Qt.AlignCenter)
 
         self.in_game_name_tag_label = QLabel(self)
         self.in_game_name_tag_label.setAlignment(Qt.AlignCenter)
         self.in_game_name_tag_label.setStyleSheet("color: #b0a8a8; font-size: 11px;")
-        self.main_layout.addWidget(self.in_game_name_tag_label)
+        self._add_shadow_effect(self.in_game_name_tag_label)
+        self.main_layout.addWidget(self.in_game_name_tag_label, 0, Qt.AlignCenter)
 
         self.last_game_rr_label = QLabel(self)
         self.last_game_rr_label.setAlignment(Qt.AlignCenter)
-        self.main_layout.addWidget(self.last_game_rr_label)
+        self._add_shadow_effect(self.last_game_rr_label)
+        self.main_layout.addWidget(self.last_game_rr_label, 0, Qt.AlignCenter)
+
+        self.last_match_label = QLabel(self)
+        self.last_match_label.setAlignment(Qt.AlignCenter)
+        self.last_match_label.setStyleSheet("color: #c89f68; font-size: 11px; background-color: #2a2728; border-radius: 12px; padding: 4px 10px; border: 1px solid #4f4a4b;")
+        self.last_match_label.setVisible(False)
+        self._add_shadow_effect(self.last_match_label)
+        self.main_layout.addWidget(self.last_match_label, 0, Qt.AlignCenter)
         
         if self.is_add_button:
             self.setProperty("is_add_button", "true")
@@ -1889,18 +3442,20 @@ class AccountWidget(QWidget):
             self.in_game_name_tag_label.setVisible(False)
             self.current_rr_label.setVisible(False)
             self.last_game_rr_label.setVisible(False)
+            self.last_match_label.setVisible(False)
         else:
             self.game_icon_label = QLabel(self)
             game_icon_size = 24
             self.game_icon_label.setFixedSize(game_icon_size, game_icon_size)
             self.game_icon_label.setAlignment(Qt.AlignCenter)
-            self.game_icon_label.move(self.width() - game_icon_size - 10, 10) # Top right
+            self.game_icon_label.move(self.width() - game_icon_size - 10, 10)
+            self._add_shadow_effect(self.game_icon_label)
             
             valorant_icon_path = get_asset_path("valorant.png")
             lol_icon_path = get_asset_path("lol.png")
             riot_icon_path = get_asset_path("Riot.png")
 
-            self.game_icon_label.setVisible(False) # Hide by default, will be set by load_accounts
+            self.game_icon_label.setVisible(False)
             if self.game == 'valorant' and Path(valorant_icon_path).exists():
                 pixmap = QPixmap(str(valorant_icon_path)).scaled(game_icon_size, game_icon_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 self.game_icon_label.setPixmap(pixmap)
@@ -1914,19 +3469,19 @@ class AccountWidget(QWidget):
             self.rank_icon_label = QLabel(self)
             self.rank_icon_label.setFixedSize(game_icon_size, game_icon_size)
             self.rank_icon_label.setAlignment(Qt.AlignCenter)
-            self.rank_icon_label.move(10, 10) # Top left
-            self.rank_icon_label.setVisible(False) # Hide by default
+            self.rank_icon_label.move(10, 10)
+            self.rank_icon_label.setVisible(False)
+            self._add_shadow_effect(self.rank_icon_label)
 
             if self.rank:
-                rank_icon_path = get_asset_path(f"{self.rank.lower().replace(" ", "_")}.png")
+                rank_icon_path = get_asset_path(f"{self.rank.lower().replace(' ', '_')}.png")
                 if os.path.exists(rank_icon_path):
                     pixmap = QPixmap(rank_icon_path).scaled(game_icon_size, game_icon_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                     self.rank_icon_label.setPixmap(pixmap)
 
-        self.update_content() # Initial content update
+        self.update_content()
 
     def update_content(self):
-        # Update RR labels
         if self.current_rr is not None:
             self.current_rr_label.setText(str(self.current_rr))
         else:
@@ -1940,7 +3495,6 @@ class AccountWidget(QWidget):
         else:
             self.last_game_rr_label.setText("")
 
-        # Update in-game name/tag label
         in_game_text = ""
         if self.in_game_name and self.in_game_tag:
             in_game_text = f"{self.in_game_name}#{self.in_game_tag}"
@@ -1948,30 +3502,43 @@ class AccountWidget(QWidget):
             in_game_text = self.in_game_name
         self.in_game_name_tag_label.setText(in_game_text)
 
-        self.main_layout.invalidate() # Invalidate layout to trigger recalculation
-        self.update() # Repaint the widget
+        if hasattr(self, 'switcher') and self.switcher:
+            ui_settings = self.switcher.get_ima_config().get("ui_settings", {})
+            show_last_match = ui_settings.get("show_last_match_info", True)
+            if show_last_match:
+                last_map, last_agent = self.switcher.get_account_last_match_info(self.account_name)
+                if last_map or last_agent:
+                    match_parts = []
+                    if last_map: match_parts.append(f"📍 {last_map}")
+                    if last_agent:
+                        agent_icon = get_agent_icon_html(last_agent, self.switcher.base_dir, width=16, height=16)
+                        match_parts.append(f"{agent_icon}{last_agent}")
+                    self.last_match_label.setText(" • ".join(match_parts))
+                else:
+                    self.last_match_label.setText("")
+            else:
+                self.last_match_label.setText("")
+
+        self.main_layout.invalidate()
+        self.update()
 
     def set_icon(self, icon, size):
         self.icon = icon
         self.icon_label.setFixedSize(QSize(size, size))
         
-        # Create a circular pixmap
         circular_pixmap = QPixmap(size, size)
         circular_pixmap.fill(Qt.transparent)
 
         painter = QPainter(circular_pixmap)
         painter.setRenderHint(QPainter.Antialiasing)
         
-        # Define the circular path
         path = QPainterPath()
         path.addEllipse(0, 0, size, size)
         painter.setClipPath(path)
 
-        # Get the source pixmap and scale it correctly
-        source_pixmap = icon.pixmap(icon.actualSize(QSize(256, 256))) # Get a high-res version
+        source_pixmap = icon.pixmap(icon.actualSize(QSize(256, 256)))
         scaled_pixmap = source_pixmap.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
 
-        # Draw the pixmap centered in the circle
         x = (size - scaled_pixmap.width()) / 2
         y = (size - scaled_pixmap.height()) / 2
         painter.drawPixmap(int(x), int(y), scaled_pixmap)
@@ -1991,19 +3558,17 @@ class AccountWidget(QWidget):
         self.style().unpolish(self)
         self.style().polish(self)
 
-    def set_show_game_icon(self, show): # New method
+    def set_show_game_icon(self, show):
         if hasattr(self, 'game_icon_label'):
             self.game_icon_label.setVisible(show)
 
-    def set_show_rank_icon(self, show): # New method
+    def set_show_rank_icon(self, show):
         if hasattr(self, 'rank_icon_label'):
             self.rank_icon_label.setVisible(show and self.rank is not None)
 
     def set_show_name_tag(self, show):
         if hasattr(self, 'in_game_name_tag_label'):
             self.in_game_name_tag_label.setVisible(show and bool(self.in_game_name or self.in_game_tag))
-            # The parent widget (ModernValorantSwitcher) handles resizing based on content.
-            # No need to call setFixedSize here directly.
             if self.parentWidget() and hasattr(self.parentWidget(), 'update_window_size'):
                 self.parentWidget().update_window_size()
 
@@ -2014,6 +3579,15 @@ class AccountWidget(QWidget):
     def set_show_last_game_rr(self, show):
         if hasattr(self, 'last_game_rr_label'):
             self.last_game_rr_label.setVisible(show and self.last_game_rr is not None)
+
+    def set_show_last_match_info(self, show):
+        if hasattr(self, 'last_match_label'):
+            has_info = bool(self.last_match_label.text().strip())
+            self.last_match_label.setVisible(show and has_info)
+            target_height = 195 if (show and has_info) else 170
+            self.setFixedSize(160, target_height)
+            if self.parentWidget() and hasattr(self.parentWidget(), 'update_window_size'):
+                self.parentWidget().update_window_size()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -2027,7 +3601,7 @@ class AccountWidget(QWidget):
     def enterEvent(self, event):
         if not self.is_add_button:
             self.icon_anim.setStartValue(self.icon_label.size())
-            self.icon_anim.setEndValue(QSize(80, 80))
+            self.icon_anim.setEndValue(QSize(74, 74))
             self.icon_anim.start()
         super().enterEvent(event)
 
@@ -2056,11 +3630,12 @@ class AccountWidget(QWidget):
         self.name_label.setText(self.account_name)
 
         # Update visibility based on ui_settings
-        self.set_show_game_icon(ui_settings.get("show_game_icons", True))
-        self.set_show_rank_icon(ui_settings.get("show_rank_icon_left", False))
-        self.set_show_name_tag(ui_settings.get("show_name_tag", True))
-        self.set_show_current_rr(ui_settings.get("show_current_rr", True))
-        self.set_show_last_game_rr(ui_settings.get("show_last_game_rr", True))
+        if ui_settings:
+            self.set_show_game_icon(ui_settings.get("show_game_icons", True))
+            self.set_show_rank_icon(ui_settings.get("show_rank_icon_left", False))
+            self.set_show_name_tag(ui_settings.get("show_name_tag", True))
+            self.set_show_current_rr(ui_settings.get("show_current_rr", True))
+            self.set_show_last_game_rr(ui_settings.get("show_last_game_rr", True))
 
         if self.current_rr is not None:
             self.current_rr_label.setText(str(self.current_rr))
@@ -2073,7 +3648,7 @@ class AccountWidget(QWidget):
         # Update rank icon based on new rank data
         game_icon_size = 24 # Assuming this is consistent
         if self.rank:
-            rank_icon_path = Path(get_asset_path(f"{self.rank.lower().replace(" ", "_")}.png"))
+            rank_icon_path = Path(get_asset_path(f"{self.rank.lower().replace(' ', '_')}.png"))
             if rank_icon_path.exists():
                 pixmap = QPixmap(str(rank_icon_path)).scaled(game_icon_size, game_icon_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 self.rank_icon_label.setPixmap(pixmap)
@@ -2098,6 +3673,199 @@ class HoverButton(QPushButton):
     def leaveEvent(self, event):
         self.anim.setEndValue(self.original_icon_size)
         self.anim.start()
+
+class UpdateSignals(QObject):
+    check_finished = pyqtSignal(bool, str, str, str, int)
+    progress = pyqtSignal(int, int, int)
+    download_finished = pyqtSignal(bool)
+
+class UpdateDialog(PopupDialog):
+    def __init__(self, switcher_instance, parent=None):
+        super().__init__("Software Update", parent)
+        self.switcher = switcher_instance
+        self.setFixedWidth(420)
+        self.setMinimumHeight(180)
+
+        self.has_update = False
+        self.download_url = None
+        self.installer_path = None
+        self.file_size = 0
+
+        self.signals = UpdateSignals()
+        self.signals.check_finished.connect(self.on_update_check_finished)
+        self.signals.progress.connect(self.on_download_progress)
+        self.signals.download_finished.connect(self.on_download_finished)
+
+        self.init_update_ui()
+        self.start_check_for_updates()
+
+    def init_update_ui(self):
+        self.content_layout.setContentsMargins(20, 15, 20, 20)
+        self.content_layout.setSpacing(12)
+
+        from game_switcher import APP_VERSION
+        self.header_label = QLabel(f"<b>iMA Switcher</b> (Current: v{APP_VERSION})")
+        self.header_label.setStyleSheet("font-size: 15px; color: #e0d6d1;")
+        self.header_label.setAlignment(Qt.AlignCenter)
+        self.content_layout.addWidget(self.header_label)
+        
+        self.content_layout.addSpacing(10)
+
+        self.status_label = QLabel("Checking for updates from GitHub...")
+        self.status_label.setStyleSheet("font-size: 13px; color: #c89f68;")
+        self.status_label.setAlignment(Qt.AlignCenter)
+        self.status_label.setWordWrap(True)
+        self.content_layout.addWidget(self.status_label)
+        
+        self.content_layout.addSpacing(10)
+
+        self.notes_edit = QTextEdit()
+        self.notes_edit.setReadOnly(True)
+        self.notes_edit.setStyleSheet("""
+            QTextEdit {
+                background-color: #242223;
+                color: #e0d6d1;
+                border: 1px solid #4f4a4b;
+                border-radius: 10px;
+                padding: 8px;
+                font-size: 12px;
+            }
+        """)
+        self.notes_edit.hide()
+        self.content_layout.addWidget(self.notes_edit)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setStyleSheet("""
+            QProgressBar {
+                background-color: #242223;
+                border: 1px solid #4f4a4b;
+                border-radius: 10px;
+                text-align: center;
+                color: #ffffff;
+                font-weight: bold;
+                height: 22px;
+            }
+            QProgressBar::chunk {
+                background-color: #c89f68;
+                border-radius: 9px;
+            }
+        """)
+        self.progress_bar.hide()
+        self.content_layout.addWidget(self.progress_bar)
+
+        button_layout = QHBoxLayout()
+        button_layout.setSpacing(10)
+
+        self.action_btn = QPushButton("Checking...")
+        self.action_btn.setEnabled(False)
+        self.action_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #c89f68;
+                color: #2c2a2b;
+                font-size: 13px;
+                font-weight: bold;
+                border-radius: 12px;
+                padding: 8px 24px;
+            }
+            QPushButton:hover {
+                background-color: #d9b68b;
+            }
+            QPushButton:disabled {
+                background-color: #4f4a4b;
+                color: #888888;
+            }
+        """)
+        self.action_btn.clicked.connect(self.on_action_button_clicked)
+        button_layout.addStretch()
+        button_layout.addWidget(self.action_btn)
+        button_layout.addStretch()
+
+        self.content_layout.addLayout(button_layout)
+
+    def start_check_for_updates(self):
+        self.status_label.setText("Checking GitHub for updates...")
+        self.action_btn.setText("Checking...")
+        self.action_btn.setEnabled(False)
+        self.notes_edit.hide()
+
+        def _worker():
+            import updater
+            has_update, current_sha, remote_sha, url, notes, size = updater.check_for_commit_update()
+            if not has_update and not remote_sha:
+                has_update, remote_ver, url, notes, size = self.switcher.check_for_update()
+                remote_sha = remote_ver
+            self.signals.check_finished.emit(has_update, remote_sha[:7] if remote_sha else "", url, notes, size)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def on_update_check_finished(self, has_update, remote_sha, url, notes, size):
+        self.action_btn.setEnabled(True)
+        self.has_update = has_update
+        self.download_url = url
+        self.file_size = size
+
+        import updater
+        current_sha = updater.get_current_commit()
+        display_current = current_sha[:7] if len(current_sha) >= 7 else current_sha
+
+        if has_update:
+            self.setFixedSize(520, 380)
+            size_mb = size / (1024 * 1024) if size else 0
+            size_str = f" ({size_mb:.1f} MB)" if size_mb > 0 else ""
+            self.status_label.setText(f"🎉 New update available!{size_str}<br>Remote Commit: <b>{remote_sha}</b>")
+            self.notes_edit.setPlainText(f"Commit Message:\n{notes}")
+            self.notes_edit.show()
+            self.action_btn.setText("Update Now")
+        else:
+            self.setFixedSize(420, 200)
+            self.status_label.setText(f"✓ App is up to date!<br><font color='#b0a8a8'>Build Commit: {display_current}</font>")
+            self.action_btn.setText("Check Again")
+
+    def on_action_button_clicked(self):
+        if self.has_update:
+            self.start_download()
+        else:
+            self.start_check_for_updates()
+
+    def start_download(self):
+        if not self.download_url:
+            return
+        self.action_btn.setEnabled(False)
+        self.status_label.setText("Downloading latest build...")
+        self.progress_bar.setValue(0)
+        self.progress_bar.show()
+
+        def _progress_cb(downloaded, total):
+            if total > 0:
+                pct = int((downloaded / total) * 100)
+                self.signals.progress.emit(pct, downloaded, total)
+
+        def _download_worker():
+            import updater
+            success, msg = updater.download_and_apply_update(self.download_url, progress_callback=_progress_cb)
+            self.signals.download_finished.emit(success)
+
+        threading.Thread(target=_download_worker, daemon=True).start()
+
+    def on_download_progress(self, pct, downloaded, total):
+        self.progress_bar.setValue(pct)
+        d_mb = downloaded / (1024 * 1024)
+        t_mb = total / (1024 * 1024)
+        self.status_label.setText(f"Downloading update... {d_mb:.1f} MB / {t_mb:.1f} MB ({pct}%)")
+
+    def on_download_finished(self, success):
+        if success:
+            self.status_label.setText("✓ Download complete! Restarting app...")
+            self.progress_bar.setValue(100)
+        else:
+            self.status_label.setText("❌ Download failed. Please try again.")
+            self.action_btn.setEnabled(True)
+            self.action_btn.setText("Retry Update")
+
+    def apply_and_close(self):
+        self.switcher.apply_update(str(self.installer_path))
 
 class InstallerDialog(PopupDialog):
     def __init__(self, parent=None):
@@ -2221,33 +3989,6 @@ class InstallerDialog(PopupDialog):
 
     def should_add_start_menu_shortcut(self):
         return self.start_menu_shortcut_checkbox.isChecked()
-        self.desktop_shortcut_checkbox.setChecked(True)
-        self.desktop_shortcut_checkbox.setStyleSheet("color: #FFFFFF;")
-        self.content_layout.addWidget(self.desktop_shortcut_checkbox)
-
-        self.start_menu_shortcut_checkbox = QCheckBox("Add shortcut to Start Menu (Optional)")
-        self.start_menu_shortcut_checkbox.setChecked(True)
-        self.start_menu_shortcut_checkbox.setStyleSheet("color: #FFFFFF;")
-        self.content_layout.addWidget(self.start_menu_shortcut_checkbox)
-
-        self.content_layout.addStretch()
-        
-        install_button = QPushButton("Install")
-        install_button.setStyleSheet("""
-            QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 10px 20px;
-            }
-            QPushButton:hover {
-                background-color: #d9b68b; /* Brighter coffee color */
-            }
-        """)
-        install_button.clicked.connect(self.accept);
-        
-        button_layout = QHBoxLayout()
-        button_layout.addStretch()
-        button_layout.addWidget(install_button)
-        button_layout.addStretch()
-        self.content_layout.addLayout(button_layout)
 
     
 
@@ -2301,3 +4042,528 @@ class BackupRestoreDialog(PopupDialog):
 
     def get_selection(self):
         return self.selection
+
+
+class HistoryWorker(QThread):
+    history_loaded = pyqtSignal(list)
+
+    def __init__(self, switcher, account_name, force_refresh=False):
+        super().__init__()
+        self.switcher = switcher
+        self.account_name = account_name
+        self.force_refresh = force_refresh
+
+    def run(self):
+        if not self.switcher:
+            self.history_loaded.emit([])
+            return
+        matches = self.switcher.fetch_account_match_history(self.account_name, force_refresh=self.force_refresh)
+        self.history_loaded.emit(matches)
+
+
+class AccountHistoryDialog(PopupDialog):
+    def __init__(self, account_name, in_game_name=None, in_game_tag=None, parent=None, switcher_instance=None):
+        title = f"Match History - {account_name}"
+        super().__init__(title, parent)
+        self.account_name = account_name
+        self.in_game_name = in_game_name
+        self.in_game_tag = in_game_tag
+        self.switcher = switcher_instance
+        self.worker = None
+        self.setFixedSize(760, 580)
+
+        self.main_widget.setStyleSheet("""
+            #popup_widget { background-color: #2c2a2b; border-radius: 15px; border: 1px solid #c89f68; }
+            QLabel { color: #e0d6d1; }
+        """)
+
+        header_widget = QWidget()
+        header_widget.setStyleSheet("background-color: #343031; border-radius: 10px; border: 1px solid #4f4a4b;")
+        header_layout = QHBoxLayout(header_widget)
+        header_layout.setContentsMargins(12, 8, 12, 8)
+        header_layout.setSpacing(10)
+
+        self.account_combo = QComboBox()
+        self.account_combo.setStyleSheet("""
+            QComboBox { 
+                background-color: #4a4647; border: 1px solid #c89f68; border-radius: 6px; padding: 4px 10px; color: #e0d6d1; font-weight: bold; font-size: 13px;
+            }
+            QComboBox:hover { border: 1px solid #d9b68b; }
+            QComboBox QAbstractItemView { 
+                background-color: #3a3637; border: 1px solid #c89f68; selection-background-color: #c89f68; color: #e0d6d1; selection-color: #2c2a2b; padding: 4px;
+            }
+        """)
+        self.populate_account_combo()
+        self.account_combo.currentIndexChanged.connect(self.on_account_combo_changed)
+        header_layout.addWidget(self.account_combo, 2)
+
+        self.rank_icon_label = QLabel()
+        self.rank_icon_label.setFixedSize(28, 28)
+        header_layout.addWidget(self.rank_icon_label)
+
+        self.rank_rr_label = QLabel()
+        self.rank_rr_label.setStyleSheet("font-size: 13px; color: #ffffff; font-weight: bold;")
+        header_layout.addWidget(self.rank_rr_label, 2)
+
+        header_layout.addStretch()
+
+        self.refresh_btn = QPushButton("Refresh History")
+        self.refresh_btn.setStyleSheet("""
+            QPushButton { background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 6px 15px; border: none; }
+            QPushButton:hover { background-color: #d9b68b; }
+            QPushButton:disabled { background-color: #5a5556; color: #888888; }
+        """)
+        self.refresh_btn.clicked.connect(lambda: self.load_history(force_refresh=True))
+        header_layout.addWidget(self.refresh_btn)
+
+        self.content_layout.addWidget(header_widget)
+
+        self.stacked_widget = QStackedWidget()
+        self.content_layout.addWidget(self.stacked_widget)
+
+        self.setup_matches_page()
+        self.setup_detail_page()
+
+        self.update_header_rank_info()
+        QTimer.singleShot(100, lambda: self.load_history(force_refresh=False))
+
+    def populate_account_combo(self):
+        self.account_combo.blockSignals(True)
+        self.account_combo.clear()
+        if self.switcher:
+            saved_accounts = self.switcher.get_saved_accounts()
+            for acc_name, data in saved_accounts.items():
+                _, _, _, ign, tag, _, _ = data
+                label = f"{acc_name} ({ign}#{tag})" if ign and tag else acc_name
+                self.account_combo.addItem(label, acc_name)
+                if acc_name == self.account_name:
+                    self.account_combo.setCurrentIndex(self.account_combo.count() - 1)
+        self.account_combo.blockSignals(False)
+
+    def set_account(self, account_name):
+        self.account_name = account_name
+        if self.switcher:
+            saved = self.switcher.get_saved_accounts().get(account_name)
+            if saved:
+                _, _, _, self.in_game_name, self.in_game_tag, _, _ = saved
+
+        self.setWindowTitle(f"Match History - {account_name}")
+        self.populate_account_combo()
+        self.update_header_rank_info()
+        self.stacked_widget.setCurrentIndex(0)
+        self.load_history(force_refresh=False)
+
+    def on_account_combo_changed(self, index):
+        acc_name = self.account_combo.itemData(index)
+        if acc_name and acc_name != self.account_name:
+            self.set_account(acc_name)
+
+    def update_header_rank_info(self):
+        if not self.switcher:
+            return
+        saved = self.switcher.get_saved_accounts().get(self.account_name)
+        if not saved:
+            return
+        _, _, rank, _, _, current_rr, last_game_rr = saved
+
+        rank_str = rank or "Unranked"
+        rank_icon_path = get_asset_path(f"{rank_str.lower().replace(' ', '_')}.png")
+        if os.path.exists(rank_icon_path):
+            pixmap = QPixmap(rank_icon_path).scaled(28, 28, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            self.rank_icon_label.setPixmap(pixmap)
+            self.rank_icon_label.setVisible(True)
+        else:
+            self.rank_icon_label.setVisible(False)
+
+        rr_str = f" • {current_rr} RR" if current_rr is not None else ""
+        last_rr_str = ""
+        if last_game_rr is not None:
+            color = "#a6e3a1" if last_game_rr > 0 else ("#f38ba8" if last_game_rr < 0 else "#e0d6d1")
+            sign = "+" if last_game_rr > 0 else ""
+            last_rr_str = f" <font color='{color}'>({sign}{last_game_rr})</font>"
+
+        self.rank_rr_label.setText(f"<b>{rank_str}</b>{rr_str}{last_rr_str}")
+
+    def setup_matches_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 5, 0, 5)
+
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setStyleSheet("""
+            QScrollArea { background-color: transparent; border: none; }
+            QScrollBar:vertical { border: none; background-color: #2c2a2b; width: 10px; }
+            QScrollBar::handle:vertical { background-color: #c89f68; min-height: 25px; border-radius: 5px; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+        """)
+
+        self.matches_container = QWidget()
+        self.matches_container.setStyleSheet("background-color: transparent;")
+        self.matches_layout = QVBoxLayout(self.matches_container)
+        self.matches_layout.setContentsMargins(0, 5, 0, 5)
+        self.matches_layout.setSpacing(10)
+        self.matches_layout.setAlignment(Qt.AlignTop)
+
+        self.scroll_area.setWidget(self.matches_container)
+        layout.addWidget(self.scroll_area)
+
+        self.status_label = QLabel("Loading match history...")
+        self.status_label.setAlignment(Qt.AlignCenter)
+        self.status_label.setStyleSheet("font-size: 14px; color: #c89f68; padding: 20px;")
+        self.matches_layout.addWidget(self.status_label)
+
+        self.stacked_widget.addWidget(page)
+
+    def setup_detail_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 5, 0, 5)
+        layout.setSpacing(10)
+
+        top_bar = QHBoxLayout()
+        self.back_btn = QPushButton("← Back to Matches")
+        self.back_btn.setStyleSheet("""
+            QPushButton { background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 6px; padding: 6px 14px; border: none; }
+            QPushButton:hover { background-color: #d9b68b; }
+        """)
+        self.back_btn.clicked.connect(lambda: self.stacked_widget.setCurrentIndex(0))
+        top_bar.addWidget(self.back_btn)
+
+        self.detail_header_label = QLabel("Match Scoreboard")
+        self.detail_header_label.setStyleSheet("font-size: 15px; font-weight: bold; color: #ffffff;")
+        top_bar.addWidget(self.detail_header_label)
+        top_bar.addStretch()
+
+        layout.addLayout(top_bar)
+
+        self.detail_scroll = QScrollArea()
+        self.detail_scroll.setWidgetResizable(True)
+        self.detail_scroll.setStyleSheet("""
+            QScrollArea { background-color: transparent; border: none; }
+            QScrollBar:vertical { border: none; background-color: #2c2a2b; width: 10px; }
+            QScrollBar::handle:vertical { background-color: #c89f68; min-height: 25px; border-radius: 5px; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+        """)
+
+        self.detail_container = QWidget()
+        self.detail_container.setStyleSheet("background-color: transparent;")
+        self.detail_layout = QVBoxLayout(self.detail_container)
+        self.detail_layout.setContentsMargins(0, 0, 0, 0)
+        self.detail_layout.setSpacing(12)
+        self.detail_layout.setAlignment(Qt.AlignTop)
+
+        self.detail_scroll.setWidget(self.detail_container)
+        layout.addWidget(self.detail_scroll)
+
+        self.stacked_widget.addWidget(page)
+
+    def load_history(self, force_refresh=False):
+        self.refresh_btn.setEnabled(False)
+        if force_refresh:
+            self.status_label.setText("Fetching latest matches from Henrik API...")
+        else:
+            self.status_label.setText("Loading match history...")
+        self.status_label.setVisible(True)
+
+        for i in reversed(range(self.matches_layout.count())):
+            item = self.matches_layout.itemAt(i)
+            if item and item.widget() and item.widget() != self.status_label:
+                item.widget().deleteLater()
+
+        self.worker = HistoryWorker(self.switcher, self.account_name, force_refresh=force_refresh)
+        self.worker.history_loaded.connect(self._on_history_loaded)
+        self.worker.start()
+
+    def _on_history_loaded(self, matches):
+        self.refresh_btn.setEnabled(True)
+        if not matches:
+            self.status_label.setText("No recent match history found for this account.")
+            self.status_label.setVisible(True)
+            return
+
+        self.status_label.setVisible(False)
+        for match in matches:
+            card = self._create_match_card(match)
+            self.matches_layout.addWidget(card)
+
+    def _create_match_card(self, match):
+        card = QWidget()
+        card.setObjectName("MatchCard")
+        card.setCursor(Qt.PointingHandCursor)
+        result = match.get("result", "DRAW").upper()
+        if result == "WIN":
+            bg_color = "#1e3025"
+            border_color = "#40a060"
+            result_color = "#a6e3a1"
+        elif result == "LOSS":
+            bg_color = "#351e24"
+            border_color = "#a04050"
+            result_color = "#f38ba8"
+        else:
+            bg_color = "#282933"
+            border_color = "#585b70"
+            result_color = "#9399b2"
+
+        card.setStyleSheet(f"""
+            #MatchCard {{
+                background-color: {bg_color};
+                border: 1px solid {border_color};
+                border-radius: 10px;
+            }}
+            #MatchCard:hover {{
+                border: 1px solid #c89f68;
+                background-color: #383435;
+            }}
+            #MatchCard QLabel {{
+                color: #e0d6d1;
+                border: none;
+                background: transparent;
+            }}
+        """)
+
+        layout = QHBoxLayout(card)
+        layout.setContentsMargins(15, 10, 15, 10)
+        layout.setSpacing(15)
+
+        res_layout = QVBoxLayout()
+        res_label = QLabel(result)
+        res_label.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {result_color};")
+        res_layout.addWidget(res_label)
+
+        score_text = match.get("score", "-")
+        score_label = QLabel(score_text)
+        score_label.setStyleSheet("font-size: 13px; font-weight: bold; color: #ffffff;")
+        res_layout.addWidget(score_label)
+        layout.addLayout(res_layout, 1)
+
+        map_layout = QVBoxLayout()
+        map_name = match.get("map", "Unknown Map")
+        map_label = QLabel(f"📍 <b>{map_name}</b>")
+        map_label.setStyleSheet("font-size: 13px; color: #ffffff;")
+        map_layout.addWidget(map_label)
+
+        mode_name = match.get("mode", "Competitive")
+        mode_label = QLabel(mode_name)
+        mode_label.setStyleSheet("font-size: 11px; color: #b0a8a8;")
+        map_layout.addWidget(mode_label)
+        layout.addLayout(map_layout, 2)
+
+        agent_layout = QVBoxLayout()
+        agent_name = match.get("agent", "Agent")
+        agent_icon = get_agent_icon_html(agent_name, self.switcher.base_dir) if self.switcher else "⚔️ "
+        agent_label = QLabel(f"{agent_icon}<b>{agent_name}</b>")
+        agent_label.setStyleSheet("font-size: 13px; color: #c89f68;")
+        agent_layout.addWidget(agent_label)
+
+        kda_text = match.get("kda", "-")
+        kda_label = QLabel(f"KDA: {kda_text}")
+        kda_label.setStyleSheet("font-size: 12px; color: #e0d6d1;")
+        agent_layout.addWidget(kda_label)
+        layout.addLayout(agent_layout, 2)
+
+        time_layout = QVBoxLayout()
+        kd_ratio = match.get("kd", "-")
+        kd_label = QLabel(f"KD: {kd_ratio}")
+        kd_label.setStyleSheet("font-size: 12px; font-weight: bold; color: #ffffff;")
+        time_layout.addWidget(kd_label)
+
+        date_text = match.get("date", "")
+        date_label = QLabel(date_text)
+        date_label.setStyleSheet("font-size: 10px; color: #888888;")
+        time_layout.addWidget(date_label)
+        layout.addLayout(time_layout, 1)
+
+        arrow_label = QLabel("➔")
+        arrow_label.setStyleSheet("font-size: 16px; color: #c89f68; font-weight: bold;")
+        layout.addWidget(arrow_label)
+
+        def on_click(event):
+            self.show_match_detail(match)
+
+        card.mousePressEvent = on_click
+        return card
+
+    def show_match_detail(self, match):
+        for i in reversed(range(self.detail_layout.count())):
+            item = self.detail_layout.itemAt(i)
+            if item and item.widget():
+                item.widget().deleteLater()
+
+        map_name = match.get("map", "Map")
+        mode_name = match.get("mode", "Competitive")
+        score_text = match.get("score", "-")
+        result = match.get("result", "DRAW")
+
+        self.detail_header_label.setText(f"{map_name} • {mode_name} ({score_text})")
+
+        banner = QWidget()
+        banner_bg = "#1e3025" if result == "WIN" else ("#351e24" if result == "LOSS" else "#282933")
+        banner_border = "#40a060" if result == "WIN" else ("#a04050" if result == "LOSS" else "#585b70")
+        banner.setStyleSheet(f"background-color: {banner_bg}; border: 1px solid {banner_border}; border-radius: 10px; padding: 10px;")
+        banner_layout = QHBoxLayout(banner)
+
+        res_lbl = QLabel(f"<b>{result}</b> ({score_text})")
+        res_lbl.setStyleSheet("font-size: 16px; color: #ffffff; border: none; background: transparent;")
+        banner_layout.addWidget(res_lbl)
+        banner_layout.addStretch()
+
+        meta_lbl = QLabel(f"📍 {map_name} • {mode_name} • {match.get('date', '')}")
+        meta_lbl.setStyleSheet("font-size: 12px; color: #b0a8a8; border: none; background: transparent;")
+        banner_layout.addWidget(meta_lbl)
+
+        self.detail_layout.addWidget(banner)
+
+        players = match.get("players", [])
+        blue_players = [p for p in players if p.get("team", "").lower() == "blue"]
+        red_players = [p for p in players if p.get("team", "").lower() == "red"]
+
+        if not blue_players and not red_players and players:
+            blue_players = players[:5]
+            red_players = players[5:]
+
+        if blue_players:
+            blue_box = self._create_team_scoreboard("DEFENDERS", blue_players, "#3b82f6")
+            self.detail_layout.addWidget(blue_box)
+
+        if red_players:
+            red_box = self._create_team_scoreboard("ATTACKERS", red_players, "#ef4444")
+            self.detail_layout.addWidget(red_box)
+
+        self.stacked_widget.setCurrentIndex(1)
+
+    def _create_team_scoreboard(self, team_title, players_list, team_color):
+        title_str = str(team_title).upper()
+        if "BLUE" in title_str or "DEFEND" in title_str:
+            display_title = "DEFENDERS"
+            color_to_use = "#3b82f6"
+        elif "RED" in title_str or "ATTACK" in title_str:
+            display_title = "ATTACKERS"
+            color_to_use = "#ef4444"
+        else:
+            display_title = team_title
+            color_to_use = team_color
+
+        box = QWidget()
+        box.setObjectName("TeamScoreboardBox")
+        box.setStyleSheet("""
+            #TeamScoreboardBox {
+                background-color: #343031;
+                border-radius: 10px;
+                border: none;
+            }
+            #TeamScoreboardBox QLabel {
+                border: none;
+                background: transparent;
+            }
+        """)
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(8)
+
+        t_lbl = QLabel(display_title)
+        t_lbl.setStyleSheet(f"font-size: 13px; font-weight: bold; color: {color_to_use}; border: none; background: transparent;")
+        layout.addWidget(t_lbl)
+
+        header_row = QWidget()
+        header_row.setObjectName("TeamHeaderRow")
+        header_row.setStyleSheet("""
+            #TeamHeaderRow {
+                background-color: #2a2728;
+                border-radius: 6px;
+                border: none;
+            }
+            #TeamHeaderRow QLabel {
+                color: #888888;
+                font-size: 11px;
+                font-weight: bold;
+                border: none;
+                background: transparent;
+            }
+        """)
+        h_layout = QHBoxLayout(header_row)
+        h_layout.setContentsMargins(8, 4, 8, 4)
+
+        h_player = QLabel("Player")
+        h_layout.addWidget(h_player, 3)
+
+        h_agent = QLabel("Agent")
+        h_layout.addWidget(h_agent, 2)
+
+        h_score = QLabel("ACS/Score")
+        h_layout.addWidget(h_score, 1)
+
+        h_kda = QLabel("K / D / A")
+        h_layout.addWidget(h_kda, 2)
+
+        h_kd = QLabel("K/D")
+        h_layout.addWidget(h_kd, 1)
+
+        layout.addWidget(header_row)
+
+        for p in players_list:
+            p_name = p.get("name", "Player")
+            p_tag = p.get("tag", "")
+            full_tag = f"{p_name}#{p_tag}" if p_tag else p_name
+
+            is_me = (self.in_game_name and p_name.lower() == self.in_game_name.lower())
+
+            row = QWidget()
+            row.setObjectName("PlayerRow")
+            if is_me:
+                row.setStyleSheet("""
+                    #PlayerRow {
+                        background-color: #4a3e2e;
+                        border: 1px solid #c89f68;
+                        border-radius: 6px;
+                    }
+                    #PlayerRow QLabel {
+                        border: none;
+                        background: transparent;
+                    }
+                """)
+            else:
+                row.setStyleSheet("""
+                    #PlayerRow {
+                        background-color: #2c2a2b;
+                        border: none;
+                        border-radius: 6px;
+                    }
+                    #PlayerRow QLabel {
+                        border: none;
+                        background: transparent;
+                    }
+                """)
+
+            r_layout = QHBoxLayout(row)
+            r_layout.setContentsMargins(8, 6, 8, 6)
+
+            rank_text = p.get("rank", "Unranked")
+            r_name = QLabel(f"<b>{full_tag}</b><br><font color='#b0a8a8' size='2'>{rank_text}</font>")
+            r_name.setStyleSheet("font-size: 12px; color: #ffffff;" if is_me else "font-size: 12px; color: #e0d6d1;")
+            r_layout.addWidget(r_name, 3)
+
+            p_agent_name = p.get('character', 'Agent')
+            p_agent_icon = get_agent_icon_html(p_agent_name, self.switcher.base_dir) if self.switcher else "⚔️ "
+            r_agent = QLabel(f"{p_agent_icon}{p_agent_name}")
+            r_agent.setStyleSheet("font-size: 12px; color: #c89f68;")
+            r_layout.addWidget(r_agent, 2)
+
+            r_score = QLabel(str(p.get("score", 0)))
+            r_score.setStyleSheet("font-size: 12px; color: #ffffff; font-weight: bold;")
+            r_layout.addWidget(r_score, 1)
+
+            k = p.get("kills", 0)
+            d = p.get("deaths", 0)
+            a = p.get("assists", 0)
+            r_kda = QLabel(f"{k} / {d} / {a}")
+            r_kda.setStyleSheet("font-size: 12px; color: #e0d6d1;")
+            r_layout.addWidget(r_kda, 2)
+
+            r_kd = QLabel(str(p.get("kd", "0.00")))
+            r_kd.setStyleSheet("font-size: 12px; font-weight: bold; color: #a6e3a1;" if float(p.get("kd", 0)) >= 1.0 else "font-size: 12px; font-weight: bold; color: #f38ba8;")
+            r_layout.addWidget(r_kd, 1)
+
+            layout.addWidget(row)
+
+        return box

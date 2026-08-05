@@ -1,14 +1,10 @@
 from PyQt5.QtWidgets import QMessageBox, QDialog
-from ui_components import InputDialog, ConfirmDeleteDialog, IconPickerDialog
+from ui_components import InputDialog, ConfirmDeleteDialog, IconPickerDialog, AccountHistoryDialog
 import logging
 from pathlib import Path
 
 class ContextActions:
     def __init__(self, parent):
-        """
-        Initializes the actions handler for the account context menu.
-        :param parent: A reference to the main ModernValorantSwitcher window.
-        """
         self.parent = parent
         self.switcher = parent.switcher
 
@@ -16,7 +12,6 @@ class ContextActions:
         old_name = self.parent.get_selected_account_name()
         if not old_name: return
 
-        # Get current in-game name and tag for pre-filling
         _game, _rank, current_in_game_name, current_in_game_tag, _rr, _last_rr = self.switcher.get_account_game(old_name)
 
         dialog = InputDialog(
@@ -36,7 +31,6 @@ class ContextActions:
                 new_in_game_name = current_in_game_name
                 new_in_game_tag = current_in_game_tag
 
-            # Ensure empty strings are converted to None for storage consistency
             if new_in_game_name == "": new_in_game_name = None
             if new_in_game_tag == "": new_in_game_tag = None
 
@@ -85,7 +79,7 @@ class ContextActions:
                     self.parent.on_account_updated(name)
                 else:
                     self.parent.status_label.setText(f"Failed to update icon for '{name}'.")
-            else: # No icon path means remove
+            else:
                 if self.switcher.remove_account_icon(name):
                     self.parent.status_label.setText(f"Icon removed for '{name}'.")
                     self.parent.on_account_updated(name)
@@ -118,3 +112,20 @@ class ContextActions:
             self.parent.on_account_updated(name)
         else:
             self.parent.status_label.setText(f"Failed to set rank for '{name}'.")
+
+    def show_history(self, account_name=None):
+        name = account_name or self.parent.get_selected_account_name()
+        if not name: return
+
+        _game, _rank, in_game_name, in_game_tag, _rr, _last_rr = self.switcher.get_account_game(name)
+        if hasattr(self.parent, 'history_dialog') and self.parent.history_dialog and self.parent.history_dialog.isVisible():
+            self.parent.history_dialog.set_account(name)
+            self.parent.history_dialog.raise_()
+            self.parent.history_dialog.activateWindow()
+        else:
+            dialog = AccountHistoryDialog(name, in_game_name=in_game_name, in_game_tag=in_game_tag, parent=self.parent, switcher_instance=self.switcher)
+            dialog.setModal(False)
+            self.parent.history_dialog = dialog
+            dialog.show()
+            dialog.raise_()
+            dialog.activateWindow()
