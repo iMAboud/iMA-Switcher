@@ -3694,14 +3694,15 @@ class UpdateSignals(QObject):
 class UpdateCheckWorker(QThread):
     finished = pyqtSignal(bool, str, str, str, int)
 
-    def __init__(self, switcher=None, parent=None):
+    def __init__(self, switcher=None, app_version=None, parent=None):
         super().__init__(parent)
         self.switcher = switcher
+        self.app_version = app_version
 
     def run(self):
         try:
             import updater
-            has_update, current_sha, remote_sha, url, notes, size = updater.check_for_commit_update()
+            has_update, current_sha, remote_sha, url, notes, size = updater.check_for_commit_update(local_version=self.app_version)
             if not has_update and not remote_sha and self.switcher and hasattr(self.switcher, 'check_for_update'):
                 res = self.switcher.check_for_update()
                 if res and len(res) >= 5:
@@ -3864,11 +3865,12 @@ class UpdateDialog(PopupDialog):
         self.timeout_timer.timeout.connect(self.on_check_timeout)
         self.timeout_timer.start(15000)
 
+        from game_switcher import APP_VERSION
         if hasattr(self, 'check_worker') and self.check_worker and self.check_worker.isRunning():
             self.check_worker.quit()
             self.check_worker.wait()
 
-        self.check_worker = UpdateCheckWorker(self.switcher, self)
+        self.check_worker = UpdateCheckWorker(self.switcher, app_version=APP_VERSION, parent=self)
         self.check_worker.finished.connect(self.on_update_check_finished)
         self.check_worker.start()
 

@@ -77,7 +77,28 @@ def is_newer_version(remote_ver, local_ver):
         return parts
     return parse(remote_ver) > parse(local_ver)
 
-def check_for_commit_update():
+def _safe_get(url, headers=None, timeout=6):
+    if requests is None:
+        return None
+    try:
+        res = requests.get(url, headers=headers, timeout=timeout)
+        if res.status_code == 200:
+            return res
+    except Exception as error:
+        logging.warning(f"Primary request failed for {url}: {error}")
+
+    try:
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        res = requests.get(url, headers=headers, timeout=timeout, verify=False)
+        if res.status_code == 200:
+            return res
+    except Exception as error:
+        logging.warning(f"Fallback SSL request failed for {url}: {error}")
+    
+    return None
+
+def check_for_commit_update(local_version=None):
     if requests is None:
         return False, get_current_commit(), "", EXE_DOWNLOAD_URL, "Requests library unavailable", 0
 
@@ -89,11 +110,11 @@ def check_for_commit_update():
     commit_message = ""
     
     try:
-        response = requests.get(COMMIT_URL, headers=headers, timeout=6)
-        if response.status_code != 200:
-            response = requests.get(COMMIT_FALLBACK_URL, headers=headers, timeout=6)
+        response = _safe_get(COMMIT_URL, headers=headers, timeout=6)
+        if not response:
+            response = _safe_get(COMMIT_FALLBACK_URL, headers=headers, timeout=6)
             
-        if response.status_code == 200:
+        if response and response.status_code == 200:
             commit_data = response.json()
             remote_sha = commit_data.get("sha", "").strip()
             commit_message = commit_data.get("commit", {}).get("message", "New commit published on GitHub.")
@@ -106,8 +127,8 @@ def check_for_commit_update():
     download_url, asset_size = EXE_DOWNLOAD_URL, 0
     tag_name = ""
     try:
-        rel_res = requests.get(RELEASES_URL, headers=headers, timeout=6)
-        if rel_res.status_code == 200:
+        rel_res = _safe_get(RELEASES_URL, headers=headers, timeout=6)
+        if rel_res and rel_res.status_code == 200:
             rel_data = rel_res.json()
             tag_name = rel_data.get("tag_name", "")
             rel_notes = rel_data.get("body", "")
@@ -119,12 +140,8 @@ def check_for_commit_update():
                     asset_size = asset.get("size", 0)
                     break
             
-            try:
-                from game_switcher import APP_VERSION
-                if tag_name and is_newer_version(tag_name, APP_VERSION):
-                    tag_has_update = True
-            except Exception:
-                pass
+            if tag_name and local_version and is_newer_version(tag_name, local_version):
+                tag_has_update = True
     except Exception as error:
         logging.warning(f"Error checking release tag update: {error}")
 
