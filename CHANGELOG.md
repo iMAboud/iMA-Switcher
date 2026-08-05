@@ -1,5 +1,5 @@
-### What's New in v1.0.24
+### What's New in v1.0.25
 
-- **PowerShell Elevated Updater Engine**: Implemented elevated PowerShell update installer to guarantee file replacement in protected directories (`Program Files`) with automatic UAC fallback.
-- **Eliminated Temp Directory Cleanup Warning**: Used `os._exit(0)` and cleared `_MEIPASS` environment variables on relaunch, completely suppressing PyInstaller's `Failed to remove temporary directory` popup dialog.
-- **Clean Icon & Asset Relaunch**: Ensured environment variables and working directory are sanitized prior to restart so all logos and UI icons display immediately on update completion.
+- **Native Update Installer Subprocess**: Redesigned auto-updater to use a clean subprocess handshake (`--update --pid <PID>`). Eliminated all script files (`.ps1`, `.bat`), terminal windows, and OS-level execution policy errors.
+- **Graceful Application Teardown**: Updated app to exit using standard Qt event loop methods (`QApplication.quit()`), allowing PyInstaller to cleanly unload DLLs and remove temporary directories without errors.
+- **Native Process Wait**: Added Win32 process wait logic to ensure file replacement occurs cleanly after parent process shutdown, preventing file lock conflicts.

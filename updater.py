@@ -34,16 +34,13 @@ def cleanup_old_exe():
         current_exe = Path(sys.executable)
         old_exe = current_exe.with_suffix(".old")
         tmp_exe = current_exe.with_suffix(".tmp")
-        if old_exe.exists():
-            try:
-                old_exe.unlink()
-            except Exception as error:
-                logging.warning(f"Could not remove old executable: {error}")
-        if tmp_exe.exists():
-            try:
-                tmp_exe.unlink()
-            except Exception as error:
-                logging.warning(f"Could not remove temporary executable: {error}")
+        update_exe = current_exe.parent / "iMA_Switcher_Update.exe"
+        for item in [old_exe, tmp_exe, update_exe]:
+            if item.exists():
+                try:
+                    item.unlink()
+                except Exception as error:
+                    logging.warning(f"Could not remove {item.name}: {error}")
 
 RELEASES_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 
@@ -155,12 +152,12 @@ def download_and_apply_update(download_url=EXE_DOWNLOAD_URL, progress_callback=N
         return False, "Requests library unavailable"
 
     current_exe = Path(sys.executable) if getattr(sys, 'frozen', False) else Path(__file__).parent / "iMA Switcher.exe"
-    temp_exe = current_exe.with_suffix(".tmp")
+    temp_installer = current_exe.parent / "iMA_Switcher_Update.exe"
 
     try:
-        if temp_exe.exists():
+        if temp_installer.exists():
             try:
-                temp_exe.unlink()
+                temp_installer.unlink()
             except Exception:
                 pass
 
@@ -178,7 +175,7 @@ def download_and_apply_update(download_url=EXE_DOWNLOAD_URL, progress_callback=N
         total_bytes = int(res.headers.get('content-length', 0))
         downloaded_bytes = 0
 
-        with open(temp_exe, "wb") as file_handle:
+        with open(temp_installer, "wb") as file_handle:
             for chunk in res.iter_content(chunk_size=65536):
                 if chunk:
                     file_handle.write(chunk)
@@ -187,53 +184,31 @@ def download_and_apply_update(download_url=EXE_DOWNLOAD_URL, progress_callback=N
                         progress_callback(downloaded_bytes, total_bytes)
 
         if getattr(sys, 'frozen', False):
-            install_dir = current_exe.parent
-            ps_script_path = install_dir / "apply_update.ps1"
-            
-            env = os.environ.copy()
-            env.pop('_MEIPASS2', None)
-            env.pop('_MEIPASS', None)
+            install_dir = str(current_exe.parent)
+            main_pid = str(os.getpid())
 
-            ps_content = f"""
-Start-Sleep -Seconds 2
-$temp = "{temp_exe}"
-$target = "{current_exe}"
-if (Test-Path $temp) {{
-    try {{
-        Copy-Item -Path $temp -Destination $target -Force
-        Remove-Item -Path $temp -Force -ErrorAction SilentlyContinue
-    }} catch {{
-        Start-Process powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -Command Copy-Item -Path '$temp' -Destination '$target' -Force; Remove-Item -Path '$temp' -Force" -Verb RunAs -Wait
-    }}
-}}
-Start-Process "$target"
-Remove-Item -Path "$PSCommandPath" -Force -ErrorAction SilentlyContinue
-"""
-            ps_script_path.write_text(ps_content, encoding="utf-8")
-
-            creationflags = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+            creationflags = 0x00000008 | 0x00000200 if os.name == 'nt' else 0  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
             subprocess.Popen(
-                ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ps_script_path)],
-                cwd=str(install_dir),
+                [str(temp_installer), "--update", "--pid", main_pid, "--target-dir", install_dir],
+                cwd=install_dir,
                 close_fds=True,
-                creationflags=creationflags,
-                env=env
+                creationflags=creationflags
             )
 
             from PyQt5.QtWidgets import QApplication
             app_instance = QApplication.instance()
             if app_instance:
                 app_instance.quit()
-            os._exit(0)
-            return True, "Update applied successfully"
+            sys.exit(0)
+            return True, "Update process launched"
         else:
             return True, "Downloaded update (Dev Mode)"
 
     except Exception as error:
-        logging.error(f"Failed to apply commit update: {error}")
-        if temp_exe.exists():
+        logging.error(f"Failed to download or launch update: {error}")
+        if temp_installer.exists():
             try:
-                temp_exe.unlink()
+                temp_installer.unlink()
             except Exception:
                 pass
         return False, f"{type(error).__name__}: {error}"

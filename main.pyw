@@ -65,6 +65,82 @@ class IconLoader(QRunnable):
 
 
 
+def wait_for_pid(pid, timeout=15):
+    """Wait for parent process to exit cleanly before replacing files."""
+    try:
+        pid = int(pid)
+        import time
+        start_time = time.time()
+        if os.name == 'nt':
+            import ctypes
+            SYNCHRONIZE = 0x00100000
+            handle = ctypes.windll.kernel32.OpenProcess(SYNCHRONIZE, False, pid)
+            if handle:
+                ctypes.windll.kernel32.WaitForSingleObject(handle, int(timeout * 1000))
+                ctypes.windll.kernel32.CloseHandle(handle)
+                return
+        while time.time() - start_time < timeout:
+            try:
+                os.kill(pid, 0)
+                time.sleep(0.3)
+            except OSError:
+                break
+    except Exception as e:
+        logging.warning(f"Error waiting for PID {pid}: {e}")
+
+def run_update_installer():
+    parent_pid = None
+    target_dir = None
+    
+    for i in range(len(sys.argv)):
+        if sys.argv[i] == "--pid" and i + 1 < len(sys.argv):
+            parent_pid = sys.argv[i + 1]
+        elif sys.argv[i] == "--target-dir" and i + 1 < len(sys.argv):
+            target_dir = sys.argv[i + 1]
+
+    if parent_pid:
+        wait_for_pid(parent_pid)
+
+    current_exe = Path(sys.executable) if getattr(sys, 'frozen', False) else Path(sys.argv[0]).resolve()
+    
+    if not target_dir:
+        try:
+            switcher_instance = GameSwitcher()
+            target_dir = switcher_instance.get_ima_config().get("app_install_path", "")
+        except Exception:
+            pass
+    
+    if not target_dir:
+        target_dir = current_exe.parent
+
+    target_dir_p = Path(target_dir)
+    target_dir_p.mkdir(parents=True, exist_ok=True)
+    destination_exe_path = target_dir_p / "iMA Switcher.exe"
+
+    try:
+        import time
+        time.sleep(0.5)
+        shutil.copy2(current_exe, destination_exe_path)
+
+        source_assets_path = Path(sys._MEIPASS if getattr(sys, 'frozen', False) else Path(__file__).parent) / "Assets"
+        destination_assets_path = target_dir_p / "Assets"
+        if source_assets_path.exists():
+            shutil.copytree(source_assets_path, destination_assets_path, dirs_exist_ok=True)
+    except Exception as err:
+        logging.error(f"Failed to update files in target directory: {err}")
+
+    try:
+        creationflags = 0x00000008 | 0x00000200 if os.name == 'nt' else 0  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+        subprocess.Popen(
+            [str(destination_exe_path)],
+            cwd=str(target_dir_p),
+            creationflags=creationflags
+        )
+    except Exception as err:
+        logging.error(f"Failed to launch updated executable: {err}")
+
+    sys.exit(0)
+
 def run_installer():
     app = QApplication(sys.argv)
     dialog = InstallerDialog()
@@ -702,7 +778,9 @@ def main():
     
     current_exe_name = os.path.basename(sys.executable if getattr(sys, 'frozen', False) else sys.argv[0])
     
-    if "Installer" in current_exe_name: 
+    if "--update" in sys.argv or (len(sys.argv) > 1 and sys.argv[1] == "--update"):
+        run_update_installer()
+    elif "Installer" in current_exe_name: 
         run_installer()
     elif len(sys.argv) > 2 and sys.argv[1] == "--switch":
         switcher = GameSwitcher()
