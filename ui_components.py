@@ -3687,12 +3687,12 @@ class HoverButton(QPushButton):
         self.anim.start()
 
 class UpdateSignals(QObject):
-    check_finished = pyqtSignal(bool, str, str, str, int)
+    check_finished = pyqtSignal(dict)
     progress = pyqtSignal(int, int, int)
     download_finished = pyqtSignal(bool, str)
 
 class UpdateCheckWorker(QThread):
-    finished = pyqtSignal(bool, str, str, str, int)
+    finished = pyqtSignal(dict)
 
     def __init__(self, switcher=None, app_version=None, parent=None):
         super().__init__(parent)
@@ -3702,17 +3702,18 @@ class UpdateCheckWorker(QThread):
     def run(self):
         try:
             import updater
-            has_update, current_sha, remote_sha, url, notes, size = updater.check_for_commit_update(local_version=self.app_version)
-            if not has_update and not remote_sha and self.switcher and hasattr(self.switcher, 'check_for_update'):
-                res = self.switcher.check_for_update()
-                if res and len(res) >= 5:
-                    has_update, remote_ver, url, notes, size = res[0], res[1], res[2], res[3], res[4]
-                    remote_sha = str(remote_ver) if remote_ver else ""
-            clean_sha = str(remote_sha)[:7] if remote_sha else ""
-            self.finished.emit(bool(has_update), clean_sha, str(url or ""), str(notes or ""), int(size or 0))
+            res_dict = updater.check_for_app_update(local_version=self.app_version)
+            self.finished.emit(res_dict)
         except Exception as error:
             logging.error(f"Update check worker exception: {error}")
-            self.finished.emit(False, "", "", f"Error: {error}", 0)
+            self.finished.emit({
+                "has_update": False,
+                "version": str(self.app_version or ""),
+                "url": "",
+                "notes": f"Error: {error}",
+                "size": 0,
+                "error": str(error)
+            })
 
 class UpdateDialog(PopupDialog):
     def __init__(self, switcher_instance, parent=None, source_button=None):
@@ -3880,10 +3881,22 @@ class UpdateDialog(PopupDialog):
         self.status_label.setText("⚠️ Connection timed out. Please try again.")
         self.action_btn.setText("Check Again")
 
-    def on_update_check_finished(self, has_update, remote_sha, url, notes, size):
+    def on_update_check_finished(self, result):
         if hasattr(self, 'timeout_timer') and self.timeout_timer:
             self.timeout_timer.stop()
         self.action_btn.setEnabled(True)
+
+        has_update = False
+        url = ""
+        notes = ""
+        size = 0
+
+        if isinstance(result, dict):
+            has_update = result.get("has_update", False)
+            url = result.get("url", "")
+            notes = result.get("notes", "")
+            size = result.get("size", 0)
+
         self.has_update = has_update
         self.download_url = url
         self.file_size = size

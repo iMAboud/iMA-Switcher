@@ -95,57 +95,57 @@ def _safe_get(url, headers=None, timeout=6):
     
     return None
 
-def check_for_commit_update(local_version=None):
+def check_for_app_update(local_version=None):
+    """
+    Check for software updates against GitHub Releases API.
+    Returns a dictionary guaranteed to be safe for PyQt signals.
+    """
+    res_dict = {
+        "has_update": False,
+        "version": str(local_version or "1.0.26"),
+        "url": EXE_DOWNLOAD_URL,
+        "notes": "No release notes available.",
+        "size": 0,
+        "error": None
+    }
     if requests is None:
-        return False, get_current_commit(), "", EXE_DOWNLOAD_URL, "Requests library unavailable", 0
+        res_dict["error"] = "Requests library unavailable"
+        return res_dict
 
-    current_sha = get_current_commit()
     headers = {"User-Agent": "iMA-Switcher-App", "Accept": "application/vnd.github.v3+json"}
     
-    download_url, asset_size = EXE_DOWNLOAD_URL, 0
-    tag_name = ""
-    commit_message = ""
-    tag_has_update = False
-
     try:
         rel_res = _safe_get(RELEASES_URL, headers=headers, timeout=6)
         if rel_res and rel_res.status_code == 200:
             rel_data = rel_res.json()
-            tag_name = rel_data.get("tag_name", "")
-            rel_notes = rel_data.get("body", "")
-            if rel_notes:
-                commit_message = rel_notes
+            tag_name = rel_data.get("tag_name", "").strip()
+            clean_ver = tag_name.lstrip('vV').strip()
+            rel_notes = rel_data.get("body", "").strip()
+            
+            download_url = EXE_DOWNLOAD_URL
+            asset_size = 0
             for asset in rel_data.get("assets", []):
                 if asset.get("name", "").endswith(".exe"):
-                    download_url = asset.get("browser_download_url")
+                    download_url = asset.get("browser_download_url", EXE_DOWNLOAD_URL)
                     asset_size = asset.get("size", 0)
                     break
+
+            res_dict["version"] = str(clean_ver or tag_name)
+            res_dict["url"] = str(download_url)
+            res_dict["notes"] = str(rel_notes or "New version available!")
+            res_dict["size"] = int(asset_size or 0)
             
-            if tag_name and local_version and is_newer_version(tag_name, local_version):
-                tag_has_update = True
+            if tag_name and local_version:
+                res_dict["has_update"] = bool(is_newer_version(tag_name, local_version))
     except Exception as error:
         logging.warning(f"Error checking release tag update: {error}")
+        res_dict["error"] = str(error)
 
-    remote_sha = ""
-    if not tag_has_update:
-        try:
-            response = _safe_get(COMMIT_URL, headers=headers, timeout=6)
-            if not response:
-                response = _safe_get(COMMIT_FALLBACK_URL, headers=headers, timeout=6)
-                
-            if response and response.status_code == 200:
-                commit_data = response.json()
-                remote_sha = commit_data.get("sha", "").strip()
-                if not commit_message:
-                    commit_message = commit_data.get("commit", {}).get("message", "New commit published on GitHub.")
-        except Exception as error:
-            logging.warning(f"Error checking commit update: {error}")
+    return res_dict
 
-    has_update = tag_has_update
-    if not commit_message:
-        commit_message = f"New version {tag_name} available!" if tag_name else "New update published on GitHub."
-
-    return has_update, current_sha, remote_sha or tag_name, download_url, commit_message, asset_size
+def check_for_commit_update(local_version=None):
+    res = check_for_app_update(local_version=local_version)
+    return res["has_update"], get_current_commit(), res["version"], res["url"], res["notes"], res["size"]
 
 def download_and_apply_update(download_url=EXE_DOWNLOAD_URL, progress_callback=None):
     if requests is None:
