@@ -1,13 +1,21 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 
+import os
+
+datas_list = [('Assets', 'Assets'), ('icons', 'icons'), ('Agents', 'Agents')]
+if os.path.exists('credentials.json'):
+    datas_list.append(('credentials.json', '.'))
+if os.path.exists('commit.txt'):
+    datas_list.append(('commit.txt', '.'))
+
 a = Analysis(
     ['main.pyw'],
     pathex=[],
     binaries=[],
-    datas=[('Assets', 'Assets'), ('icons', 'icons'), ('Agents', 'Agents'), ('credentials.json', '.'), ('commit.txt', '.')],
+    datas=datas_list,
     hiddenimports=[
-        'game_switcher', 'actions_context', 'actions_settings', 'ui_components', 'win32com.client', 'requests',
+        'game_switcher', 'actions_context', 'actions_settings', 'ui_components', 'updater', 'win32com.client', 'requests',
         'googleapiclient', 'google_auth_oauthlib', 'google.auth.transport.requests', 'jsonschema',
         'google_auth_oauthlib.flow', 'googleapiclient.discovery', 'googleapiclient.http', 'google.oauth2.credentials',
         'wsgiref', 'wsgiref.simple_server'
