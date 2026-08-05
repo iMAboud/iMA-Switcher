@@ -40,11 +40,17 @@ jobs:
         copy "dist\iMA Switcher Installer.exe" "dist\iMA.Switcher.Installer.exe"
         echo ${{ github.sha }} > dist\commit.txt
 
-    - name: Release Latest Executable
+    - name: Extract Version Tag
+      id: get_version
+      run: |
+        $VER = python -c "from game_switcher import APP_VERSION; print(APP_VERSION)"
+        echo "TAG_NAME=V$VER" >> $env:GITHUB_OUTPUT
+
+    - name: Release Executable
       uses: softprops/action-gh-release@v2
       with:
-        tag_name: latest
-        name: Latest Build
+        tag_name: ${{ steps.get_version.outputs.TAG_NAME }}
+        name: Version ${{ steps.get_version.outputs.TAG_NAME }}
         draft: false
         prerelease: false
         files: |

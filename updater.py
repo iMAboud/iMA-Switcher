@@ -43,6 +43,23 @@ def cleanup_old_exe():
             except Exception as error:
                 logging.warning(f"Could not remove temporary executable: {error}")
 
+RELEASES_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+
+def resolve_download_url():
+    if requests is None:
+        return EXE_DOWNLOAD_URL, 0
+    try:
+        headers = {"User-Agent": "iMA-Switcher-App"}
+        res = requests.get(RELEASES_URL, headers=headers, timeout=5)
+        if res.status_code == 200:
+            data = res.json()
+            for asset in data.get("assets", []):
+                if asset.get("name", "").endswith(".exe"):
+                    return asset.get("browser_download_url"), asset.get("size", 0)
+    except Exception:
+        pass
+    return EXE_DOWNLOAD_URL, 0
+
 def check_for_commit_update():
     if requests is None:
         return False, get_current_commit(), "", EXE_DOWNLOAD_URL, "Requests library unavailable", 0
@@ -63,16 +80,9 @@ def check_for_commit_update():
         commit_message = commit_data.get("commit", {}).get("message", "New commit published on GitHub.")
 
         has_update = bool(remote_sha and current_sha != "dev_build" and remote_sha[:7] != current_sha[:7])
-        
-        asset_size = 0
-        try:
-            head_resp = requests.head(EXE_DOWNLOAD_URL, allow_redirects=True, timeout=5)
-            if head_resp.status_code == 200:
-                asset_size = int(head_resp.headers.get("content-length", 0))
-        except Exception:
-            asset_size = 0
+        download_url, asset_size = resolve_download_url()
 
-        return has_update, current_sha, remote_sha, EXE_DOWNLOAD_URL, commit_message, asset_size
+        return has_update, current_sha, remote_sha, download_url, commit_message, asset_size
 
     except Exception as error:
         logging.warning(f"Error checking commit update: {error}")

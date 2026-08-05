@@ -3785,18 +3785,21 @@ class UpdateDialog(PopupDialog):
         self.content_layout.addLayout(button_layout)
 
     def start_check_for_updates(self):
-        self.status_label.setText("Checking GitHub for updates...")
+        self.status_label.setText("Checking for update...")
         self.action_btn.setText("Checking...")
         self.action_btn.setEnabled(False)
         self.notes_edit.hide()
 
         def _worker():
-            import updater
-            has_update, current_sha, remote_sha, url, notes, size = updater.check_for_commit_update()
-            if not has_update and not remote_sha:
-                has_update, remote_ver, url, notes, size = self.switcher.check_for_update()
-                remote_sha = remote_ver
-            self.signals.check_finished.emit(has_update, remote_sha[:7] if remote_sha else "", url, notes, size)
+            try:
+                import updater
+                has_update, current_sha, remote_sha, url, notes, size = updater.check_for_commit_update()
+                if not has_update and not remote_sha:
+                    has_update, remote_ver, url, notes, size = self.switcher.check_for_update()
+                    remote_sha = remote_ver
+                self.signals.check_finished.emit(has_update, remote_sha[:7] if remote_sha else "", url, notes, size)
+            except Exception as error:
+                self.signals.check_finished.emit(False, "", "", f"Error: {error}", 0)
 
         threading.Thread(target=_worker, daemon=True).start()
 
