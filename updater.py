@@ -20,11 +20,12 @@ def get_current_commit():
         commit_file = Path(sys._MEIPASS) / "commit.txt"
         if commit_file.exists():
             return commit_file.read_text().strip()
+        return "unknown_legacy_build"
     else:
         dev_commit_file = Path(__file__).parent / "commit.txt"
         if dev_commit_file.exists():
             return dev_commit_file.read_text().strip()
-    return "dev_build"
+        return "dev_build"
 
 def cleanup_old_exe():
     if getattr(sys, 'frozen', False):
