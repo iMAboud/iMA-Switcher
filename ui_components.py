@@ -1851,7 +1851,7 @@ class OptionsDialog(PopupDialog):
         notif_layout.addWidget(QLabel("Show Splash Notification:"), 0, 0)
         notif_layout.addWidget(self.show_splash_notification_toggle, 0, 1)
 
-        preview_splash_btn = QPushButton("Preview Splash Screen")
+        preview_splash_btn = QPushButton("Preview Splash")
         preview_splash_btn.setStyleSheet("""
             QPushButton {
                 background-color: #c89f68; color: #2c2a2b; font-weight: bold;
