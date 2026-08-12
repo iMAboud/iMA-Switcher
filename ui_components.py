@@ -1772,6 +1772,9 @@ class OptionsDialog(PopupDialog):
 
     def add_page(self, title, icon_file, widget):
         item = QListWidgetItem(title)
+        font = item.font()
+        font.setBold(True)
+        item.setFont(font)
         icon_p = get_asset_path(icon_file)
         if Path(icon_p).exists():
             item.setIcon(QIcon(icon_p))
