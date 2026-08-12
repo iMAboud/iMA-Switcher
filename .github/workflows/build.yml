@@ -44,14 +44,14 @@ jobs:
       id: get_version
       run: |
         $VER = (python -c "from game_switcher import APP_VERSION; print(APP_VERSION)").Trim()
-        echo "TAG_NAME=V$VER" >> $env:GITHUB_OUTPUT
-        echo "Detected APP_VERSION: $VER, Setting Tag: V$VER"
+        echo "TAG_NAME=v$VER" >> $env:GITHUB_OUTPUT
+        echo "Detected APP_VERSION: $VER, Setting Tag: v$VER"
 
     - name: Release Executable
       uses: softprops/action-gh-release@v2
       with:
         tag_name: ${{ steps.get_version.outputs.TAG_NAME }}
-        name: Version ${{ steps.get_version.outputs.TAG_NAME }}
+        name: Release ${{ steps.get_version.outputs.TAG_NAME }}
         draft: false
         prerelease: false
         make_latest: true

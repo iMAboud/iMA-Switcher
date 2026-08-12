@@ -45,6 +45,7 @@ from ui_components import (
 from game_switcher import CustomUpdateEvent
 from actions_settings import SettingsActions
 from actions_context import ContextActions
+from theme_manager import apply_theme_to_app, set_active_theme
 
 class IconLoaderSignals(QObject):
     finished = pyqtSignal(str, QIcon)
@@ -126,6 +127,11 @@ def run_update_installer():
         destination_assets_path = target_dir_p / "Assets"
         if source_assets_path.exists():
             shutil.copytree(source_assets_path, destination_assets_path, dirs_exist_ok=True)
+
+        source_maps_path = Path(sys._MEIPASS if getattr(sys, 'frozen', False) else Path(__file__).parent) / "maps"
+        destination_maps_path = target_dir_p / "maps"
+        if source_maps_path.exists():
+            shutil.copytree(source_maps_path, destination_maps_path, dirs_exist_ok=True)
     except Exception as err:
         logging.error(f"Failed to update files in target directory: {err}")
 
@@ -143,6 +149,7 @@ def run_update_installer():
 
 def run_installer():
     app = QApplication(sys.argv)
+    apply_theme_to_app(app)
     dialog = InstallerDialog()
     if dialog.exec_() == QDialog.Accepted:
         install_path = dialog.get_install_path()
@@ -160,6 +167,11 @@ def run_installer():
                 destination_assets_path = install_path_p / "Assets"
                 if source_assets_path.exists():
                     shutil.copytree(source_assets_path, destination_assets_path, dirs_exist_ok=True)
+
+                source_maps_path = Path(sys._MEIPASS if getattr(sys, 'frozen', False) else Path(__file__).parent) / "maps"
+                destination_maps_path = install_path_p / "maps"
+                if source_maps_path.exists():
+                    shutil.copytree(source_maps_path, destination_maps_path, dirs_exist_ok=True)
 
                 riot_games_exe_path = dialog.get_riot_games_path()
                 switcher_instance = GameSwitcher(base_directory=install_path)
@@ -236,6 +248,9 @@ class ModernValorantSwitcher(QMainWindow):
         self.setAttribute(Qt.WA_TranslucentBackground)
 
         self.switcher = GameSwitcher()
+        ui_settings = self.switcher.get_ima_config().get("ui_settings", {})
+        saved_theme = ui_settings.get("theme", "dark_gold")
+        apply_theme_to_app(self, saved_theme)
 
         if not self.switcher.is_admin():
             logging.critical("Application started without administrator privileges. Exiting.")
@@ -287,17 +302,8 @@ class ModernValorantSwitcher(QMainWindow):
     def init_ui(self):
         self.setWindowTitle("iMA Switcher")
         self.setWindowIcon(self.switcher.get_qicon_from_path(str(self.switcher.base_dir / "logo.png")))
-        self.setStyleSheet(
-            """#main_widget { background-color: #2c2a2b; border-radius: 20px; border: 1px solid #4f4a4b; } 
-               QScrollArea { border: none; background-color: transparent; } 
-               QScrollArea QScrollBar:vertical { border: none; background: transparent; width: 0px; }
-               QScrollArea QScrollBar:horizontal { border: none; background: transparent; height: 0px; }
-               QWidget#grid_container { background-color: transparent; } 
-               QMenu { background-color: #3a3637; color: #e0d6d1; border: 1px solid #4f4a4b; border-radius: 12px; padding: 6px; } 
-               QMenu::item { padding: 8px 24px 8px 12px; border-radius: 8px; margin: 2px 4px; } 
-               QMenu::item:selected { background-color: #c89f68; color: #2c2a2b; }
-               QMenu::icon { padding-left: 14px; }"""
-        )
+        ui_settings = self.switcher.get_ima_config().get("ui_settings", {})
+        apply_theme_to_app(self, ui_settings.get("theme", "dark_gold"))
 
         self.main_widget = QWidget(objectName="main_widget")
         self.setCentralWidget(self.main_widget)
@@ -497,24 +503,31 @@ class ModernValorantSwitcher(QMainWindow):
                 logging.error(f"Error updating iMA menu script on close: {e}")
         event.accept()
     
-    def create_gear_icon(self, color):
+    def create_gear_icon(self, color=None):
         from PyQt5.QtCore import QRectF, Qt
-        from PyQt5.QtGui import QPixmap, QPainterPath, QPainter, QColor, QFont
+        from PyQt5.QtGui import QPixmap, QPainterPath, QPainter, QColor
+        from theme_manager import get_theme
+        t = get_theme()
+        icon_color = QColor(t['text_secondary']) if color is None else color
         pixmap = QPixmap(64, 64); pixmap.fill(Qt.transparent)
-        p = QPainter(pixmap); p.setRenderHint(QPainter.Antialiasing); p.setPen(Qt.NoPen); p.setBrush(color)
+        p = QPainter(pixmap); p.setRenderHint(QPainter.Antialiasing); p.setPen(Qt.NoPen); p.setBrush(icon_color)
         p.translate(32, 32)
         for _ in range(8): p.drawRect(QRectF(-3, -28, 6, 12)); p.rotate(45)
         path = QPainterPath(); path.addEllipse(QRectF(-16, -16, 32, 32)); path.addEllipse(QRectF(-10, -10, 20, 20))
         path.setFillRule(Qt.OddEvenFill); p.drawPath(path); p.end()
         return QIcon(pixmap)
 
-    def create_add_icon(self, plus_color, bg_color):
+    def create_add_icon(self, plus_color=None, bg_color=None):
         from PyQt5.QtCore import Qt
         from PyQt5.QtGui import QPixmap, QPainter, QColor
+        from theme_manager import get_theme
+        t = get_theme()
+        p_col = QColor(t['text_on_accent']) if plus_color is None else plus_color
+        b_col = QColor(t['accent']) if bg_color is None else bg_color
         pixmap = QPixmap(64, 64); pixmap.fill(Qt.transparent)
-        p = QPainter(pixmap); p.setRenderHint(QPainter.Antialiasing); p.setPen(Qt.NoPen); p.setBrush(bg_color)
+        p = QPainter(pixmap); p.setRenderHint(QPainter.Antialiasing); p.setPen(Qt.NoPen); p.setBrush(b_col)
         p.drawEllipse(0, 0, 64, 64)
-        p.setBrush(plus_color)
+        p.setBrush(p_col)
         p.drawRect(18, 28, 28, 8)
         p.drawRect(28, 18, 8, 28)
         p.end()

@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-<img width="692" height="466" alt="186-goxlr-utility-ui_2026-08-06-03-04-AM" src="https://github.com/user-attachments/assets/4358a90f-6f1f-4a8e-9410-44752913da14" />
+  <img src="https://i.imgur.com/5JSAMpP.png" alt="Main User Interface" width="700"/>
 </p>
 
 ## ✨ Features
