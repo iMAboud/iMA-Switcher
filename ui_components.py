@@ -57,6 +57,9 @@ from PyQt5.QtCore import (
 )
 
 
+from theme_manager import get_available_themes, apply_theme_to_app, get_current_theme_key
+
+
 def get_asset_path(filename):
     """Utility to resolve absolute path of assets across source and frozen builds."""
     if hasattr(sys, '_MEIPASS'):
@@ -575,29 +578,6 @@ class ValueSlider(QWidget):
         self.slider = QSlider(Qt.Horizontal)
         self.slider.setRange(self.min_val_scaled, self.max_val_scaled)
         self.slider.setSingleStep(self.step_scaled)
-        self.slider.setStyleSheet("""
-            QSlider::groove:horizontal {
-                border: 1px solid #4f4a4b;
-                height: 10px;
-                background: #4a4647;
-                border-radius: 5px;
-            }
-            QSlider::handle:horizontal {
-                background: #c89f68;
-                border: 2px solid #2c2a2b;
-                width: 18px;
-                height: 18px;
-                margin: -6px 0; 
-                border-radius: 9px;
-            }
-            QSlider::add-page:horizontal {
-                background: #4a4647;
-            }
-            QSlider::sub-page:horizontal {
-                background: #c89f68;
-                border-radius: 5px;
-            }
-        """)
 
         self.spin_box = QDoubleSpinBox() # Use QDoubleSpinBox for float values
         self.spin_box.setRange(min_val, max_val)
@@ -605,10 +585,6 @@ class ValueSlider(QWidget):
         self.spin_box.setDecimals(1) # Display one decimal place
         self.spin_box.setFixedWidth(60)
         self.spin_box.setAlignment(Qt.AlignCenter)
-        self.spin_box.setStyleSheet("""
-            QDoubleSpinBox { background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 5px; color: #e0d6d1; font-weight: bold; }
-            QDoubleSpinBox::up-button, QDoubleSpinBox::down-button { width: 0px; border: none; background: transparent; }
-        """)
 
         layout.addWidget(self.slider)
         layout.addWidget(self.spin_box)
@@ -642,23 +618,8 @@ class RadioButtonGroup(QWidget):
         self.btn_true.clicked.connect(lambda: self.set_state(True))
         self.btn_false.clicked.connect(lambda: self.set_state(False))
 
-        common_style = """
-            QPushButton { 
-                background-color: #4f4a4b; color: #e0d6d1; 
-                font-weight: bold; border-radius: 8px; padding: 8px; min-width: 100px; border: 1px solid #3a3637;
-            }
-            QPushButton:hover {
-                border: 1px solid #c89f68;
-            }
-            QPushButton:pressed {
-                background-color: #5a5556;
-            }
-            QPushButton:checked {
-                background-color: #c89f68; color: #2c2a2b; border: 1px solid #d9b68b;
-            }
-        """
-        self.btn_true.setStyleSheet(common_style)
-        self.btn_false.setStyleSheet(common_style)
+        self.btn_true.setObjectName("ToggleOptionButton")
+        self.btn_false.setObjectName("ToggleOptionButton")
         
         main_layout.addWidget(self.btn_false)
         main_layout.addWidget(self.btn_true)
@@ -679,7 +640,6 @@ class PopupDialog(QDialog):
 
         
         self.main_widget = QWidget(objectName="popup_widget")
-        self.main_widget.setStyleSheet("#popup_widget { background-color: #2c2a2b; border-radius: 15px; border: 1px solid #c89f68; } QLabel { color: #FFFFFF; }")
         
         popup_layout = QVBoxLayout(self.main_widget)
         popup_layout.setContentsMargins(0, 0, 0, 0)
@@ -718,10 +678,8 @@ class ValorantIconPickerDialog(PopupDialog):
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll_area.setStyleSheet("background-color: #3a3637; border: 1px solid #4f4a4b; border-radius: 10px;")
 
-        grid_container = QWidget()
-        grid_container.setStyleSheet("background-color: #3a3637;")
+        grid_container = QWidget(objectName="grid_container")
         self.grid_layout = QGridLayout(grid_container)
         self.grid_layout.setSpacing(12)
         self.grid_layout.setContentsMargins(12, 12, 12, 12)
@@ -743,17 +701,6 @@ class ValorantIconPickerDialog(PopupDialog):
                 icon = QIcon(icon_path)
             btn.setIcon(icon)
             btn.setIconSize(QSize(70, 70))
-            btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #4a4647;
-                    border: 2px solid #4f4a4b;
-                    border-radius: 12px;
-                }
-                QPushButton:hover {
-                    background-color: #5a5556;
-                    border-color: #c89f68;
-                }
-            """)
             btn.clicked.connect(lambda _, path=icon_path: self._select(path))
             self.grid_layout.addWidget(btn, row, col, Qt.AlignCenter)
 
@@ -777,53 +724,6 @@ class ExportIMAMenuDialog(QDialog):
         main_layout.setContentsMargins(0, 0, 0, 0)
 
         container_widget = QWidget(objectName="container")
-        container_widget.setStyleSheet("""
-            #container {
-                background-color: #2c2a2b; 
-                border: 1px solid #c89f68;
-                border-radius: 15px;
-            }
-            QLabel { color: white; font-weight: bold; background: transparent; }
-            QLineEdit, QListWidget { 
-                background-color: #4a4647; 
-                border: 1px solid #c89f68; 
-                border-radius: 8px; 
-                padding: 10px; 
-                color: #e0d6d1; 
-            }
-            QPushButton { 
-                background-color: #c89f68; 
-                color: #2c2a2b; 
-                font-weight: bold; 
-                border-radius: 15px; 
-                padding: 8px; 
-                border: none;
-            }
-            QPushButton:hover { background-color: #d9b68b; }
-
-            QScrollBar:vertical {
-                border: none;
-                background-color: #2c2a2b;
-                width: 14px;
-                margin: 0px 0 0px 0;
-                border-radius: 0px;
-            }
-            QScrollBar::handle:vertical {
-                background-color: #e0d6d1;
-                min-height: 30px;
-                border-radius: 7px;
-                border: 1px solid #c89f68;
-            }
-            QScrollBar::handle:vertical:hover {
-                background-color: #c89f68;
-            }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-                height: 0px;
-            }
-            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
-                background: none;
-            }
-        """)
         main_layout.addWidget(container_widget)
         
         container_layout = QVBoxLayout(container_widget)
@@ -883,13 +783,7 @@ class ExportIMAMenuDialog(QDialog):
         self.icon_preview_btn.clicked.connect(self.open_valorant_icon_picker)
 
         browse_button = QPushButton("Browse...")
-        browse_button.setStyleSheet("""
-            QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold;
-                border-radius: 8px; padding: 10px; border: none;
-            }
-            QPushButton:hover { background-color: #d9b68b; }
-        """)
+        browse_button.setObjectName("ApplyButton")
         browse_button.clicked.connect(self.select_icon)
 
         icon_layout.addWidget(self.icon_path_edit)
@@ -899,12 +793,6 @@ class ExportIMAMenuDialog(QDialog):
         self.update_icon_preview(self.menu_icon_path)
         
         settings_group = QGroupBox("iMA Menu Settings")
-        settings_group.setStyleSheet("""
-            QGroupBox {
-                color: #FFFFFF; font-weight: bold; border: 1px solid #c89f68; border-radius: 8px; margin-top: 10px;
-            }
-            QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; padding: 0 10px; left: 10px; }
-        """)
         settings_layout = QGridLayout(settings_group)
         settings_layout.setSpacing(10)
         
@@ -931,39 +819,6 @@ class ExportIMAMenuDialog(QDialog):
         self.accounts_list = QListWidget()
         self.accounts_list.setDragDropMode(QAbstractItemView.InternalMove)
         self.accounts_list.setIconSize(QSize(32, 32))
-        self.accounts_list.setStyleSheet("""
-            QListWidget {
-                background-color: #3a3637;
-                border: 1px solid #c89f68;
-                border-radius: 12px;
-                padding: 8px;
-                outline: none;
-            }
-            QListWidget::item {
-                background-color: #4f4a4b;
-                color: #e0d6d1;
-                font-weight: bold;
-                font-size: 14px;
-                border-radius: 10px;
-                padding: 8px 12px;
-                margin-bottom: 4px;
-                border: 2px dashed transparent;
-            }
-            QListWidget::item:hover {
-                background-color: #5a5556;
-                border: 2px dashed #c89f68;
-            }
-            QListWidget::item:selected {
-                background-color: #c89f68;
-                color: #2c2a2b;
-                border: 2px solid #d9b68b;
-            }
-            QListWidget::drop-indicator {
-                border: 2px dashed #c89f68;
-                border-radius: 8px;
-                background-color: rgba(200, 159, 104, 0.25);
-            }
-        """)
         self.populate_accounts(default_settings.get("ordered_accounts"))
         right_layout.addWidget(self.accounts_list)
         
@@ -972,26 +827,11 @@ class ExportIMAMenuDialog(QDialog):
         button_layout.addStretch()
 
         cancel_button = QPushButton("Cancel")
-        cancel_button.setStyleSheet("""
-            QPushButton {
-                background-color: #4f4a4b; color: #e0d6d1; font-weight: bold; 
-                border-radius: 8px; padding: 10px 20px; border: 1px solid #4f4a4b;
-            }
-            QPushButton:hover { background-color: #5a5556; border: 1px solid #c89f68; }
-            QPushButton:pressed { background-color: #454142; }
-        """)
         cancel_button.clicked.connect(self.reject)
         button_layout.addWidget(cancel_button)
 
         export_button = QPushButton("Export")
-        export_button.setStyleSheet("""
-            QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 10px 20px;
-            }
-            QPushButton:hover {
-                background-color: #d9b68b; /* Brighter coffee color */
-            }
-        """)
+        export_button.setObjectName("ApplyButton")
         export_button.clicked.connect(self.accept)
         button_layout.addWidget(export_button)
         
@@ -1067,23 +907,23 @@ class PopupDialog(QDialog):
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
         self.setAttribute(Qt.WA_TranslucentBackground)
 
-        
         self.main_widget = QWidget(objectName="popup_widget")
-        self.main_widget.setStyleSheet("#popup_widget { background-color: #2c2a2b; border-radius: 15px; border: 1px solid #c89f68; } QLabel { color: #FFFFFF; }")
         
-        popup_layout = QVBoxLayout(self.main_widget)
-        popup_layout.setContentsMargins(0, 0, 0, 0)
-        popup_layout.setSpacing(0)
-
-        self.title_bar = CustomTitleBar(title, self, is_dialog=True)
-        popup_layout.addWidget(self.title_bar)
-        
-        self.content_layout = QVBoxLayout()
-        self.content_layout.setContentsMargins(15, 10, 15, 15)
-        popup_layout.addLayout(self.content_layout)
-
         main_v_layout = QVBoxLayout(self)
-        main_v_layout.setContentsMargins(0,0,0,0)
+        main_v_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.title_bar = CustomTitleBar(title, self, is_dialog=True)
+        
+        self.content_widget = QWidget()
+        self.content_layout = QVBoxLayout(self.content_widget)
+        self.content_layout.setContentsMargins(15, 10, 15, 15)
+
+        widget_layout = QVBoxLayout(self.main_widget)
+        widget_layout.setContentsMargins(0, 0, 0, 0)
+        widget_layout.setSpacing(0)
+        widget_layout.addWidget(self.title_bar)
+        widget_layout.addWidget(self.content_widget)
+
         main_v_layout.addWidget(self.main_widget)
 
     def showEvent(self, event):
@@ -1130,11 +970,9 @@ class InputDialog(PopupDialog):
         self.in_game_tag_edit = None
 
         prompt_label = QLabel(prompt)
-        prompt_label.setStyleSheet("color: #e0d6d1;")
         self.content_layout.addWidget(prompt_label)
         
         self.input_field = QLineEdit(default_text)
-        self.input_field.setStyleSheet("background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 10px; color: #e0d6d1;")
         self.content_layout.addWidget(self.input_field)
 
         if in_game_name_default is not None or in_game_tag_default is not None:
@@ -1145,29 +983,20 @@ class InputDialog(PopupDialog):
 
             self.in_game_name_edit = QLineEdit(in_game_name_default)
             self.in_game_name_edit.setPlaceholderText("In-game Name")
-            self.in_game_name_edit.setStyleSheet("background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 10px; color: #e0d6d1;")
             in_game_name_tag_layout.addWidget(self.in_game_name_edit)
             
             in_game_name_tag_layout.addWidget(QLabel("#"))
 
             self.in_game_tag_edit = QLineEdit(in_game_tag_default)
             self.in_game_tag_edit.setPlaceholderText("Tag")
-            self.in_game_tag_edit.setStyleSheet("background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 10px; color: #e0d6d1;")
             in_game_name_tag_layout.addWidget(self.in_game_tag_edit)
             self.content_layout.addLayout(in_game_name_tag_layout)
-            self.setFixedSize(350, 250) # Adjust size for two inputs
+            self.setFixedSize(350, 250)
         else:
-            self.setFixedSize(350, 180) # Original size for one input
+            self.setFixedSize(350, 180)
         
         save_button = QPushButton("Save")
-        save_button.setStyleSheet("""
-            QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 15px; padding: 10px 20px;
-            }
-            QPushButton:hover {
-                background-color: #d9b68b; /* Brighter coffee color */
-            }
-        """)
+        save_button.setObjectName("ApplyButton")
         save_button.clicked.connect(self.accept)
         
         button_layout = QHBoxLayout()
@@ -1184,16 +1013,14 @@ class InputDialog(PopupDialog):
 class SaveAccountDialog(PopupDialog):
     def __init__(self, parent=None, switcher_instance=None):
         super().__init__("Save Account", parent)
-        self.setFixedSize(380, 300)
+        self.setFixedSize(440, 350)
         self.switcher_instance = switcher_instance
 
         name_label = QLabel("Enter a name for the current account:")
-        name_label.setStyleSheet("color: #e0d6d1; font-size: 16px; font-weight: bold; text-align: center;")
         name_label.setAlignment(Qt.AlignCenter)
         self.content_layout.addWidget(name_label)
         
         self.name_edit = QLineEdit()
-        self.name_edit.setStyleSheet("background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 10px; color: #e0d6d1;")
         self.content_layout.addWidget(self.name_edit)
 
         self.content_layout.addWidget(QLabel("Enter in-game name and tag (optional):"))
@@ -1203,45 +1030,21 @@ class SaveAccountDialog(PopupDialog):
 
         self.in_game_name_edit = QLineEdit()
         self.in_game_name_edit.setPlaceholderText("In-game Name")
-        self.in_game_name_edit.setStyleSheet("background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 10px; color: #e0d6d1;")
         in_game_name_tag_layout.addWidget(self.in_game_name_edit)
         
         in_game_name_tag_layout.addWidget(QLabel("#"))
 
         self.in_game_tag_edit = QLineEdit()
         self.in_game_tag_edit.setPlaceholderText("Tag")
-        self.in_game_tag_edit.setStyleSheet("background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 10px; color: #e0d6d1;")
         in_game_name_tag_layout.addWidget(self.in_game_tag_edit)
         self.content_layout.addLayout(in_game_name_tag_layout)
 
         self.puuid_edit = QLineEdit()
         self.puuid_edit.setPlaceholderText("PUUID (optional)")
-        self.puuid_edit.setStyleSheet("background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 10px; color: #e0d6d1;")
         self.content_layout.addWidget(self.puuid_edit)
 
         self.content_layout.addWidget(QLabel("Select Game:"))
         self.game_combo = QComboBox()
-        self.game_combo.setStyleSheet("""
-            QComboBox { 
-                background-color: #4a4647; 
-                border: 1px solid #c89f68; 
-                border-radius: 8px; 
-                padding: 8px; 
-                color: #e0d6d1; 
-                font-weight: bold;
-            }
-            QComboBox:hover { border: 1px solid #d9b68b; }
-            QComboBox::drop-down { border: none; }
-            QComboBox::down-arrow { image: none; /* Can add a custom arrow icon here */ }
-            QComboBox QAbstractItemView { 
-                background-color: #3a3637; 
-                border: 1px solid #c89f68; 
-                selection-background-color: #c89f68;
-                color: #e0d6d1;
-                selection-color: #2c2a2b;
-                padding: 5px;
-            }
-        """)
         
         valorant_icon_path = Path(get_asset_path("valorant.png"))
         lol_icon_path = Path(get_asset_path("lol.png"))
@@ -1271,26 +1074,11 @@ class SaveAccountDialog(PopupDialog):
         button_layout.addStretch()
 
         cancel_button = QPushButton("Cancel")
-        cancel_button.setStyleSheet("""
-            QPushButton {
-                background-color: #4f4a4b; color: #e0d6d1; font-weight: bold; 
-                border-radius: 8px; padding: 10px 20px; border: 1px solid #4f4a4b;
-            }
-            QPushButton:hover { background-color: #5a5556; border: 1px solid #c89f68; }
-            QPushButton:pressed { background-color: #454142; }
-        """)
         cancel_button.clicked.connect(self.reject)
         button_layout.addWidget(cancel_button)
 
         save_button = QPushButton("Save")
-        save_button.setStyleSheet("""
-            QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 15px; padding: 10px 20px;
-            }
-            QPushButton:hover {
-                background-color: #d9b68b; /* Brighter coffee color */
-            }
-        """)
+        save_button.setObjectName("ApplyButton")
         save_button.clicked.connect(self.accept)
         button_layout.addWidget(save_button)
         
@@ -1310,28 +1098,14 @@ class BackupRestoreSelectionDialog(PopupDialog):
         self.content_layout.setAlignment(Qt.AlignCenter)
 
         backup_button = QPushButton("Backup")
-        backup_button.setStyleSheet("""
-            QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 15px; padding: 10px 20px;
-            }
-            QPushButton:hover {
-                background-color: #d9b68b;
-            }
-        """)
+        backup_button.setObjectName("ApplyButton")
         backup_button.setIcon(QIcon(get_asset_path("Backup.png")))
         backup_button.setIconSize(QSize(24, 24))
         backup_button.clicked.connect(lambda: self._set_selection_and_accept("backup"))
         self.content_layout.addWidget(backup_button)
 
         restore_button = QPushButton("Restore")
-        restore_button.setStyleSheet("""
-            QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 15px; padding: 10px 20px;
-            }
-            QPushButton:hover {
-                background-color: #d9b68b;
-            }
-        """)
+        restore_button.setObjectName("ApplyButton")
         restore_button.setIcon(QIcon(get_asset_path("Restore.png")))
         restore_button.setIconSize(QSize(24, 24))
         restore_button.clicked.connect(lambda: self._set_selection_and_accept("restore"))
@@ -1355,28 +1129,14 @@ class BackupRestoreDialog(PopupDialog):
         self.content_layout.setAlignment(Qt.AlignCenter)
 
         local_button = QPushButton("Local")
-        local_button.setStyleSheet("""
-            QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 15px; padding: 10px 20px;
-            }
-            QPushButton:hover {
-                background-color: #d9b68b;
-            }
-        """)
+        local_button.setObjectName("ApplyButton")
         local_button.setIcon(QIcon(get_asset_path("Local.png")))
         local_button.setIconSize(QSize(24, 24))
         local_button.clicked.connect(lambda: self.set_selection("local"))
         self.content_layout.addWidget(local_button)
 
         google_drive_button = QPushButton("Google Drive")
-        google_drive_button.setStyleSheet("""
-            QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 15px; padding: 10px 20px;
-            }
-            QPushButton:hover {
-                background-color: #d9b68b;
-            }
-        """)
+        google_drive_button.setObjectName("ApplyButton")
         google_drive_button.setIcon(QIcon(get_asset_path("Google.png")))
         google_drive_button.setIconSize(QSize(24, 24))
         google_drive_button.clicked.connect(lambda: self.set_selection("google_drive"))
@@ -1401,26 +1161,6 @@ class SettingsDropdownMenu(QWidget):
 
         self.main_widget = QWidget(self)
         self.main_widget.setObjectName("settings_dropdown_widget")
-        self.main_widget.setStyleSheet("""
-            #settings_dropdown_widget {
-                background-color: #2c2a2b;
-                border-radius: 15px;
-                border: 1px solid #4f4a4b;
-            }
-            QPushButton {
-                background-color: #4f4a4b;
-                color: #e0d6d1;
-                font-size: 13px;
-                font-weight: bold;
-                border: none;
-                border-radius: 12px;
-                padding: 8px 12px;
-            }
-            QPushButton:hover {
-                background-color: #c89f68;
-                color: #2c2a2b;
-            }
-        """)
 
         shadow = QGraphicsDropShadowEffect(self)
         shadow.setBlurRadius(20)
@@ -1475,22 +1215,6 @@ class SettingsDropdownMenu(QWidget):
         main_layout.addLayout(row2)
 
         ima_btn = QPushButton(" iMA Menu")
-        ima_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #4f4a4b;
-                color: #e0d6d1;
-                font-size: 13px;
-                font-weight: bold;
-                border: none;
-                border-radius: 12px;
-                padding: 8px 12px;
-                text-align: left;
-            }
-            QPushButton:hover {
-                background-color: #c89f68;
-                color: #2c2a2b;
-            }
-        """)
         ima_icon = Path(get_asset_path("ima.png"))
         if ima_icon.exists():
             ima_btn.setIcon(QIcon(str(ima_icon)))
@@ -1499,22 +1223,6 @@ class SettingsDropdownMenu(QWidget):
         main_layout.addWidget(ima_btn)
 
         options_btn = QPushButton(" Options")
-        options_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #4f4a4b;
-                color: #e0d6d1;
-                font-size: 13px;
-                font-weight: bold;
-                border: none;
-                border-radius: 12px;
-                padding: 8px 12px;
-                text-align: left;
-            }
-            QPushButton:hover {
-                background-color: #c89f68;
-                color: #2c2a2b;
-            }
-        """)
         options_icon = Path(get_asset_path("Options.png"))
         if options_icon.exists():
             options_btn.setIcon(QIcon(str(options_icon)))
@@ -1651,26 +1359,6 @@ class OptionsDialog(PopupDialog):
         self.audio_controls = {}
         self.spin_boxes = {}
 
-        self.main_widget.setStyleSheet("""
-            #popup_widget { background-color: #2c2a2b; border-radius: 15px; border: 1px solid #4f4a4b; }
-            QLabel { color: #e0d6d1; font-weight: normal; }
-            QGroupBox {
-                color: #FFFFFF;
-                font-size: 13px;
-                font-weight: bold;
-                border: 1px solid #c89f68;
-                border-radius: 8px;
-                margin-top: 10px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                padding: 0 8px;
-                left: 10px;
-                color: #FFFFFF;
-            }
-        """)
-
         self.content_layout.setSpacing(10)
         
         # Horizontal Body Layout: Sidebar + Stack
@@ -1680,42 +1368,10 @@ class OptionsDialog(PopupDialog):
         # Left Sidebar Navigation List
         self.nav_list = QListWidget()
         self.nav_list.setFixedWidth(170)
-        self.nav_list.setStyleSheet("""
-            QListWidget {
-                background-color: #232122;
-                border: 1px solid #4f4a4b;
-                border-radius: 10px;
-                outline: none;
-                padding: 5px;
-            }
-            QListWidget::item {
-                color: #e0d6d1;
-                font-size: 13px;
-                font-weight: bold;
-                padding: 10px;
-                border-radius: 6px;
-                margin-bottom: 4px;
-            }
-            QListWidget::item:hover {
-                background-color: #3a3637;
-                color: #ffffff;
-            }
-            QListWidget::item:selected {
-                background-color: #c89f68;
-                color: #2c2a2b;
-            }
-        """)
         body_layout.addWidget(self.nav_list)
 
         # Right Pages Stack
         self.pages_widget = QStackedWidget()
-        self.pages_widget.setStyleSheet("""
-            QStackedWidget {
-                background-color: #343031;
-                border: 1px solid #4f4a4b;
-                border-radius: 10px;
-            }
-        """)
         body_layout.addWidget(self.pages_widget)
 
         self.content_layout.addLayout(body_layout)
@@ -1741,26 +1397,11 @@ class OptionsDialog(PopupDialog):
         button_layout.addStretch()
         
         close_button = QPushButton("Close")
-        close_button.setStyleSheet("""
-            QPushButton {
-                background-color: #4f4a4b; color: #e0d6d1; font-weight: bold; 
-                border-radius: 8px; padding: 10px 20px; border: 1px solid #4f4a4b;
-            }
-            QPushButton:hover { background-color: #5a5556; border: 1px solid #c89f68; }
-            QPushButton:pressed { background-color: #454142; }
-        """)
         close_button.clicked.connect(self.close)
         button_layout.addWidget(close_button)
 
         apply_button = QPushButton("Apply")
-        apply_button.setStyleSheet("""
-            QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 10px 20px;
-            }
-            QPushButton:hover {
-                background-color: #d9b68b;
-            }
-        """)
+        apply_button.setProperty("accent", True)
         apply_button.clicked.connect(self.apply_settings)
         button_layout.addWidget(apply_button)
         
@@ -1772,9 +1413,6 @@ class OptionsDialog(PopupDialog):
 
     def add_page(self, title, icon_file, widget):
         item = QListWidgetItem(title)
-        font = item.font()
-        font.setBold(True)
-        item.setFont(font)
         icon_p = get_asset_path(icon_file)
         if Path(icon_p).exists():
             item.setIcon(QIcon(icon_p))
@@ -1854,15 +1492,8 @@ class OptionsDialog(PopupDialog):
         notif_layout.addWidget(QLabel("Show Splash Notification:"), 0, 0)
         notif_layout.addWidget(self.show_splash_notification_toggle, 0, 1)
 
-        preview_splash_btn = QPushButton("Preview Splash")
-        preview_splash_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold;
-                border-radius: 8px; padding: 10px; border: none; font-size: 13px;
-            }
-            QPushButton:hover { background-color: #d9b68b; }
-            QPushButton:pressed { background-color: #b88f58; }
-        """)
+        preview_splash_btn = QPushButton("Preview Splash Screen")
+        preview_splash_btn.setObjectName("ApplyButton")
         preview_splash_btn.clicked.connect(self.preview_splash_screen)
         notif_layout.addWidget(preview_splash_btn, 1, 0, 1, 2)
         main_layout.addWidget(notif_group)
@@ -1881,20 +1512,9 @@ class OptionsDialog(PopupDialog):
         form_layout.setSpacing(10)
         form_layout.setLabelAlignment(Qt.AlignLeft)
         form_layout.setRowWrapPolicy(QFormLayout.WrapAllRows)
-        
-        combo_style = """
-            QComboBox { 
-                background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 8px; color: #e0d6d1; font-weight: bold;
-            }
-            QComboBox:hover { border: 1px solid #d9b68b; }
-            QComboBox QAbstractItemView { 
-                background-color: #3a3637; border: 1px solid #c89f68; selection-background-color: #c89f68; color: #e0d6d1; selection-color: #2c2a2b; padding: 5px;
-            }
-        """
 
         self.display_mode_combo = QComboBox()
         self.display_mode_combo.addItems(["Default", "Fullscreen", "Windowed Fullscreen", "Windowed"])
-        self.display_mode_combo.setStyleSheet(combo_style)
         form_layout.addRow(QLabel("Display Mode:"), self.display_mode_combo)
         
         quality_keys = [
@@ -1909,7 +1529,6 @@ class OptionsDialog(PopupDialog):
             else:
                 combo_box.addItems(["Low", "Med", "High"])
             
-            combo_box.setStyleSheet(combo_style)
             self.riot_combo_boxes[key] = combo_box
             form_layout.addRow(QLabel(self.riot_quality_settings_map[key] + ":"), combo_box)
         
@@ -1971,18 +1590,9 @@ class OptionsDialog(PopupDialog):
         
         preset_buttons_layout = QHBoxLayout()
         recommended_button = QPushButton("Recommended (Low)")
+        recommended_button.setObjectName("ApplyButton")
         default_button = QPushButton("Default (High)")
-        
-        preset_style = """
-            QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold; 
-                border-radius: 8px; padding: 8px; border: 1px solid #c89f68;
-            }
-            QPushButton:hover { background-color: #d9b68b; }
-            QPushButton:pressed { background-color: #b88f58; }
-        """
-        recommended_button.setStyleSheet(preset_style)
-        default_button.setStyleSheet(preset_style)
+        default_button.setObjectName("ApplyButton")
         
         recommended_button.clicked.connect(lambda: self.set_all_qualities(0))
         default_button.clicked.connect(lambda: self.set_all_qualities(3))
@@ -2006,7 +1616,6 @@ class OptionsDialog(PopupDialog):
             
             spin_box = QSpinBox()
             spin_box.setRange(0, 3)
-            spin_box.setStyleSheet("QSpinBox { background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 5px; color: #e0d6d1; }")
             spin_box.setFixedWidth(60)
             self.spin_boxes[key] = spin_box
             grid_layout.addWidget(spin_box, row, col + 1, Qt.AlignLeft)
@@ -2014,13 +1623,6 @@ class OptionsDialog(PopupDialog):
         layout.addLayout(grid_layout)
 
         riot_client_group = QGroupBox("Riot Client Behavior")
-        riot_client_group.setStyleSheet("""
-            QGroupBox {
-                color: #FFFFFF; font-size: 13px; font-weight: bold;
-                border: 1px solid #c89f68; border-radius: 8px; margin-top: 10px;
-            }
-            QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; padding: 0 10px; left: 10px; color: #FFFFFF; }
-        """)
         riot_client_layout = QGridLayout(riot_client_group)
         riot_client_layout.setSpacing(10)
 
@@ -2048,7 +1650,6 @@ class OptionsDialog(PopupDialog):
         """
 
         top_group = QGroupBox("Show in UI")
-        top_group.setStyleSheet(group_style)
         top_layout = QGridLayout(top_group)
         top_layout.setSpacing(10)
 
@@ -2077,23 +1678,20 @@ class OptionsDialog(PopupDialog):
         top_layout.addWidget(self.show_last_match_info_toggle, 5, 1)
 
         bottom_group = QGroupBox("Layout Settings")
-        bottom_group.setStyleSheet(group_style)
         bottom_layout = QGridLayout(bottom_group)
         bottom_layout.setSpacing(10)
 
         bottom_layout.addWidget(QLabel("Grid Size (Columns):"), 0, 0)
         self.grid_size_combo = QComboBox()
         self.grid_size_combo.addItems(["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"])
-        self.grid_size_combo.setStyleSheet("""
-            QComboBox { 
-                background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 8px; color: #e0d6d1; font-weight: bold;
-            }
-            QComboBox:hover { border: 1px solid #d9b68b; }
-            QComboBox QAbstractItemView { 
-                background-color: #3a3637; border: 1px solid #c89f68; selection-background-color: #c89f68; color: #e0d6d1; selection-color: #2c2a2b; padding: 5px;
-            }
-        """)
         bottom_layout.addWidget(self.grid_size_combo, 0, 1)
+
+        bottom_layout.addWidget(QLabel("UI Theme:"), 1, 0)
+        self.theme_combo = QComboBox()
+        themes_map = get_available_themes()
+        for key, name in themes_map.items():
+            self.theme_combo.addItem(name, key)
+        bottom_layout.addWidget(self.theme_combo, 1, 1)
 
         main_layout.addWidget(top_group)
         main_layout.addWidget(bottom_group)
@@ -2164,13 +1762,11 @@ class OptionsDialog(PopupDialog):
         bg_bar.setSpacing(6)
         bg_bar.addWidget(QLabel("BG:"))
         self.ch_bg_combo = QComboBox()
-        self.ch_bg_combo.setStyleSheet(combo_style)
         self.ch_bg_combo.addItems(["Dark Grid", "Light Grid"])
         bg_bar.addWidget(self.ch_bg_combo)
 
         bg_bar.addWidget(QLabel("Zoom:"))
         self.ch_zoom_combo = QComboBox()
-        self.ch_zoom_combo.setStyleSheet(combo_style)
         self.ch_zoom_combo.addItems(["1x", "2x"])
         bg_bar.addWidget(self.ch_zoom_combo)
         left_col.addLayout(bg_bar)
@@ -2180,15 +1776,6 @@ class OptionsDialog(PopupDialog):
 
         self.ch_controls_tab = QTabWidget()
         self.ch_controls_tab.setUsesScrollButtons(False)
-        self.ch_controls_tab.setStyleSheet("""
-            QTabWidget::pane { border: 1px solid #4f4a4b; border-radius: 6px; background-color: #2c2a2b; }
-            QTabBar::tab { 
-                background: #3a3637; color: #b0a6a0; padding: 4px 6px; 
-                border-top-left-radius: 4px; border-top-right-radius: 4px; 
-                font-size: 10px; font-weight: bold; min-width: 50px;
-            }
-            QTabBar::tab:selected { background: #c89f68; color: #2c2a2b; }
-        """)
 
         # Tab 1: Primary & Color
         tab_color = QWidget()
@@ -2196,16 +1783,13 @@ class OptionsDialog(PopupDialog):
         layout_color.setSpacing(6)
         
         self.ch_color_combo = QComboBox()
-        self.ch_color_combo.setStyleSheet(combo_style)
         self.ch_color_combo.addItems(["White", "Green", "Yellow Green", "Green Yellow", "Yellow", "Cyan", "Pink", "Red", "Custom Hex"])
         layout_color.addRow(QLabel("Color Preset:"), self.ch_color_combo)
 
         self.ch_custom_hex_edit = QLineEdit("#00FF88FF")
-        self.ch_custom_hex_edit.setStyleSheet("QLineEdit { background-color: #4a4647; border: 1px solid #c89f68; border-radius: 4px; padding: 4px; color: #e0d6d1; }")
         layout_color.addRow(QLabel("Custom Hex:"), self.ch_custom_hex_edit)
 
         self.ch_dot_enable_cb = QCheckBox("Enable Center Dot")
-        self.ch_dot_enable_cb.setStyleSheet("color: #e0d6d1; font-weight: bold;")
         layout_color.addRow(self.ch_dot_enable_cb)
 
         self.ch_dot_opacity_slider = ValueSlider(0, 100)
@@ -2222,7 +1806,6 @@ class OptionsDialog(PopupDialog):
         layout_outlines.setSpacing(6)
 
         self.ch_outline_enable_cb = QCheckBox("Enable Outlines")
-        self.ch_outline_enable_cb.setStyleSheet("color: #e0d6d1; font-weight: bold;")
         layout_outlines.addRow(self.ch_outline_enable_cb)
 
         self.ch_outline_opacity_slider = ValueSlider(0, 100)
@@ -2239,7 +1822,6 @@ class OptionsDialog(PopupDialog):
         layout_inner.setSpacing(5)
 
         self.ch_inner_enable_cb = QCheckBox("Show Inner Lines")
-        self.ch_inner_enable_cb.setStyleSheet("color: #e0d6d1; font-weight: bold;")
         layout_inner.addRow(self.ch_inner_enable_cb)
 
         self.ch_inner_opacity_slider = ValueSlider(0, 100)
@@ -2255,7 +1837,6 @@ class OptionsDialog(PopupDialog):
         layout_inner.addRow(QLabel("Offset:"), self.ch_inner_off_slider)
 
         self.ch_inner_top_cb = QCheckBox("Show Top Line")
-        self.ch_inner_top_cb.setStyleSheet("color: #e0d6d1;")
         layout_inner.addRow(self.ch_inner_top_cb)
 
         self.ch_controls_tab.addTab(tab_inner, "Inner")
@@ -2266,7 +1847,6 @@ class OptionsDialog(PopupDialog):
         layout_outer.setSpacing(5)
 
         self.ch_outer_enable_cb = QCheckBox("Show Outer Lines")
-        self.ch_outer_enable_cb.setStyleSheet("color: #e0d6d1; font-weight: bold;")
         layout_outer.addRow(self.ch_outer_enable_cb)
 
         self.ch_outer_opacity_slider = ValueSlider(0, 100)
@@ -2282,7 +1862,6 @@ class OptionsDialog(PopupDialog):
         layout_outer.addRow(QLabel("Offset:"), self.ch_outer_off_slider)
 
         self.ch_outer_top_cb = QCheckBox("Show Top Line")
-        self.ch_outer_top_cb.setStyleSheet("color: #e0d6d1;")
         layout_outer.addRow(self.ch_outer_top_cb)
 
         self.ch_controls_tab.addTab(tab_outer, "Outer")
@@ -2348,24 +1927,16 @@ class OptionsDialog(PopupDialog):
         """
 
         group_box = QGroupBox("App Version & Updates", updates_tab)
-        group_box.setStyleSheet(group_style)
         group_layout = QVBoxLayout(group_box)
         group_layout.setSpacing(12)
         group_layout.setContentsMargins(15, 20, 15, 15)
 
         from game_switcher import APP_VERSION
         version_label = QLabel(f"<b>Current Version:</b> v{APP_VERSION}")
-        version_label.setStyleSheet("font-size: 14px; color: #e0d6d1;")
         group_layout.addWidget(version_label)
 
         check_btn = QPushButton("Check for Updates")
-        check_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold;
-                border-radius: 8px; padding: 10px 20px; font-size: 13px;
-            }
-            QPushButton:hover { background-color: #d9b68b; }
-        """)
+        check_btn.setObjectName("ApplyButton")
         self.update_check_btn = check_btn
         check_btn.clicked.connect(lambda: self.open_update_dialog(source_button=self.update_check_btn))
         group_layout.addWidget(check_btn)
@@ -2373,23 +1944,12 @@ class OptionsDialog(PopupDialog):
         main_layout.addWidget(group_box)
 
         changelog_box = QGroupBox("Changelog", updates_tab)
-        changelog_box.setStyleSheet(group_style)
         changelog_layout = QVBoxLayout(changelog_box)
         changelog_layout.setSpacing(10)
         changelog_layout.setContentsMargins(15, 20, 15, 15)
 
         changelog_edit = QTextEdit()
         changelog_edit.setReadOnly(True)
-        changelog_edit.setStyleSheet("""
-            QTextEdit {
-                background-color: #242223;
-                color: #e0d6d1;
-                border: 1px solid #4f4a4b;
-                border-radius: 8px;
-                padding: 10px;
-                font-size: 12px;
-            }
-        """)
         
         cl_path = get_asset_path("CHANGELOG.md")
         if os.path.exists(cl_path):
@@ -2674,6 +2234,7 @@ class OptionsDialog(PopupDialog):
             "grid_size": int(self.grid_size_combo.currentText()) if hasattr(self, 'grid_size_combo') else 4,
             "show_splash_notification": self.show_splash_notification_toggle.get_state() if hasattr(self, 'show_splash_notification_toggle') else True,
             "show_riot_client": self.show_riot_client_toggle.get_state() if hasattr(self, 'show_riot_client_toggle') else False,
+            "theme": self.theme_combo.currentData() if hasattr(self, 'theme_combo') else "dark_gold",
             "unified_settings_enabled": self.unified_enabled_toggle.get_state() if hasattr(self, 'unified_enabled_toggle') else False,
             "master_account": self.master_account_combo.currentText() if hasattr(self, 'master_account_combo') else "",
             "sync_keybinds": self.sync_keybinds_toggle.get_state() if hasattr(self, 'sync_keybinds_toggle') else False,
@@ -2689,6 +2250,12 @@ class OptionsDialog(PopupDialog):
         self.switcher.save_graphics_settings(settings_to_save)
         success, message = self.switcher.update_all_game_user_settings(settings_to_save)
         self.switcher.update_ima_menu_if_enabled('update', None)
+
+        if hasattr(self, 'theme_combo'):
+            selected_theme = self.theme_combo.currentData()
+            apply_theme_to_app(QApplication.instance(), selected_theme)
+            if self.parent():
+                apply_theme_to_app(self.parent(), selected_theme)
 
         if hasattr(self, 'on_save_crosshairs_clicked'):
             self.on_save_crosshairs_clicked()
@@ -2752,6 +2319,11 @@ class OptionsDialog(PopupDialog):
         if hasattr(self, 'show_last_game_rr_toggle'): self.show_last_game_rr_toggle.set_state(ui_settings.get("show_last_game_rr", True))
         if hasattr(self, 'show_last_match_info_toggle'): self.show_last_match_info_toggle.set_state(ui_settings.get("show_last_match_info", True))
         if hasattr(self, 'grid_size_combo'): self.grid_size_combo.setCurrentText(str(ui_settings.get("grid_size", 4)))
+        if hasattr(self, 'theme_combo'):
+            saved_theme = ui_settings.get("theme", "dark_gold")
+            idx = self.theme_combo.findData(saved_theme)
+            if idx >= 0:
+                self.theme_combo.setCurrentIndex(idx)
         if hasattr(self, 'show_splash_notification_toggle'): self.show_splash_notification_toggle.set_state(ui_settings.get("show_splash_notification", True))
         if hasattr(self, 'show_riot_client_toggle'): self.show_riot_client_toggle.set_state(ui_settings.get("show_riot_client", False))
         
@@ -2827,10 +2399,7 @@ class CustomTitleBar(QWidget):
         self.parent_window = parent
         self.setFixedHeight(44)
 
-        if is_dialog:
-            self.setStyleSheet("background-color: #2c2a2b; border-top-left-radius: 20px; border-top-right-radius: 20px; border-bottom: 1px solid #4f4a4b;")
-        else:
-            self.setStyleSheet("background-color: #2c2a2b; border-top-left-radius: 20px; border-top-right-radius: 20px;")
+        self.setObjectName("CustomTitleBar")
         
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 0, 12, 0)
@@ -2848,28 +2417,28 @@ class CustomTitleBar(QWidget):
             layout.addWidget(self.logo_label)
 
             self.settings_button = HoverButton()
+            self.settings_button.setObjectName("HeaderButton")
             self.settings_button.setFixedSize(30, 30)
             self.settings_button.setIconSize(QSize(18, 18))
-            self.settings_button.setStyleSheet("QPushButton { background-color: #4f4a4b; border: none; border-radius: 15px; } QPushButton:hover { background-color: #c89f68; }")
             if hasattr(parent, 'create_gear_icon'):
-                self.settings_button.setIcon(parent.create_gear_icon(QColor("#e0d6d1")))
+                self.settings_button.setIcon(parent.create_gear_icon())
             layout.addWidget(self.settings_button)
 
             layout.addStretch()
 
             self.status_label = QLabel("Ready")
-            self.status_label.setStyleSheet("color: #e0d6d1; font-size: 12px; font-weight: bold; background: transparent;")
+            self.status_label.setObjectName("StatusLabel")
             self.status_label.setAlignment(Qt.AlignCenter)
             layout.addWidget(self.status_label)
 
             layout.addStretch()
 
             self.add_account_button = HoverButton()
+            self.add_account_button.setObjectName("HeaderButton")
             self.add_account_button.setFixedSize(30, 30)
             self.add_account_button.setIconSize(QSize(18, 18))
-            self.add_account_button.setStyleSheet("QPushButton { background-color: #4f4a4b; border: none; border-radius: 15px; } QPushButton:hover { background-color: #c89f68; }")
             if hasattr(parent, 'create_add_icon'):
-                self.add_account_button.setIcon(parent.create_add_icon(QColor("#e0d6d1"), QColor("#c89f68")))
+                self.add_account_button.setIcon(parent.create_add_icon())
             add_shadow = QGraphicsDropShadowEffect(self)
             add_shadow.setBlurRadius(15)
             add_shadow.setColor(QColor(0, 0, 0, 160))
@@ -2879,9 +2448,9 @@ class CustomTitleBar(QWidget):
 
             refresh_icon_path = get_asset_path("Refresh.png")
             self.refresh_button = QPushButton(QIcon(refresh_icon_path), "")
+            self.refresh_button.setObjectName("HeaderButton")
             self.refresh_button.setFixedSize(30, 30)
             self.refresh_button.setIconSize(QSize(18, 18))
-            self.refresh_button.setStyleSheet("QPushButton { background-color: #4f4a4b; border: none; border-radius: 15px; } QPushButton:hover { background-color: #c89f68; }")
             refresh_shadow = QGraphicsDropShadowEffect(self)
             refresh_shadow.setBlurRadius(15)
             refresh_shadow.setColor(QColor(0, 0, 0, 160))
@@ -2890,8 +2459,8 @@ class CustomTitleBar(QWidget):
             layout.addWidget(self.refresh_button)
 
             self.minimize_button = QPushButton("−")
+            self.minimize_button.setObjectName("HeaderButton")
             self.minimize_button.setFixedSize(30, 30)
-            self.minimize_button.setStyleSheet("QPushButton { background-color: #4f4a4b; color: #e0d6d1; font-size: 18px; font-weight: bold; border: none; border-radius: 15px; } QPushButton:hover { background-color: #c89f68; }")
             self.minimize_button.clicked.connect(self.parent_window.showMinimized)
             minimize_shadow = QGraphicsDropShadowEffect(self)
             minimize_shadow.setBlurRadius(15)
@@ -2902,6 +2471,7 @@ class CustomTitleBar(QWidget):
 
             x_icon_path = get_asset_path("x.png")
             close_button = QPushButton()
+            close_button.setObjectName("CloseButton")
             if os.path.exists(x_icon_path):
                 close_button.setIcon(QIcon(x_icon_path))
                 close_button.setIconSize(QSize(14, 14))
@@ -2909,7 +2479,6 @@ class CustomTitleBar(QWidget):
                 close_button.setText("✕")
             close_button.setFixedSize(30, 30)
             close_button.clicked.connect(self.parent_window.close)
-            close_button.setStyleSheet("QPushButton { background-color: #f38ba8; border: none; border-radius: 15px; } QPushButton:hover { background-color: #e67e80; }")
             close_shadow = QGraphicsDropShadowEffect(self)
             close_shadow.setBlurRadius(15)
             close_shadow.setColor(QColor(0, 0, 0, 160))
@@ -2919,13 +2488,14 @@ class CustomTitleBar(QWidget):
 
         else:
             title_label = QLabel(title)
-            title_label.setStyleSheet("color: #e0d6d1; font-size: 15px; font-weight: bold; background: transparent;")
+            title_label.setObjectName("TitleLabel")
             layout.addWidget(title_label)
 
             layout.addStretch()
 
             x_icon_path = get_asset_path("x.png")
             close_button = QPushButton()
+            close_button.setObjectName("CloseButton")
             if os.path.exists(x_icon_path):
                 close_button.setIcon(QIcon(x_icon_path))
                 close_button.setIconSize(QSize(14, 14))
@@ -3051,9 +2621,6 @@ class IconPickerDialog(PopupDialog):
         # --- Main Layout and Styling ---
         self.content_layout.setSpacing(15)
         self.content_layout.setAlignment(Qt.AlignTop)
-        self.main_widget.setStyleSheet("""#popup_widget { background-color: #2c2a2b; border-radius: 15px; border: 1px solid #4f4a4b; }
-            QLabel { color: #e0d6d1; font-weight: bold; }
-            QScrollArea { background-color: #3a3637; border: 1px solid #4f4a4b; border-radius: 10px; }""")
 
         # --- Icon Preview Section ---
         preview_container = QWidget()
@@ -3073,8 +2640,7 @@ class IconPickerDialog(PopupDialog):
         # The remove button is also a child, moved to the corner and raised
         self.remove_button = QPushButton("✕", self.icon_display_widget)
         self.remove_button.setFixedSize(24, 24)
-        self.remove_button.setStyleSheet("""QPushButton { background-color: #f38ba8; color: white; font-size: 14px; font-weight: bold; border-radius: 12px; border: 1px solid transparent; }
-            QPushButton:hover { background-color: #e67e80; border-color: white; }""")
+        self.remove_button.setObjectName("CloseButton")
         self.remove_button.clicked.connect(self.remove_icon)
         self.remove_button.move(5, 5)  # Top-left corner
         self.remove_button.raise_()
@@ -3087,8 +2653,7 @@ class IconPickerDialog(PopupDialog):
         scroll_area.setWidgetResizable(True)
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
-        grid_container = QWidget()
-        grid_container.setStyleSheet("background-color: #3a3637;")
+        grid_container = QWidget(objectName="grid_container")
         self.grid_layout = QGridLayout(grid_container)
         self.grid_layout.setSpacing(15)
         self.grid_layout.setContentsMargins(15, 15, 15, 15)
@@ -3102,14 +2667,11 @@ class IconPickerDialog(PopupDialog):
         button_layout.addStretch()
 
         cancel_button = QPushButton("Cancel")
-        cancel_button.setStyleSheet("""QPushButton { background-color: #4f4a4b; color: #e0d6d1; font-weight: bold; border-radius: 8px; padding: 10px 20px; border: 1px solid #4f4a4b;}
-            QPushButton:hover { background-color: #5a5556; border: 1px solid #c89f68; }""")
         cancel_button.clicked.connect(self.reject)
         button_layout.addWidget(cancel_button)
 
         save_button = QPushButton("Save")
-        save_button.setStyleSheet("""QPushButton { background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 10px 20px; }
-            QPushButton:hover { background-color: #d9b68b; }""")
+        save_button.setObjectName("ApplyButton")
         save_button.clicked.connect(self.accept)
         button_layout.addWidget(save_button)
         
@@ -3157,7 +2719,6 @@ class IconPickerDialog(PopupDialog):
 
         icon_button.setIcon(QIcon(circular_pixmap))
         icon_button.setIconSize(QSize(60, 60))
-        icon_button.setStyleSheet("QPushButton { border: 2px solid transparent; border-radius: 35px; } QPushButton:hover { border-color: #c89f68; }")
         icon_button.clicked.connect(lambda: self.set_selected_icon(icon_path))
         return icon_button
 
@@ -3183,8 +2744,6 @@ class IconPickerDialog(PopupDialog):
             self.icon_preview_button.setIcon(QIcon(circular_pixmap))
             self.icon_preview_button.setText("")
             self.icon_preview_button.setIconSize(QSize(size, size))
-            self.icon_preview_button.setStyleSheet("""QPushButton { border: 2px solid transparent; border-radius: 60px; }
-                QPushButton:hover { border-color: #d9b68b; }""")
             self.remove_button.setVisible(True)
         else:
             self.icon_preview_button.setIcon(QIcon())
@@ -3375,13 +2934,6 @@ class AccountWidget(QWidget):
         self.is_selected, self.is_hovered = False, False
         self.is_add_button = is_add_button
         self.icon = icon  # Store the icon
-        self.setStyleSheet("""QWidget#AccountWidget { background-color: #3a3637; border-radius: 20px; border: 3px solid transparent; } 
-                              QWidget#AccountWidget[selected="true"] { border-color: #c89f68; } 
-                              QLabel#NameLabel { color: #e0d6d1; font-size: 13px; font-weight: bold; } 
-                              QWidget#AccountWidget[selected="true"] QLabel#NameLabel { color: #c89f68; } 
-                              QWidget#AccountWidget[is_add_button="true"] { background-color: #4f4a4b; border: 3px dashed #c89f68; border-radius: 20px; } 
-                              QWidget#AccountWidget[is_add_button="true"]:hover { background-color: #5a5556; } 
-                              QWidget#AccountWidget[is_add_button="true"] QLabel#NameLabel { color: #c89f68; }""")
         self.init_ui(icon)
 
         shadow = QGraphicsDropShadowEffect(self)
@@ -3443,9 +2995,8 @@ class AccountWidget(QWidget):
         self._add_shadow_effect(self.last_game_rr_label)
         self.main_layout.addWidget(self.last_game_rr_label, 0, Qt.AlignCenter)
 
-        self.last_match_label = QLabel(self)
+        self.last_match_label = QLabel(self, objectName="LastMatchLabel")
         self.last_match_label.setAlignment(Qt.AlignCenter)
-        self.last_match_label.setStyleSheet("color: #c89f68; font-size: 11px; background-color: #2a2728; border-radius: 12px; padding: 4px 10px; border: 1px solid #4f4a4b;")
         self.last_match_label.setVisible(False)
         self._add_shadow_effect(self.last_match_label)
         self.main_layout.addWidget(self.last_match_label, 0, Qt.AlignCenter)
@@ -4181,22 +3732,12 @@ class AccountHistoryDialog(PopupDialog):
             QLabel { color: #e0d6d1; }
         """)
 
-        header_widget = QWidget()
-        header_widget.setStyleSheet("background-color: #343031; border-radius: 10px; border: 1px solid #4f4a4b;")
+        header_widget = QWidget(objectName="HistoryHeaderWidget")
         header_layout = QHBoxLayout(header_widget)
         header_layout.setContentsMargins(12, 8, 12, 8)
         header_layout.setSpacing(10)
 
         self.account_combo = QComboBox()
-        self.account_combo.setStyleSheet("""
-            QComboBox { 
-                background-color: #4a4647; border: 1px solid #c89f68; border-radius: 6px; padding: 4px 10px; color: #e0d6d1; font-weight: bold; font-size: 13px;
-            }
-            QComboBox:hover { border: 1px solid #d9b68b; }
-            QComboBox QAbstractItemView { 
-                background-color: #3a3637; border: 1px solid #c89f68; selection-background-color: #c89f68; color: #e0d6d1; selection-color: #2c2a2b; padding: 4px;
-            }
-        """)
         self.populate_account_combo()
         self.account_combo.currentIndexChanged.connect(self.on_account_combo_changed)
         header_layout.addWidget(self.account_combo, 2)
@@ -4206,17 +3747,12 @@ class AccountHistoryDialog(PopupDialog):
         header_layout.addWidget(self.rank_icon_label)
 
         self.rank_rr_label = QLabel()
-        self.rank_rr_label.setStyleSheet("font-size: 13px; color: #ffffff; font-weight: bold;")
         header_layout.addWidget(self.rank_rr_label, 2)
 
         header_layout.addStretch()
 
         self.refresh_btn = QPushButton("Refresh History")
-        self.refresh_btn.setStyleSheet("""
-            QPushButton { background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 6px 15px; border: none; }
-            QPushButton:hover { background-color: #d9b68b; }
-            QPushButton:disabled { background-color: #5a5556; color: #888888; }
-        """)
+        self.refresh_btn.setObjectName("ApplyButton")
         self.refresh_btn.clicked.connect(lambda: self.load_history(force_refresh=True))
         header_layout.addWidget(self.refresh_btn)
 
@@ -4295,12 +3831,6 @@ class AccountHistoryDialog(PopupDialog):
 
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
-        self.scroll_area.setStyleSheet("""
-            QScrollArea { background-color: transparent; border: none; }
-            QScrollBar:vertical { border: none; background-color: #2c2a2b; width: 10px; }
-            QScrollBar::handle:vertical { background-color: #c89f68; min-height: 25px; border-radius: 5px; }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
-        """)
 
         self.matches_container = QWidget()
         self.matches_container.setStyleSheet("background-color: transparent;")
@@ -4314,7 +3844,7 @@ class AccountHistoryDialog(PopupDialog):
 
         self.status_label = QLabel("Loading match history...")
         self.status_label.setAlignment(Qt.AlignCenter)
-        self.status_label.setStyleSheet("font-size: 14px; color: #c89f68; padding: 20px;")
+        self.status_label.setStyleSheet("font-size: 14px; font-weight: bold; padding: 20px;")
         self.matches_layout.addWidget(self.status_label)
 
         self.stacked_widget.addWidget(page)
@@ -4327,15 +3857,12 @@ class AccountHistoryDialog(PopupDialog):
 
         top_bar = QHBoxLayout()
         self.back_btn = QPushButton("← Back to Matches")
-        self.back_btn.setStyleSheet("""
-            QPushButton { background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 6px; padding: 6px 14px; border: none; }
-            QPushButton:hover { background-color: #d9b68b; }
-        """)
+        self.back_btn.setObjectName("ApplyButton")
         self.back_btn.clicked.connect(lambda: self.stacked_widget.setCurrentIndex(0))
         top_bar.addWidget(self.back_btn)
 
         self.detail_header_label = QLabel("Match Scoreboard")
-        self.detail_header_label.setStyleSheet("font-size: 15px; font-weight: bold; color: #ffffff;")
+        self.detail_header_label.setStyleSheet("font-size: 15px; font-weight: bold;")
         top_bar.addWidget(self.detail_header_label)
         top_bar.addStretch()
 
@@ -4343,12 +3870,6 @@ class AccountHistoryDialog(PopupDialog):
 
         self.detail_scroll = QScrollArea()
         self.detail_scroll.setWidgetResizable(True)
-        self.detail_scroll.setStyleSheet("""
-            QScrollArea { background-color: transparent; border: none; }
-            QScrollBar:vertical { border: none; background-color: #2c2a2b; width: 10px; }
-            QScrollBar::handle:vertical { background-color: #c89f68; min-height: 25px; border-radius: 5px; }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
-        """)
 
         self.detail_container = QWidget()
         self.detail_container.setStyleSheet("background-color: transparent;")
@@ -4397,37 +3918,28 @@ class AccountHistoryDialog(PopupDialog):
         card.setCursor(Qt.PointingHandCursor)
         result = match.get("result", "DRAW").upper()
         if result == "WIN":
-            bg_color = "#1e3025"
-            border_color = "#40a060"
-            result_color = "#a6e3a1"
+            bg_color = "rgba(46, 125, 50, 0.25)"
+            border_color = "#2e7d32"
+            result_color = "#4caf50"
         elif result == "LOSS":
-            bg_color = "#351e24"
-            border_color = "#a04050"
-            result_color = "#f38ba8"
+            bg_color = "rgba(198, 40, 40, 0.25)"
+            border_color = "#c62828"
+            result_color = "#ef5350"
         else:
-            bg_color = "#282933"
-            border_color = "#585b70"
-            result_color = "#9399b2"
+            bg_color = "rgba(158, 158, 158, 0.25)"
+            border_color = "#757575"
+            result_color = "#b0bec5"
 
         card.setStyleSheet(f"""
             #MatchCard {{
                 background-color: {bg_color};
-                border: 1px solid {border_color};
-                border-radius: 10px;
-            }}
-            #MatchCard:hover {{
-                border: 1px solid #c89f68;
-                background-color: #383435;
-            }}
-            #MatchCard QLabel {{
-                color: #e0d6d1;
-                border: none;
-                background: transparent;
+                border: 1.5px solid {border_color};
+                border-radius: 14px;
             }}
         """)
 
         layout = QHBoxLayout(card)
-        layout.setContentsMargins(15, 10, 15, 10)
+        layout.setContentsMargins(15, 12, 15, 12)
         layout.setSpacing(15)
 
         res_layout = QVBoxLayout()
@@ -4437,19 +3949,19 @@ class AccountHistoryDialog(PopupDialog):
 
         score_text = match.get("score", "-")
         score_label = QLabel(score_text)
-        score_label.setStyleSheet("font-size: 13px; font-weight: bold; color: #ffffff;")
+        score_label.setStyleSheet("font-size: 13px; font-weight: bold;")
         res_layout.addWidget(score_label)
         layout.addLayout(res_layout, 1)
 
         map_layout = QVBoxLayout()
         map_name = match.get("map", "Unknown Map")
         map_label = QLabel(f"📍 <b>{map_name}</b>")
-        map_label.setStyleSheet("font-size: 13px; color: #ffffff;")
+        map_label.setStyleSheet("font-size: 13px;")
         map_layout.addWidget(map_label)
 
         mode_name = match.get("mode", "Competitive")
         mode_label = QLabel(mode_name)
-        mode_label.setStyleSheet("font-size: 11px; color: #b0a8a8;")
+        mode_label.setStyleSheet("font-size: 11px; opacity: 0.8;")
         map_layout.addWidget(mode_label)
         layout.addLayout(map_layout, 2)
 
@@ -4457,29 +3969,29 @@ class AccountHistoryDialog(PopupDialog):
         agent_name = match.get("agent", "Agent")
         agent_icon = get_agent_icon_html(agent_name, self.switcher.base_dir) if self.switcher else "⚔️ "
         agent_label = QLabel(f"{agent_icon}<b>{agent_name}</b>")
-        agent_label.setStyleSheet("font-size: 13px; color: #c89f68;")
+        agent_label.setStyleSheet("font-size: 13px; font-weight: bold;")
         agent_layout.addWidget(agent_label)
 
         kda_text = match.get("kda", "-")
         kda_label = QLabel(f"KDA: {kda_text}")
-        kda_label.setStyleSheet("font-size: 12px; color: #e0d6d1;")
+        kda_label.setStyleSheet("font-size: 12px;")
         agent_layout.addWidget(kda_label)
         layout.addLayout(agent_layout, 2)
 
         time_layout = QVBoxLayout()
         kd_ratio = match.get("kd", "-")
         kd_label = QLabel(f"KD: {kd_ratio}")
-        kd_label.setStyleSheet("font-size: 12px; font-weight: bold; color: #ffffff;")
+        kd_label.setStyleSheet("font-size: 12px; font-weight: bold;")
         time_layout.addWidget(kd_label)
 
         date_text = match.get("date", "")
         date_label = QLabel(date_text)
-        date_label.setStyleSheet("font-size: 10px; color: #888888;")
+        date_label.setStyleSheet("font-size: 10px; opacity: 0.7;")
         time_layout.addWidget(date_label)
         layout.addLayout(time_layout, 1)
 
         arrow_label = QLabel("➔")
-        arrow_label.setStyleSheet("font-size: 16px; color: #c89f68; font-weight: bold;")
+        arrow_label.setStyleSheet("font-size: 16px; font-weight: bold;")
         layout.addWidget(arrow_label)
 
         def on_click(event):

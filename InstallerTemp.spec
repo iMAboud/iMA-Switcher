@@ -17,7 +17,7 @@ a = Analysis(
     binaries=[],
     datas=datas_list,
     hiddenimports=[
-        'game_switcher', 'actions_context', 'actions_settings', 'ui_components', 'updater', 'win32com.client', 'requests',
+        'game_switcher', 'actions_context', 'actions_settings', 'ui_components', 'theme_manager', 'updater', 'win32com.client', 'requests',
         'googleapiclient', 'google_auth_oauthlib', 'google.auth.transport.requests', 'jsonschema',
         'google_auth_oauthlib.flow', 'googleapiclient.discovery', 'googleapiclient.http', 'google.oauth2.credentials',
         'wsgiref', 'wsgiref.simple_server'

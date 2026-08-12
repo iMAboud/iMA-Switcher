@@ -20,7 +20,7 @@ from pathlib import Path
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import QEvent
 
-APP_VERSION = "1.0.27"
+APP_VERSION = "1.0.29"
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -73,7 +73,8 @@ class GameSwitcher:
                     "show_current_rr": {"type": "boolean"},
                     "show_last_game_rr": {"type": "boolean"},
                     "show_splash_notification": {"type": "boolean"},
-                    "show_riot_client": {"type": "boolean"}
+                    "show_riot_client": {"type": "boolean"},
+                    "theme": {"type": "string"}
                 },
                 "required": [
                     "show_game_icons", "show_rank_tips", "tip_delay", "use_rank_icons",
@@ -135,7 +136,8 @@ class GameSwitcher:
             "show_current_rr": True,
             "show_last_game_rr": True,
             "show_splash_notification": True,
-            "show_riot_client": False
+            "show_riot_client": False,
+            "theme": "dark_gold"
         },
         "graphics_settings": {
             "display_mode": "Default",
@@ -2519,4 +2521,4 @@ del "%~f0" > NUL 2>&1
 
         creation_flags = 0x08000000 if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
         subprocess.Popen(["cmd.exe", "/c", str(batch_script_path)], creationflags=creation_flags)
-        QApplication.instance().quit()
+        QApplication.instance().quit()
