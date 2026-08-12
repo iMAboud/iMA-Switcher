@@ -3,7 +3,7 @@
 
 import os
 
-datas_list = [('Assets', 'Assets'), ('icons', 'icons'), ('Agents', 'Agents')]
+datas_list = [('Assets', 'Assets'), ('icons', 'icons'), ('Agents', 'Agents'), ('maps', 'maps')]
 if os.path.exists('credentials.json'):
     datas_list.append(('credentials.json', '.'))
 if os.path.exists('commit.txt'):
