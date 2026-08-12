@@ -37,8 +37,10 @@ from PyQt5.QtWidgets import (
     QInputDialog,
     QProgressBar,
     QTextEdit,
+    QStyle,
+    QStyleOption,
 )
-from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QPainterPath
+from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QPainterPath, QLinearGradient
 from PyQt5.QtCore import (
     Qt,
     QSize,
@@ -55,6 +57,9 @@ from PyQt5.QtCore import (
     QEvent,
     QObject,
 )
+
+
+from theme_manager import get_available_themes, apply_theme_to_app, get_current_theme_key, get_theme
 
 
 def get_asset_path(filename):
@@ -575,29 +580,6 @@ class ValueSlider(QWidget):
         self.slider = QSlider(Qt.Horizontal)
         self.slider.setRange(self.min_val_scaled, self.max_val_scaled)
         self.slider.setSingleStep(self.step_scaled)
-        self.slider.setStyleSheet("""
-            QSlider::groove:horizontal {
-                border: 1px solid #4f4a4b;
-                height: 10px;
-                background: #4a4647;
-                border-radius: 5px;
-            }
-            QSlider::handle:horizontal {
-                background: #c89f68;
-                border: 2px solid #2c2a2b;
-                width: 18px;
-                height: 18px;
-                margin: -6px 0; 
-                border-radius: 9px;
-            }
-            QSlider::add-page:horizontal {
-                background: #4a4647;
-            }
-            QSlider::sub-page:horizontal {
-                background: #c89f68;
-                border-radius: 5px;
-            }
-        """)
 
         self.spin_box = QDoubleSpinBox() # Use QDoubleSpinBox for float values
         self.spin_box.setRange(min_val, max_val)
@@ -605,10 +587,6 @@ class ValueSlider(QWidget):
         self.spin_box.setDecimals(1) # Display one decimal place
         self.spin_box.setFixedWidth(60)
         self.spin_box.setAlignment(Qt.AlignCenter)
-        self.spin_box.setStyleSheet("""
-            QDoubleSpinBox { background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 5px; color: #e0d6d1; font-weight: bold; }
-            QDoubleSpinBox::up-button, QDoubleSpinBox::down-button { width: 0px; border: none; background: transparent; }
-        """)
 
         layout.addWidget(self.slider)
         layout.addWidget(self.spin_box)
@@ -642,23 +620,8 @@ class RadioButtonGroup(QWidget):
         self.btn_true.clicked.connect(lambda: self.set_state(True))
         self.btn_false.clicked.connect(lambda: self.set_state(False))
 
-        common_style = """
-            QPushButton { 
-                background-color: #4f4a4b; color: #e0d6d1; 
-                font-weight: bold; border-radius: 8px; padding: 8px; min-width: 100px; border: 1px solid #3a3637;
-            }
-            QPushButton:hover {
-                border: 1px solid #c89f68;
-            }
-            QPushButton:pressed {
-                background-color: #5a5556;
-            }
-            QPushButton:checked {
-                background-color: #c89f68; color: #2c2a2b; border: 1px solid #d9b68b;
-            }
-        """
-        self.btn_true.setStyleSheet(common_style)
-        self.btn_false.setStyleSheet(common_style)
+        self.btn_true.setObjectName("ToggleOptionButton")
+        self.btn_false.setObjectName("ToggleOptionButton")
         
         main_layout.addWidget(self.btn_false)
         main_layout.addWidget(self.btn_true)
@@ -679,7 +642,6 @@ class PopupDialog(QDialog):
 
         
         self.main_widget = QWidget(objectName="popup_widget")
-        self.main_widget.setStyleSheet("#popup_widget { background-color: #2c2a2b; border-radius: 15px; border: 1px solid #c89f68; } QLabel { color: #FFFFFF; }")
         
         popup_layout = QVBoxLayout(self.main_widget)
         popup_layout.setContentsMargins(0, 0, 0, 0)
@@ -718,10 +680,8 @@ class ValorantIconPickerDialog(PopupDialog):
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll_area.setStyleSheet("background-color: #3a3637; border: 1px solid #4f4a4b; border-radius: 10px;")
 
-        grid_container = QWidget()
-        grid_container.setStyleSheet("background-color: #3a3637;")
+        grid_container = QWidget(objectName="grid_container")
         self.grid_layout = QGridLayout(grid_container)
         self.grid_layout.setSpacing(12)
         self.grid_layout.setContentsMargins(12, 12, 12, 12)
@@ -743,17 +703,6 @@ class ValorantIconPickerDialog(PopupDialog):
                 icon = QIcon(icon_path)
             btn.setIcon(icon)
             btn.setIconSize(QSize(70, 70))
-            btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #4a4647;
-                    border: 2px solid #4f4a4b;
-                    border-radius: 12px;
-                }
-                QPushButton:hover {
-                    background-color: #5a5556;
-                    border-color: #c89f68;
-                }
-            """)
             btn.clicked.connect(lambda _, path=icon_path: self._select(path))
             self.grid_layout.addWidget(btn, row, col, Qt.AlignCenter)
 
@@ -777,53 +726,6 @@ class ExportIMAMenuDialog(QDialog):
         main_layout.setContentsMargins(0, 0, 0, 0)
 
         container_widget = QWidget(objectName="container")
-        container_widget.setStyleSheet("""
-            #container {
-                background-color: #2c2a2b; 
-                border: 1px solid #c89f68;
-                border-radius: 15px;
-            }
-            QLabel { color: white; font-weight: bold; background: transparent; }
-            QLineEdit, QListWidget { 
-                background-color: #4a4647; 
-                border: 1px solid #c89f68; 
-                border-radius: 8px; 
-                padding: 10px; 
-                color: #e0d6d1; 
-            }
-            QPushButton { 
-                background-color: #c89f68; 
-                color: #2c2a2b; 
-                font-weight: bold; 
-                border-radius: 15px; 
-                padding: 8px; 
-                border: none;
-            }
-            QPushButton:hover { background-color: #d9b68b; }
-
-            QScrollBar:vertical {
-                border: none;
-                background-color: #2c2a2b;
-                width: 14px;
-                margin: 0px 0 0px 0;
-                border-radius: 0px;
-            }
-            QScrollBar::handle:vertical {
-                background-color: #e0d6d1;
-                min-height: 30px;
-                border-radius: 7px;
-                border: 1px solid #c89f68;
-            }
-            QScrollBar::handle:vertical:hover {
-                background-color: #c89f68;
-            }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-                height: 0px;
-            }
-            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
-                background: none;
-            }
-        """)
         main_layout.addWidget(container_widget)
         
         container_layout = QVBoxLayout(container_widget)
@@ -883,13 +785,7 @@ class ExportIMAMenuDialog(QDialog):
         self.icon_preview_btn.clicked.connect(self.open_valorant_icon_picker)
 
         browse_button = QPushButton("Browse...")
-        browse_button.setStyleSheet("""
-            QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold;
-                border-radius: 8px; padding: 10px; border: none;
-            }
-            QPushButton:hover { background-color: #d9b68b; }
-        """)
+        browse_button.setObjectName("ApplyButton")
         browse_button.clicked.connect(self.select_icon)
 
         icon_layout.addWidget(self.icon_path_edit)
@@ -899,12 +795,6 @@ class ExportIMAMenuDialog(QDialog):
         self.update_icon_preview(self.menu_icon_path)
         
         settings_group = QGroupBox("iMA Menu Settings")
-        settings_group.setStyleSheet("""
-            QGroupBox {
-                color: #FFFFFF; font-weight: bold; border: 1px solid #c89f68; border-radius: 8px; margin-top: 10px;
-            }
-            QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; padding: 0 10px; left: 10px; }
-        """)
         settings_layout = QGridLayout(settings_group)
         settings_layout.setSpacing(10)
         
@@ -931,39 +821,6 @@ class ExportIMAMenuDialog(QDialog):
         self.accounts_list = QListWidget()
         self.accounts_list.setDragDropMode(QAbstractItemView.InternalMove)
         self.accounts_list.setIconSize(QSize(32, 32))
-        self.accounts_list.setStyleSheet("""
-            QListWidget {
-                background-color: #3a3637;
-                border: 1px solid #c89f68;
-                border-radius: 12px;
-                padding: 8px;
-                outline: none;
-            }
-            QListWidget::item {
-                background-color: #4f4a4b;
-                color: #e0d6d1;
-                font-weight: bold;
-                font-size: 14px;
-                border-radius: 10px;
-                padding: 8px 12px;
-                margin-bottom: 4px;
-                border: 2px dashed transparent;
-            }
-            QListWidget::item:hover {
-                background-color: #5a5556;
-                border: 2px dashed #c89f68;
-            }
-            QListWidget::item:selected {
-                background-color: #c89f68;
-                color: #2c2a2b;
-                border: 2px solid #d9b68b;
-            }
-            QListWidget::drop-indicator {
-                border: 2px dashed #c89f68;
-                border-radius: 8px;
-                background-color: rgba(200, 159, 104, 0.25);
-            }
-        """)
         self.populate_accounts(default_settings.get("ordered_accounts"))
         right_layout.addWidget(self.accounts_list)
         
@@ -972,26 +829,11 @@ class ExportIMAMenuDialog(QDialog):
         button_layout.addStretch()
 
         cancel_button = QPushButton("Cancel")
-        cancel_button.setStyleSheet("""
-            QPushButton {
-                background-color: #4f4a4b; color: #e0d6d1; font-weight: bold; 
-                border-radius: 8px; padding: 10px 20px; border: 1px solid #4f4a4b;
-            }
-            QPushButton:hover { background-color: #5a5556; border: 1px solid #c89f68; }
-            QPushButton:pressed { background-color: #454142; }
-        """)
         cancel_button.clicked.connect(self.reject)
         button_layout.addWidget(cancel_button)
 
         export_button = QPushButton("Export")
-        export_button.setStyleSheet("""
-            QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 10px 20px;
-            }
-            QPushButton:hover {
-                background-color: #d9b68b; /* Brighter coffee color */
-            }
-        """)
+        export_button.setObjectName("ApplyButton")
         export_button.clicked.connect(self.accept)
         button_layout.addWidget(export_button)
         
@@ -1067,23 +909,23 @@ class PopupDialog(QDialog):
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
         self.setAttribute(Qt.WA_TranslucentBackground)
 
-        
         self.main_widget = QWidget(objectName="popup_widget")
-        self.main_widget.setStyleSheet("#popup_widget { background-color: #2c2a2b; border-radius: 15px; border: 1px solid #c89f68; } QLabel { color: #FFFFFF; }")
         
-        popup_layout = QVBoxLayout(self.main_widget)
-        popup_layout.setContentsMargins(0, 0, 0, 0)
-        popup_layout.setSpacing(0)
-
-        self.title_bar = CustomTitleBar(title, self, is_dialog=True)
-        popup_layout.addWidget(self.title_bar)
-        
-        self.content_layout = QVBoxLayout()
-        self.content_layout.setContentsMargins(15, 10, 15, 15)
-        popup_layout.addLayout(self.content_layout)
-
         main_v_layout = QVBoxLayout(self)
-        main_v_layout.setContentsMargins(0,0,0,0)
+        main_v_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.title_bar = CustomTitleBar(title, self, is_dialog=True)
+        
+        self.content_widget = QWidget()
+        self.content_layout = QVBoxLayout(self.content_widget)
+        self.content_layout.setContentsMargins(15, 10, 15, 15)
+
+        widget_layout = QVBoxLayout(self.main_widget)
+        widget_layout.setContentsMargins(0, 0, 0, 0)
+        widget_layout.setSpacing(0)
+        widget_layout.addWidget(self.title_bar)
+        widget_layout.addWidget(self.content_widget)
+
         main_v_layout.addWidget(self.main_widget)
 
     def showEvent(self, event):
@@ -1130,11 +972,9 @@ class InputDialog(PopupDialog):
         self.in_game_tag_edit = None
 
         prompt_label = QLabel(prompt)
-        prompt_label.setStyleSheet("color: #e0d6d1;")
         self.content_layout.addWidget(prompt_label)
         
         self.input_field = QLineEdit(default_text)
-        self.input_field.setStyleSheet("background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 10px; color: #e0d6d1;")
         self.content_layout.addWidget(self.input_field)
 
         if in_game_name_default is not None or in_game_tag_default is not None:
@@ -1145,29 +985,20 @@ class InputDialog(PopupDialog):
 
             self.in_game_name_edit = QLineEdit(in_game_name_default)
             self.in_game_name_edit.setPlaceholderText("In-game Name")
-            self.in_game_name_edit.setStyleSheet("background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 10px; color: #e0d6d1;")
             in_game_name_tag_layout.addWidget(self.in_game_name_edit)
             
             in_game_name_tag_layout.addWidget(QLabel("#"))
 
             self.in_game_tag_edit = QLineEdit(in_game_tag_default)
             self.in_game_tag_edit.setPlaceholderText("Tag")
-            self.in_game_tag_edit.setStyleSheet("background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 10px; color: #e0d6d1;")
             in_game_name_tag_layout.addWidget(self.in_game_tag_edit)
             self.content_layout.addLayout(in_game_name_tag_layout)
-            self.setFixedSize(350, 250) # Adjust size for two inputs
+            self.setFixedSize(350, 250)
         else:
-            self.setFixedSize(350, 180) # Original size for one input
+            self.setFixedSize(350, 180)
         
         save_button = QPushButton("Save")
-        save_button.setStyleSheet("""
-            QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 15px; padding: 10px 20px;
-            }
-            QPushButton:hover {
-                background-color: #d9b68b; /* Brighter coffee color */
-            }
-        """)
+        save_button.setObjectName("ApplyButton")
         save_button.clicked.connect(self.accept)
         
         button_layout = QHBoxLayout()
@@ -1184,16 +1015,14 @@ class InputDialog(PopupDialog):
 class SaveAccountDialog(PopupDialog):
     def __init__(self, parent=None, switcher_instance=None):
         super().__init__("Save Account", parent)
-        self.setFixedSize(380, 300)
+        self.setFixedSize(440, 350)
         self.switcher_instance = switcher_instance
 
         name_label = QLabel("Enter a name for the current account:")
-        name_label.setStyleSheet("color: #e0d6d1; font-size: 16px; font-weight: bold; text-align: center;")
         name_label.setAlignment(Qt.AlignCenter)
         self.content_layout.addWidget(name_label)
         
         self.name_edit = QLineEdit()
-        self.name_edit.setStyleSheet("background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 10px; color: #e0d6d1;")
         self.content_layout.addWidget(self.name_edit)
 
         self.content_layout.addWidget(QLabel("Enter in-game name and tag (optional):"))
@@ -1203,45 +1032,21 @@ class SaveAccountDialog(PopupDialog):
 
         self.in_game_name_edit = QLineEdit()
         self.in_game_name_edit.setPlaceholderText("In-game Name")
-        self.in_game_name_edit.setStyleSheet("background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 10px; color: #e0d6d1;")
         in_game_name_tag_layout.addWidget(self.in_game_name_edit)
         
         in_game_name_tag_layout.addWidget(QLabel("#"))
 
         self.in_game_tag_edit = QLineEdit()
         self.in_game_tag_edit.setPlaceholderText("Tag")
-        self.in_game_tag_edit.setStyleSheet("background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 10px; color: #e0d6d1;")
         in_game_name_tag_layout.addWidget(self.in_game_tag_edit)
         self.content_layout.addLayout(in_game_name_tag_layout)
 
         self.puuid_edit = QLineEdit()
         self.puuid_edit.setPlaceholderText("PUUID (optional)")
-        self.puuid_edit.setStyleSheet("background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 10px; color: #e0d6d1;")
         self.content_layout.addWidget(self.puuid_edit)
 
         self.content_layout.addWidget(QLabel("Select Game:"))
         self.game_combo = QComboBox()
-        self.game_combo.setStyleSheet("""
-            QComboBox { 
-                background-color: #4a4647; 
-                border: 1px solid #c89f68; 
-                border-radius: 8px; 
-                padding: 8px; 
-                color: #e0d6d1; 
-                font-weight: bold;
-            }
-            QComboBox:hover { border: 1px solid #d9b68b; }
-            QComboBox::drop-down { border: none; }
-            QComboBox::down-arrow { image: none; /* Can add a custom arrow icon here */ }
-            QComboBox QAbstractItemView { 
-                background-color: #3a3637; 
-                border: 1px solid #c89f68; 
-                selection-background-color: #c89f68;
-                color: #e0d6d1;
-                selection-color: #2c2a2b;
-                padding: 5px;
-            }
-        """)
         
         valorant_icon_path = Path(get_asset_path("valorant.png"))
         lol_icon_path = Path(get_asset_path("lol.png"))
@@ -1271,26 +1076,11 @@ class SaveAccountDialog(PopupDialog):
         button_layout.addStretch()
 
         cancel_button = QPushButton("Cancel")
-        cancel_button.setStyleSheet("""
-            QPushButton {
-                background-color: #4f4a4b; color: #e0d6d1; font-weight: bold; 
-                border-radius: 8px; padding: 10px 20px; border: 1px solid #4f4a4b;
-            }
-            QPushButton:hover { background-color: #5a5556; border: 1px solid #c89f68; }
-            QPushButton:pressed { background-color: #454142; }
-        """)
         cancel_button.clicked.connect(self.reject)
         button_layout.addWidget(cancel_button)
 
         save_button = QPushButton("Save")
-        save_button.setStyleSheet("""
-            QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 15px; padding: 10px 20px;
-            }
-            QPushButton:hover {
-                background-color: #d9b68b; /* Brighter coffee color */
-            }
-        """)
+        save_button.setObjectName("ApplyButton")
         save_button.clicked.connect(self.accept)
         button_layout.addWidget(save_button)
         
@@ -1310,28 +1100,14 @@ class BackupRestoreSelectionDialog(PopupDialog):
         self.content_layout.setAlignment(Qt.AlignCenter)
 
         backup_button = QPushButton("Backup")
-        backup_button.setStyleSheet("""
-            QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 15px; padding: 10px 20px;
-            }
-            QPushButton:hover {
-                background-color: #d9b68b;
-            }
-        """)
+        backup_button.setObjectName("ApplyButton")
         backup_button.setIcon(QIcon(get_asset_path("Backup.png")))
         backup_button.setIconSize(QSize(24, 24))
         backup_button.clicked.connect(lambda: self._set_selection_and_accept("backup"))
         self.content_layout.addWidget(backup_button)
 
         restore_button = QPushButton("Restore")
-        restore_button.setStyleSheet("""
-            QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 15px; padding: 10px 20px;
-            }
-            QPushButton:hover {
-                background-color: #d9b68b;
-            }
-        """)
+        restore_button.setObjectName("ApplyButton")
         restore_button.setIcon(QIcon(get_asset_path("Restore.png")))
         restore_button.setIconSize(QSize(24, 24))
         restore_button.clicked.connect(lambda: self._set_selection_and_accept("restore"))
@@ -1355,28 +1131,14 @@ class BackupRestoreDialog(PopupDialog):
         self.content_layout.setAlignment(Qt.AlignCenter)
 
         local_button = QPushButton("Local")
-        local_button.setStyleSheet("""
-            QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 15px; padding: 10px 20px;
-            }
-            QPushButton:hover {
-                background-color: #d9b68b;
-            }
-        """)
+        local_button.setObjectName("ApplyButton")
         local_button.setIcon(QIcon(get_asset_path("Local.png")))
         local_button.setIconSize(QSize(24, 24))
         local_button.clicked.connect(lambda: self.set_selection("local"))
         self.content_layout.addWidget(local_button)
 
         google_drive_button = QPushButton("Google Drive")
-        google_drive_button.setStyleSheet("""
-            QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 15px; padding: 10px 20px;
-            }
-            QPushButton:hover {
-                background-color: #d9b68b;
-            }
-        """)
+        google_drive_button.setObjectName("ApplyButton")
         google_drive_button.setIcon(QIcon(get_asset_path("Google.png")))
         google_drive_button.setIconSize(QSize(24, 24))
         google_drive_button.clicked.connect(lambda: self.set_selection("google_drive"))
@@ -1401,26 +1163,6 @@ class SettingsDropdownMenu(QWidget):
 
         self.main_widget = QWidget(self)
         self.main_widget.setObjectName("settings_dropdown_widget")
-        self.main_widget.setStyleSheet("""
-            #settings_dropdown_widget {
-                background-color: #2c2a2b;
-                border-radius: 15px;
-                border: 1px solid #4f4a4b;
-            }
-            QPushButton {
-                background-color: #4f4a4b;
-                color: #e0d6d1;
-                font-size: 13px;
-                font-weight: bold;
-                border: none;
-                border-radius: 12px;
-                padding: 8px 12px;
-            }
-            QPushButton:hover {
-                background-color: #c89f68;
-                color: #2c2a2b;
-            }
-        """)
 
         shadow = QGraphicsDropShadowEffect(self)
         shadow.setBlurRadius(20)
@@ -1475,22 +1217,6 @@ class SettingsDropdownMenu(QWidget):
         main_layout.addLayout(row2)
 
         ima_btn = QPushButton(" iMA Menu")
-        ima_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #4f4a4b;
-                color: #e0d6d1;
-                font-size: 13px;
-                font-weight: bold;
-                border: none;
-                border-radius: 12px;
-                padding: 8px 12px;
-                text-align: left;
-            }
-            QPushButton:hover {
-                background-color: #c89f68;
-                color: #2c2a2b;
-            }
-        """)
         ima_icon = Path(get_asset_path("ima.png"))
         if ima_icon.exists():
             ima_btn.setIcon(QIcon(str(ima_icon)))
@@ -1499,22 +1225,6 @@ class SettingsDropdownMenu(QWidget):
         main_layout.addWidget(ima_btn)
 
         options_btn = QPushButton(" Options")
-        options_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #4f4a4b;
-                color: #e0d6d1;
-                font-size: 13px;
-                font-weight: bold;
-                border: none;
-                border-radius: 12px;
-                padding: 8px 12px;
-                text-align: left;
-            }
-            QPushButton:hover {
-                background-color: #c89f68;
-                color: #2c2a2b;
-            }
-        """)
         options_icon = Path(get_asset_path("Options.png"))
         if options_icon.exists():
             options_btn.setIcon(QIcon(str(options_icon)))
@@ -1651,26 +1361,6 @@ class OptionsDialog(PopupDialog):
         self.audio_controls = {}
         self.spin_boxes = {}
 
-        self.main_widget.setStyleSheet("""
-            #popup_widget { background-color: #2c2a2b; border-radius: 15px; border: 1px solid #4f4a4b; }
-            QLabel { color: #e0d6d1; font-weight: normal; }
-            QGroupBox {
-                color: #FFFFFF;
-                font-size: 13px;
-                font-weight: bold;
-                border: 1px solid #c89f68;
-                border-radius: 8px;
-                margin-top: 10px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                padding: 0 8px;
-                left: 10px;
-                color: #FFFFFF;
-            }
-        """)
-
         self.content_layout.setSpacing(10)
         
         # Horizontal Body Layout: Sidebar + Stack
@@ -1680,42 +1370,10 @@ class OptionsDialog(PopupDialog):
         # Left Sidebar Navigation List
         self.nav_list = QListWidget()
         self.nav_list.setFixedWidth(170)
-        self.nav_list.setStyleSheet("""
-            QListWidget {
-                background-color: #232122;
-                border: 1px solid #4f4a4b;
-                border-radius: 10px;
-                outline: none;
-                padding: 5px;
-            }
-            QListWidget::item {
-                color: #e0d6d1;
-                font-size: 13px;
-                font-weight: bold;
-                padding: 10px;
-                border-radius: 6px;
-                margin-bottom: 4px;
-            }
-            QListWidget::item:hover {
-                background-color: #3a3637;
-                color: #ffffff;
-            }
-            QListWidget::item:selected {
-                background-color: #c89f68;
-                color: #2c2a2b;
-            }
-        """)
         body_layout.addWidget(self.nav_list)
 
         # Right Pages Stack
         self.pages_widget = QStackedWidget()
-        self.pages_widget.setStyleSheet("""
-            QStackedWidget {
-                background-color: #343031;
-                border: 1px solid #4f4a4b;
-                border-radius: 10px;
-            }
-        """)
         body_layout.addWidget(self.pages_widget)
 
         self.content_layout.addLayout(body_layout)
@@ -1741,26 +1399,11 @@ class OptionsDialog(PopupDialog):
         button_layout.addStretch()
         
         close_button = QPushButton("Close")
-        close_button.setStyleSheet("""
-            QPushButton {
-                background-color: #4f4a4b; color: #e0d6d1; font-weight: bold; 
-                border-radius: 8px; padding: 10px 20px; border: 1px solid #4f4a4b;
-            }
-            QPushButton:hover { background-color: #5a5556; border: 1px solid #c89f68; }
-            QPushButton:pressed { background-color: #454142; }
-        """)
         close_button.clicked.connect(self.close)
         button_layout.addWidget(close_button)
 
         apply_button = QPushButton("Apply")
-        apply_button.setStyleSheet("""
-            QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 10px 20px;
-            }
-            QPushButton:hover {
-                background-color: #d9b68b;
-            }
-        """)
+        apply_button.setProperty("accent", True)
         apply_button.clicked.connect(self.apply_settings)
         button_layout.addWidget(apply_button)
         
@@ -1772,9 +1415,6 @@ class OptionsDialog(PopupDialog):
 
     def add_page(self, title, icon_file, widget):
         item = QListWidgetItem(title)
-        font = item.font()
-        font.setBold(True)
-        item.setFont(font)
         icon_p = get_asset_path(icon_file)
         if Path(icon_p).exists():
             item.setIcon(QIcon(icon_p))
@@ -1854,15 +1494,8 @@ class OptionsDialog(PopupDialog):
         notif_layout.addWidget(QLabel("Show Splash Notification:"), 0, 0)
         notif_layout.addWidget(self.show_splash_notification_toggle, 0, 1)
 
-        preview_splash_btn = QPushButton("Preview Splash")
-        preview_splash_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold;
-                border-radius: 8px; padding: 10px; border: none; font-size: 13px;
-            }
-            QPushButton:hover { background-color: #d9b68b; }
-            QPushButton:pressed { background-color: #b88f58; }
-        """)
+        preview_splash_btn = QPushButton("Preview Splash Screen")
+        preview_splash_btn.setObjectName("ApplyButton")
         preview_splash_btn.clicked.connect(self.preview_splash_screen)
         notif_layout.addWidget(preview_splash_btn, 1, 0, 1, 2)
         main_layout.addWidget(notif_group)
@@ -1881,20 +1514,9 @@ class OptionsDialog(PopupDialog):
         form_layout.setSpacing(10)
         form_layout.setLabelAlignment(Qt.AlignLeft)
         form_layout.setRowWrapPolicy(QFormLayout.WrapAllRows)
-        
-        combo_style = """
-            QComboBox { 
-                background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 8px; color: #e0d6d1; font-weight: bold;
-            }
-            QComboBox:hover { border: 1px solid #d9b68b; }
-            QComboBox QAbstractItemView { 
-                background-color: #3a3637; border: 1px solid #c89f68; selection-background-color: #c89f68; color: #e0d6d1; selection-color: #2c2a2b; padding: 5px;
-            }
-        """
 
         self.display_mode_combo = QComboBox()
         self.display_mode_combo.addItems(["Default", "Fullscreen", "Windowed Fullscreen", "Windowed"])
-        self.display_mode_combo.setStyleSheet(combo_style)
         form_layout.addRow(QLabel("Display Mode:"), self.display_mode_combo)
         
         quality_keys = [
@@ -1909,7 +1531,6 @@ class OptionsDialog(PopupDialog):
             else:
                 combo_box.addItems(["Low", "Med", "High"])
             
-            combo_box.setStyleSheet(combo_style)
             self.riot_combo_boxes[key] = combo_box
             form_layout.addRow(QLabel(self.riot_quality_settings_map[key] + ":"), combo_box)
         
@@ -1971,18 +1592,9 @@ class OptionsDialog(PopupDialog):
         
         preset_buttons_layout = QHBoxLayout()
         recommended_button = QPushButton("Recommended (Low)")
+        recommended_button.setObjectName("ApplyButton")
         default_button = QPushButton("Default (High)")
-        
-        preset_style = """
-            QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold; 
-                border-radius: 8px; padding: 8px; border: 1px solid #c89f68;
-            }
-            QPushButton:hover { background-color: #d9b68b; }
-            QPushButton:pressed { background-color: #b88f58; }
-        """
-        recommended_button.setStyleSheet(preset_style)
-        default_button.setStyleSheet(preset_style)
+        default_button.setObjectName("ApplyButton")
         
         recommended_button.clicked.connect(lambda: self.set_all_qualities(0))
         default_button.clicked.connect(lambda: self.set_all_qualities(3))
@@ -2006,7 +1618,6 @@ class OptionsDialog(PopupDialog):
             
             spin_box = QSpinBox()
             spin_box.setRange(0, 3)
-            spin_box.setStyleSheet("QSpinBox { background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 5px; color: #e0d6d1; }")
             spin_box.setFixedWidth(60)
             self.spin_boxes[key] = spin_box
             grid_layout.addWidget(spin_box, row, col + 1, Qt.AlignLeft)
@@ -2014,13 +1625,6 @@ class OptionsDialog(PopupDialog):
         layout.addLayout(grid_layout)
 
         riot_client_group = QGroupBox("Riot Client Behavior")
-        riot_client_group.setStyleSheet("""
-            QGroupBox {
-                color: #FFFFFF; font-size: 13px; font-weight: bold;
-                border: 1px solid #c89f68; border-radius: 8px; margin-top: 10px;
-            }
-            QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; padding: 0 10px; left: 10px; color: #FFFFFF; }
-        """)
         riot_client_layout = QGridLayout(riot_client_group)
         riot_client_layout.setSpacing(10)
 
@@ -2048,7 +1652,6 @@ class OptionsDialog(PopupDialog):
         """
 
         top_group = QGroupBox("Show in UI")
-        top_group.setStyleSheet(group_style)
         top_layout = QGridLayout(top_group)
         top_layout.setSpacing(10)
 
@@ -2077,23 +1680,20 @@ class OptionsDialog(PopupDialog):
         top_layout.addWidget(self.show_last_match_info_toggle, 5, 1)
 
         bottom_group = QGroupBox("Layout Settings")
-        bottom_group.setStyleSheet(group_style)
         bottom_layout = QGridLayout(bottom_group)
         bottom_layout.setSpacing(10)
 
         bottom_layout.addWidget(QLabel("Grid Size (Columns):"), 0, 0)
         self.grid_size_combo = QComboBox()
         self.grid_size_combo.addItems(["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"])
-        self.grid_size_combo.setStyleSheet("""
-            QComboBox { 
-                background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 8px; color: #e0d6d1; font-weight: bold;
-            }
-            QComboBox:hover { border: 1px solid #d9b68b; }
-            QComboBox QAbstractItemView { 
-                background-color: #3a3637; border: 1px solid #c89f68; selection-background-color: #c89f68; color: #e0d6d1; selection-color: #2c2a2b; padding: 5px;
-            }
-        """)
         bottom_layout.addWidget(self.grid_size_combo, 0, 1)
+
+        bottom_layout.addWidget(QLabel("UI Theme:"), 1, 0)
+        self.theme_combo = QComboBox()
+        themes_map = get_available_themes()
+        for key, name in themes_map.items():
+            self.theme_combo.addItem(name, key)
+        bottom_layout.addWidget(self.theme_combo, 1, 1)
 
         main_layout.addWidget(top_group)
         main_layout.addWidget(bottom_group)
@@ -2164,13 +1764,11 @@ class OptionsDialog(PopupDialog):
         bg_bar.setSpacing(6)
         bg_bar.addWidget(QLabel("BG:"))
         self.ch_bg_combo = QComboBox()
-        self.ch_bg_combo.setStyleSheet(combo_style)
         self.ch_bg_combo.addItems(["Dark Grid", "Light Grid"])
         bg_bar.addWidget(self.ch_bg_combo)
 
         bg_bar.addWidget(QLabel("Zoom:"))
         self.ch_zoom_combo = QComboBox()
-        self.ch_zoom_combo.setStyleSheet(combo_style)
         self.ch_zoom_combo.addItems(["1x", "2x"])
         bg_bar.addWidget(self.ch_zoom_combo)
         left_col.addLayout(bg_bar)
@@ -2180,15 +1778,6 @@ class OptionsDialog(PopupDialog):
 
         self.ch_controls_tab = QTabWidget()
         self.ch_controls_tab.setUsesScrollButtons(False)
-        self.ch_controls_tab.setStyleSheet("""
-            QTabWidget::pane { border: 1px solid #4f4a4b; border-radius: 6px; background-color: #2c2a2b; }
-            QTabBar::tab { 
-                background: #3a3637; color: #b0a6a0; padding: 4px 6px; 
-                border-top-left-radius: 4px; border-top-right-radius: 4px; 
-                font-size: 10px; font-weight: bold; min-width: 50px;
-            }
-            QTabBar::tab:selected { background: #c89f68; color: #2c2a2b; }
-        """)
 
         # Tab 1: Primary & Color
         tab_color = QWidget()
@@ -2196,16 +1785,13 @@ class OptionsDialog(PopupDialog):
         layout_color.setSpacing(6)
         
         self.ch_color_combo = QComboBox()
-        self.ch_color_combo.setStyleSheet(combo_style)
         self.ch_color_combo.addItems(["White", "Green", "Yellow Green", "Green Yellow", "Yellow", "Cyan", "Pink", "Red", "Custom Hex"])
         layout_color.addRow(QLabel("Color Preset:"), self.ch_color_combo)
 
         self.ch_custom_hex_edit = QLineEdit("#00FF88FF")
-        self.ch_custom_hex_edit.setStyleSheet("QLineEdit { background-color: #4a4647; border: 1px solid #c89f68; border-radius: 4px; padding: 4px; color: #e0d6d1; }")
         layout_color.addRow(QLabel("Custom Hex:"), self.ch_custom_hex_edit)
 
         self.ch_dot_enable_cb = QCheckBox("Enable Center Dot")
-        self.ch_dot_enable_cb.setStyleSheet("color: #e0d6d1; font-weight: bold;")
         layout_color.addRow(self.ch_dot_enable_cb)
 
         self.ch_dot_opacity_slider = ValueSlider(0, 100)
@@ -2222,7 +1808,6 @@ class OptionsDialog(PopupDialog):
         layout_outlines.setSpacing(6)
 
         self.ch_outline_enable_cb = QCheckBox("Enable Outlines")
-        self.ch_outline_enable_cb.setStyleSheet("color: #e0d6d1; font-weight: bold;")
         layout_outlines.addRow(self.ch_outline_enable_cb)
 
         self.ch_outline_opacity_slider = ValueSlider(0, 100)
@@ -2239,7 +1824,6 @@ class OptionsDialog(PopupDialog):
         layout_inner.setSpacing(5)
 
         self.ch_inner_enable_cb = QCheckBox("Show Inner Lines")
-        self.ch_inner_enable_cb.setStyleSheet("color: #e0d6d1; font-weight: bold;")
         layout_inner.addRow(self.ch_inner_enable_cb)
 
         self.ch_inner_opacity_slider = ValueSlider(0, 100)
@@ -2255,7 +1839,6 @@ class OptionsDialog(PopupDialog):
         layout_inner.addRow(QLabel("Offset:"), self.ch_inner_off_slider)
 
         self.ch_inner_top_cb = QCheckBox("Show Top Line")
-        self.ch_inner_top_cb.setStyleSheet("color: #e0d6d1;")
         layout_inner.addRow(self.ch_inner_top_cb)
 
         self.ch_controls_tab.addTab(tab_inner, "Inner")
@@ -2266,7 +1849,6 @@ class OptionsDialog(PopupDialog):
         layout_outer.setSpacing(5)
 
         self.ch_outer_enable_cb = QCheckBox("Show Outer Lines")
-        self.ch_outer_enable_cb.setStyleSheet("color: #e0d6d1; font-weight: bold;")
         layout_outer.addRow(self.ch_outer_enable_cb)
 
         self.ch_outer_opacity_slider = ValueSlider(0, 100)
@@ -2282,7 +1864,6 @@ class OptionsDialog(PopupDialog):
         layout_outer.addRow(QLabel("Offset:"), self.ch_outer_off_slider)
 
         self.ch_outer_top_cb = QCheckBox("Show Top Line")
-        self.ch_outer_top_cb.setStyleSheet("color: #e0d6d1;")
         layout_outer.addRow(self.ch_outer_top_cb)
 
         self.ch_controls_tab.addTab(tab_outer, "Outer")
@@ -2348,24 +1929,16 @@ class OptionsDialog(PopupDialog):
         """
 
         group_box = QGroupBox("App Version & Updates", updates_tab)
-        group_box.setStyleSheet(group_style)
         group_layout = QVBoxLayout(group_box)
         group_layout.setSpacing(12)
         group_layout.setContentsMargins(15, 20, 15, 15)
 
         from game_switcher import APP_VERSION
         version_label = QLabel(f"<b>Current Version:</b> v{APP_VERSION}")
-        version_label.setStyleSheet("font-size: 14px; color: #e0d6d1;")
         group_layout.addWidget(version_label)
 
         check_btn = QPushButton("Check for Updates")
-        check_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold;
-                border-radius: 8px; padding: 10px 20px; font-size: 13px;
-            }
-            QPushButton:hover { background-color: #d9b68b; }
-        """)
+        check_btn.setObjectName("ApplyButton")
         self.update_check_btn = check_btn
         check_btn.clicked.connect(lambda: self.open_update_dialog(source_button=self.update_check_btn))
         group_layout.addWidget(check_btn)
@@ -2373,23 +1946,12 @@ class OptionsDialog(PopupDialog):
         main_layout.addWidget(group_box)
 
         changelog_box = QGroupBox("Changelog", updates_tab)
-        changelog_box.setStyleSheet(group_style)
         changelog_layout = QVBoxLayout(changelog_box)
         changelog_layout.setSpacing(10)
         changelog_layout.setContentsMargins(15, 20, 15, 15)
 
         changelog_edit = QTextEdit()
         changelog_edit.setReadOnly(True)
-        changelog_edit.setStyleSheet("""
-            QTextEdit {
-                background-color: #242223;
-                color: #e0d6d1;
-                border: 1px solid #4f4a4b;
-                border-radius: 8px;
-                padding: 10px;
-                font-size: 12px;
-            }
-        """)
         
         cl_path = get_asset_path("CHANGELOG.md")
         if os.path.exists(cl_path):
@@ -2674,6 +2236,7 @@ class OptionsDialog(PopupDialog):
             "grid_size": int(self.grid_size_combo.currentText()) if hasattr(self, 'grid_size_combo') else 4,
             "show_splash_notification": self.show_splash_notification_toggle.get_state() if hasattr(self, 'show_splash_notification_toggle') else True,
             "show_riot_client": self.show_riot_client_toggle.get_state() if hasattr(self, 'show_riot_client_toggle') else False,
+            "theme": self.theme_combo.currentData() if hasattr(self, 'theme_combo') else "dark_gold",
             "unified_settings_enabled": self.unified_enabled_toggle.get_state() if hasattr(self, 'unified_enabled_toggle') else False,
             "master_account": self.master_account_combo.currentText() if hasattr(self, 'master_account_combo') else "",
             "sync_keybinds": self.sync_keybinds_toggle.get_state() if hasattr(self, 'sync_keybinds_toggle') else False,
@@ -2689,6 +2252,12 @@ class OptionsDialog(PopupDialog):
         self.switcher.save_graphics_settings(settings_to_save)
         success, message = self.switcher.update_all_game_user_settings(settings_to_save)
         self.switcher.update_ima_menu_if_enabled('update', None)
+
+        if hasattr(self, 'theme_combo'):
+            selected_theme = self.theme_combo.currentData()
+            apply_theme_to_app(QApplication.instance(), selected_theme)
+            if self.parent():
+                apply_theme_to_app(self.parent(), selected_theme)
 
         if hasattr(self, 'on_save_crosshairs_clicked'):
             self.on_save_crosshairs_clicked()
@@ -2752,6 +2321,11 @@ class OptionsDialog(PopupDialog):
         if hasattr(self, 'show_last_game_rr_toggle'): self.show_last_game_rr_toggle.set_state(ui_settings.get("show_last_game_rr", True))
         if hasattr(self, 'show_last_match_info_toggle'): self.show_last_match_info_toggle.set_state(ui_settings.get("show_last_match_info", True))
         if hasattr(self, 'grid_size_combo'): self.grid_size_combo.setCurrentText(str(ui_settings.get("grid_size", 4)))
+        if hasattr(self, 'theme_combo'):
+            saved_theme = ui_settings.get("theme", "dark_gold")
+            idx = self.theme_combo.findData(saved_theme)
+            if idx >= 0:
+                self.theme_combo.setCurrentIndex(idx)
         if hasattr(self, 'show_splash_notification_toggle'): self.show_splash_notification_toggle.set_state(ui_settings.get("show_splash_notification", True))
         if hasattr(self, 'show_riot_client_toggle'): self.show_riot_client_toggle.set_state(ui_settings.get("show_riot_client", False))
         
@@ -2827,10 +2401,7 @@ class CustomTitleBar(QWidget):
         self.parent_window = parent
         self.setFixedHeight(44)
 
-        if is_dialog:
-            self.setStyleSheet("background-color: #2c2a2b; border-top-left-radius: 20px; border-top-right-radius: 20px; border-bottom: 1px solid #4f4a4b;")
-        else:
-            self.setStyleSheet("background-color: #2c2a2b; border-top-left-radius: 20px; border-top-right-radius: 20px;")
+        self.setObjectName("CustomTitleBar")
         
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 0, 12, 0)
@@ -2848,28 +2419,28 @@ class CustomTitleBar(QWidget):
             layout.addWidget(self.logo_label)
 
             self.settings_button = HoverButton()
+            self.settings_button.setObjectName("HeaderButton")
             self.settings_button.setFixedSize(30, 30)
             self.settings_button.setIconSize(QSize(18, 18))
-            self.settings_button.setStyleSheet("QPushButton { background-color: #4f4a4b; border: none; border-radius: 15px; } QPushButton:hover { background-color: #c89f68; }")
             if hasattr(parent, 'create_gear_icon'):
-                self.settings_button.setIcon(parent.create_gear_icon(QColor("#e0d6d1")))
+                self.settings_button.setIcon(parent.create_gear_icon())
             layout.addWidget(self.settings_button)
 
             layout.addStretch()
 
             self.status_label = QLabel("Ready")
-            self.status_label.setStyleSheet("color: #e0d6d1; font-size: 12px; font-weight: bold; background: transparent;")
+            self.status_label.setObjectName("StatusLabel")
             self.status_label.setAlignment(Qt.AlignCenter)
             layout.addWidget(self.status_label)
 
             layout.addStretch()
 
             self.add_account_button = HoverButton()
+            self.add_account_button.setObjectName("HeaderButton")
             self.add_account_button.setFixedSize(30, 30)
             self.add_account_button.setIconSize(QSize(18, 18))
-            self.add_account_button.setStyleSheet("QPushButton { background-color: #4f4a4b; border: none; border-radius: 15px; } QPushButton:hover { background-color: #c89f68; }")
             if hasattr(parent, 'create_add_icon'):
-                self.add_account_button.setIcon(parent.create_add_icon(QColor("#e0d6d1"), QColor("#c89f68")))
+                self.add_account_button.setIcon(parent.create_add_icon())
             add_shadow = QGraphicsDropShadowEffect(self)
             add_shadow.setBlurRadius(15)
             add_shadow.setColor(QColor(0, 0, 0, 160))
@@ -2879,9 +2450,9 @@ class CustomTitleBar(QWidget):
 
             refresh_icon_path = get_asset_path("Refresh.png")
             self.refresh_button = QPushButton(QIcon(refresh_icon_path), "")
+            self.refresh_button.setObjectName("HeaderButton")
             self.refresh_button.setFixedSize(30, 30)
             self.refresh_button.setIconSize(QSize(18, 18))
-            self.refresh_button.setStyleSheet("QPushButton { background-color: #4f4a4b; border: none; border-radius: 15px; } QPushButton:hover { background-color: #c89f68; }")
             refresh_shadow = QGraphicsDropShadowEffect(self)
             refresh_shadow.setBlurRadius(15)
             refresh_shadow.setColor(QColor(0, 0, 0, 160))
@@ -2889,9 +2460,16 @@ class CustomTitleBar(QWidget):
             self.refresh_button.setGraphicsEffect(refresh_shadow)
             layout.addWidget(self.refresh_button)
 
-            self.minimize_button = QPushButton("−")
+            minimize_icon_path = get_asset_path("minimize.png")
+            self.minimize_button = QPushButton()
+            self.minimize_button.setObjectName("HeaderButton")
+            if os.path.exists(minimize_icon_path):
+                self.minimize_button.setIcon(QIcon(minimize_icon_path))
+                self.minimize_button.setIconSize(QSize(16, 16))
+            else:
+                self.minimize_button.setText("—")
+                self.minimize_button.setStyleSheet("font-size: 18px; font-weight: 900; padding: 0px; margin: 0px;")
             self.minimize_button.setFixedSize(30, 30)
-            self.minimize_button.setStyleSheet("QPushButton { background-color: #4f4a4b; color: #e0d6d1; font-size: 18px; font-weight: bold; border: none; border-radius: 15px; } QPushButton:hover { background-color: #c89f68; }")
             self.minimize_button.clicked.connect(self.parent_window.showMinimized)
             minimize_shadow = QGraphicsDropShadowEffect(self)
             minimize_shadow.setBlurRadius(15)
@@ -2902,6 +2480,7 @@ class CustomTitleBar(QWidget):
 
             x_icon_path = get_asset_path("x.png")
             close_button = QPushButton()
+            close_button.setObjectName("CloseButton")
             if os.path.exists(x_icon_path):
                 close_button.setIcon(QIcon(x_icon_path))
                 close_button.setIconSize(QSize(14, 14))
@@ -2909,7 +2488,6 @@ class CustomTitleBar(QWidget):
                 close_button.setText("✕")
             close_button.setFixedSize(30, 30)
             close_button.clicked.connect(self.parent_window.close)
-            close_button.setStyleSheet("QPushButton { background-color: #f38ba8; border: none; border-radius: 15px; } QPushButton:hover { background-color: #e67e80; }")
             close_shadow = QGraphicsDropShadowEffect(self)
             close_shadow.setBlurRadius(15)
             close_shadow.setColor(QColor(0, 0, 0, 160))
@@ -2919,13 +2497,14 @@ class CustomTitleBar(QWidget):
 
         else:
             title_label = QLabel(title)
-            title_label.setStyleSheet("color: #e0d6d1; font-size: 15px; font-weight: bold; background: transparent;")
+            title_label.setObjectName("TitleLabel")
             layout.addWidget(title_label)
 
             layout.addStretch()
 
             x_icon_path = get_asset_path("x.png")
             close_button = QPushButton()
+            close_button.setObjectName("CloseButton")
             if os.path.exists(x_icon_path):
                 close_button.setIcon(QIcon(x_icon_path))
                 close_button.setIconSize(QSize(14, 14))
@@ -3051,9 +2630,6 @@ class IconPickerDialog(PopupDialog):
         # --- Main Layout and Styling ---
         self.content_layout.setSpacing(15)
         self.content_layout.setAlignment(Qt.AlignTop)
-        self.main_widget.setStyleSheet("""#popup_widget { background-color: #2c2a2b; border-radius: 15px; border: 1px solid #4f4a4b; }
-            QLabel { color: #e0d6d1; font-weight: bold; }
-            QScrollArea { background-color: #3a3637; border: 1px solid #4f4a4b; border-radius: 10px; }""")
 
         # --- Icon Preview Section ---
         preview_container = QWidget()
@@ -3073,8 +2649,7 @@ class IconPickerDialog(PopupDialog):
         # The remove button is also a child, moved to the corner and raised
         self.remove_button = QPushButton("✕", self.icon_display_widget)
         self.remove_button.setFixedSize(24, 24)
-        self.remove_button.setStyleSheet("""QPushButton { background-color: #f38ba8; color: white; font-size: 14px; font-weight: bold; border-radius: 12px; border: 1px solid transparent; }
-            QPushButton:hover { background-color: #e67e80; border-color: white; }""")
+        self.remove_button.setObjectName("CloseButton")
         self.remove_button.clicked.connect(self.remove_icon)
         self.remove_button.move(5, 5)  # Top-left corner
         self.remove_button.raise_()
@@ -3087,8 +2662,7 @@ class IconPickerDialog(PopupDialog):
         scroll_area.setWidgetResizable(True)
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
-        grid_container = QWidget()
-        grid_container.setStyleSheet("background-color: #3a3637;")
+        grid_container = QWidget(objectName="grid_container")
         self.grid_layout = QGridLayout(grid_container)
         self.grid_layout.setSpacing(15)
         self.grid_layout.setContentsMargins(15, 15, 15, 15)
@@ -3102,14 +2676,11 @@ class IconPickerDialog(PopupDialog):
         button_layout.addStretch()
 
         cancel_button = QPushButton("Cancel")
-        cancel_button.setStyleSheet("""QPushButton { background-color: #4f4a4b; color: #e0d6d1; font-weight: bold; border-radius: 8px; padding: 10px 20px; border: 1px solid #4f4a4b;}
-            QPushButton:hover { background-color: #5a5556; border: 1px solid #c89f68; }""")
         cancel_button.clicked.connect(self.reject)
         button_layout.addWidget(cancel_button)
 
         save_button = QPushButton("Save")
-        save_button.setStyleSheet("""QPushButton { background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 10px 20px; }
-            QPushButton:hover { background-color: #d9b68b; }""")
+        save_button.setObjectName("ApplyButton")
         save_button.clicked.connect(self.accept)
         button_layout.addWidget(save_button)
         
@@ -3157,7 +2728,6 @@ class IconPickerDialog(PopupDialog):
 
         icon_button.setIcon(QIcon(circular_pixmap))
         icon_button.setIconSize(QSize(60, 60))
-        icon_button.setStyleSheet("QPushButton { border: 2px solid transparent; border-radius: 35px; } QPushButton:hover { border-color: #c89f68; }")
         icon_button.clicked.connect(lambda: self.set_selected_icon(icon_path))
         return icon_button
 
@@ -3183,8 +2753,6 @@ class IconPickerDialog(PopupDialog):
             self.icon_preview_button.setIcon(QIcon(circular_pixmap))
             self.icon_preview_button.setText("")
             self.icon_preview_button.setIconSize(QSize(size, size))
-            self.icon_preview_button.setStyleSheet("""QPushButton { border: 2px solid transparent; border-radius: 60px; }
-                QPushButton:hover { border-color: #d9b68b; }""")
             self.remove_button.setVisible(True)
         else:
             self.icon_preview_button.setIcon(QIcon())
@@ -3375,13 +2943,6 @@ class AccountWidget(QWidget):
         self.is_selected, self.is_hovered = False, False
         self.is_add_button = is_add_button
         self.icon = icon  # Store the icon
-        self.setStyleSheet("""QWidget#AccountWidget { background-color: #3a3637; border-radius: 20px; border: 3px solid transparent; } 
-                              QWidget#AccountWidget[selected="true"] { border-color: #c89f68; } 
-                              QLabel#NameLabel { color: #e0d6d1; font-size: 13px; font-weight: bold; } 
-                              QWidget#AccountWidget[selected="true"] QLabel#NameLabel { color: #c89f68; } 
-                              QWidget#AccountWidget[is_add_button="true"] { background-color: #4f4a4b; border: 3px dashed #c89f68; border-radius: 20px; } 
-                              QWidget#AccountWidget[is_add_button="true"]:hover { background-color: #5a5556; } 
-                              QWidget#AccountWidget[is_add_button="true"] QLabel#NameLabel { color: #c89f68; }""")
         self.init_ui(icon)
 
         shadow = QGraphicsDropShadowEffect(self)
@@ -3443,9 +3004,8 @@ class AccountWidget(QWidget):
         self._add_shadow_effect(self.last_game_rr_label)
         self.main_layout.addWidget(self.last_game_rr_label, 0, Qt.AlignCenter)
 
-        self.last_match_label = QLabel(self)
+        self.last_match_label = QLabel(self, objectName="LastMatchLabel")
         self.last_match_label.setAlignment(Qt.AlignCenter)
-        self.last_match_label.setStyleSheet("color: #c89f68; font-size: 11px; background-color: #2a2728; border-radius: 12px; padding: 4px 10px; border: 1px solid #4f4a4b;")
         self.last_match_label.setVisible(False)
         self._add_shadow_effect(self.last_match_label)
         self.main_layout.addWidget(self.last_match_label, 0, Qt.AlignCenter)
@@ -4171,32 +3731,25 @@ class AccountHistoryDialog(PopupDialog):
         super().__init__(title, parent)
         self.account_name = account_name
         self.in_game_name = in_game_name
-        self.in_game_tag = in_game_tag
         self.switcher = switcher_instance
         self.worker = None
-        self.setFixedSize(760, 580)
+        self.sort_mode = "score"
+        self.setFixedSize(780, 600)
 
-        self.main_widget.setStyleSheet("""
-            #popup_widget { background-color: #2c2a2b; border-radius: 15px; border: 1px solid #c89f68; }
-            QLabel { color: #e0d6d1; }
+        # Inherit theme colors dynamically
+        t = get_theme()
+        self.theme = t
+        self.main_widget.setStyleSheet(f"""
+            #popup_widget {{ background-color: {t['bg_main']}; border-radius: 15px; border: 1px solid {t['border']}; }}
+            QLabel {{ color: {t['text_secondary']}; }}
         """)
 
-        header_widget = QWidget()
-        header_widget.setStyleSheet("background-color: #343031; border-radius: 10px; border: 1px solid #4f4a4b;")
+        header_widget = QWidget(objectName="HistoryHeaderWidget")
         header_layout = QHBoxLayout(header_widget)
         header_layout.setContentsMargins(12, 8, 12, 8)
         header_layout.setSpacing(10)
 
         self.account_combo = QComboBox()
-        self.account_combo.setStyleSheet("""
-            QComboBox { 
-                background-color: #4a4647; border: 1px solid #c89f68; border-radius: 6px; padding: 4px 10px; color: #e0d6d1; font-weight: bold; font-size: 13px;
-            }
-            QComboBox:hover { border: 1px solid #d9b68b; }
-            QComboBox QAbstractItemView { 
-                background-color: #3a3637; border: 1px solid #c89f68; selection-background-color: #c89f68; color: #e0d6d1; selection-color: #2c2a2b; padding: 4px;
-            }
-        """)
         self.populate_account_combo()
         self.account_combo.currentIndexChanged.connect(self.on_account_combo_changed)
         header_layout.addWidget(self.account_combo, 2)
@@ -4206,17 +3759,12 @@ class AccountHistoryDialog(PopupDialog):
         header_layout.addWidget(self.rank_icon_label)
 
         self.rank_rr_label = QLabel()
-        self.rank_rr_label.setStyleSheet("font-size: 13px; color: #ffffff; font-weight: bold;")
         header_layout.addWidget(self.rank_rr_label, 2)
 
         header_layout.addStretch()
 
         self.refresh_btn = QPushButton("Refresh History")
-        self.refresh_btn.setStyleSheet("""
-            QPushButton { background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 8px; padding: 6px 15px; border: none; }
-            QPushButton:hover { background-color: #d9b68b; }
-            QPushButton:disabled { background-color: #5a5556; color: #888888; }
-        """)
+        self.refresh_btn.setObjectName("ApplyButton")
         self.refresh_btn.clicked.connect(lambda: self.load_history(force_refresh=True))
         header_layout.addWidget(self.refresh_btn)
 
@@ -4282,7 +3830,7 @@ class AccountHistoryDialog(PopupDialog):
         rr_str = f" • {current_rr} RR" if current_rr is not None else ""
         last_rr_str = ""
         if last_game_rr is not None:
-            color = "#a6e3a1" if last_game_rr > 0 else ("#f38ba8" if last_game_rr < 0 else "#e0d6d1")
+            color = self.theme['accent'] if last_game_rr > 0 else (self.theme['danger'] if last_game_rr < 0 else self.theme['text_muted'])
             sign = "+" if last_game_rr > 0 else ""
             last_rr_str = f" <font color='{color}'>({sign}{last_game_rr})</font>"
 
@@ -4295,11 +3843,18 @@ class AccountHistoryDialog(PopupDialog):
 
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.scroll_area.setStyleSheet("""
-            QScrollArea { background-color: transparent; border: none; }
-            QScrollBar:vertical { border: none; background-color: #2c2a2b; width: 10px; }
-            QScrollBar::handle:vertical { background-color: #c89f68; min-height: 25px; border-radius: 5px; }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+            QScrollArea {
+                border: none;
+                background-color: transparent;
+            }
+            QScrollBar:vertical, QScrollBar:horizontal {
+                width: 0px;
+                height: 0px;
+                background: transparent;
+            }
         """)
 
         self.matches_container = QWidget()
@@ -4314,7 +3869,7 @@ class AccountHistoryDialog(PopupDialog):
 
         self.status_label = QLabel("Loading match history...")
         self.status_label.setAlignment(Qt.AlignCenter)
-        self.status_label.setStyleSheet("font-size: 14px; color: #c89f68; padding: 20px;")
+        self.status_label.setStyleSheet("font-size: 14px; font-weight: bold; padding: 20px;")
         self.matches_layout.addWidget(self.status_label)
 
         self.stacked_widget.addWidget(page)
@@ -4327,15 +3882,12 @@ class AccountHistoryDialog(PopupDialog):
 
         top_bar = QHBoxLayout()
         self.back_btn = QPushButton("← Back to Matches")
-        self.back_btn.setStyleSheet("""
-            QPushButton { background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 6px; padding: 6px 14px; border: none; }
-            QPushButton:hover { background-color: #d9b68b; }
-        """)
+        self.back_btn.setObjectName("ApplyButton")
         self.back_btn.clicked.connect(lambda: self.stacked_widget.setCurrentIndex(0))
         top_bar.addWidget(self.back_btn)
 
         self.detail_header_label = QLabel("Match Scoreboard")
-        self.detail_header_label.setStyleSheet("font-size: 15px; font-weight: bold; color: #ffffff;")
+        self.detail_header_label.setStyleSheet("font-size: 15px; font-weight: bold;")
         top_bar.addWidget(self.detail_header_label)
         top_bar.addStretch()
 
@@ -4343,12 +3895,6 @@ class AccountHistoryDialog(PopupDialog):
 
         self.detail_scroll = QScrollArea()
         self.detail_scroll.setWidgetResizable(True)
-        self.detail_scroll.setStyleSheet("""
-            QScrollArea { background-color: transparent; border: none; }
-            QScrollBar:vertical { border: none; background-color: #2c2a2b; width: 10px; }
-            QScrollBar::handle:vertical { background-color: #c89f68; min-height: 25px; border-radius: 5px; }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
-        """)
 
         self.detail_container = QWidget()
         self.detail_container.setStyleSheet("background-color: transparent;")
@@ -4381,13 +3927,17 @@ class AccountHistoryDialog(PopupDialog):
 
     def _on_history_loaded(self, matches):
         self.refresh_btn.setEnabled(True)
-        if not matches:
+        valid_matches = [
+            m for m in matches 
+            if isinstance(m, dict) and m.get("score") != "0 - 0" and m.get("agent") not in ["Unknown", ""]
+        ]
+        if not valid_matches:
             self.status_label.setText("No recent match history found for this account.")
             self.status_label.setVisible(True)
             return
 
         self.status_label.setVisible(False)
-        for match in matches:
+        for match in valid_matches:
             card = self._create_match_card(match)
             self.matches_layout.addWidget(card)
 
@@ -4397,90 +3947,207 @@ class AccountHistoryDialog(PopupDialog):
         card.setCursor(Qt.PointingHandCursor)
         result = match.get("result", "DRAW").upper()
         if result == "WIN":
-            bg_color = "#1e3025"
-            border_color = "#40a060"
-            result_color = "#a6e3a1"
+            result = "VICTORY"
         elif result == "LOSS":
-            bg_color = "#351e24"
-            border_color = "#a04050"
-            result_color = "#f38ba8"
+            result = "DEFEAT"
+        t = get_theme()
+
+        # Soft, lower-contrast translucent container gradients matching original Valorant UI screenshot
+        if result == "VICTORY":
+            bg_style = "background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 rgba(16, 68, 72, 0.45), stop:1 rgba(18, 48, 56, 0.45)); border: 1px solid rgba(26, 120, 110, 0.5);"
+            hover_bg = "background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 rgba(22, 90, 95, 0.65), stop:1 rgba(24, 65, 75, 0.65)); border: 1px solid #148f77;"
+            hover_border = "#38ef7d"
+            result_color = "#20e693"
+        elif result == "DEFEAT":
+            bg_style = "background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 rgba(70, 26, 40, 0.45), stop:1 rgba(45, 20, 32, 0.45)); border: 1px solid rgba(130, 40, 60, 0.5);"
+            hover_bg = "background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 rgba(95, 35, 52, 0.65), stop:1 rgba(60, 25, 42, 0.65)); border: 1px solid #922b21;"
+            hover_border = "#ff4b2b"
+            result_color = "#ff4655"
         else:
-            bg_color = "#282933"
-            border_color = "#585b70"
-            result_color = "#9399b2"
+            bg_style = "background: rgba(45, 55, 65, 0.45); border: 1px solid rgba(90, 105, 120, 0.5);"
+            hover_bg = "background: rgba(60, 72, 85, 0.65); border: 1px solid #5d6d7e;"
+            hover_border = "#aeb6bf"
+            result_color = "#aeb6bf"
 
         card.setStyleSheet(f"""
             #MatchCard {{
-                background-color: {bg_color};
-                border: 1px solid {border_color};
-                border-radius: 10px;
+                {bg_style}
+                border-radius: 6px;
             }}
             #MatchCard:hover {{
-                border: 1px solid #c89f68;
-                background-color: #383435;
-            }}
-            #MatchCard QLabel {{
-                color: #e0d6d1;
-                border: none;
-                background: transparent;
+                {hover_bg}
             }}
         """)
 
-        layout = QHBoxLayout(card)
-        layout.setContentsMargins(15, 10, 15, 10)
-        layout.setSpacing(15)
+        card.map_name = match.get("map", "Map")
+        maps_dir = (self.switcher.base_dir / "maps") if self.switcher else Path("maps")
+        clean_map = str(card.map_name).strip().lower().replace(" ", "").replace("'", "")
+        
+        map_img_path = None
+        for candidate in [
+            maps_dir / f"{clean_map}.png",
+            maps_dir / f"{card.map_name.lower()}.png",
+            maps_dir / f"{card.map_name}.png"
+        ]:
+            if candidate.exists():
+                map_img_path = candidate
+                break
 
+        card.map_pixmap = QPixmap(str(map_img_path)) if map_img_path else None
+
+        def card_paint_event(event):
+            # First run standard background stylesheet painting
+            opt = QStyleOption()
+            opt.initFrom(card)
+            p = QPainter(card)
+            p.setRenderHint(QPainter.Antialiasing)
+            card.style().drawPrimitive(QStyle.PE_Widget, opt, p, card)
+
+            # Draw map artwork on right side with left-to-right alpha gradient mask
+            if card.map_pixmap and not card.map_pixmap.isNull():
+                map_w = 260
+                map_h = card.height()
+                map_rect = QRect(card.width() - map_w, 0, map_w, map_h)
+
+                scaled = card.map_pixmap.scaled(map_w, map_h, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+
+                # Composite image with alpha mask (left 0.0 transparent -> right 1.0 opaque)
+                buffer = QPixmap(map_w, map_h)
+                buffer.fill(Qt.transparent)
+
+                bp = QPainter(buffer)
+                bp.drawPixmap(0, 0, scaled)
+
+                grad = QLinearGradient(0, 0, map_w * 0.55, 0)
+                grad.setColorAt(0.0, QColor(0, 0, 0, 0))
+                grad.setColorAt(1.0, QColor(0, 0, 0, 255))
+
+                bp.setCompositionMode(QPainter.CompositionMode_DestinationIn)
+                bp.fillRect(buffer.rect(), grad)
+                bp.end()
+
+                p.drawPixmap(map_rect.x(), map_rect.y(), buffer)
+
+            p.end()
+
+        card.paintEvent = card_paint_event
+
+        layout = QHBoxLayout(card)
+        layout.setContentsMargins(12, 6, 12, 6)
+        layout.setSpacing(12)
+
+        # 1. Left: Agent Portrait (52x52)
+        agent_name = match.get("agent", "Agent")
+        agent_icon_path = get_asset_path(f"{agent_name}.png")
+        if not os.path.exists(agent_icon_path) and self.switcher:
+            agent_icon_path = str(self.switcher.base_dir / "Agents" / f"{agent_name}.png")
+
+        agent_lbl = QLabel()
+        agent_lbl.setFixedSize(52, 52)
+        if os.path.exists(agent_icon_path):
+            pix = QPixmap(agent_icon_path).scaled(52, 52, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            agent_lbl.setPixmap(pix)
+        else:
+            agent_lbl.setText("⚔️")
+            agent_lbl.setStyleSheet("font-size: 24px; background: transparent;")
+        layout.addWidget(agent_lbl)
+
+        # 2. Rank Tier Icon & RR Delta chip (+23 green / -14 red) below rank icon (Screenshot 2)
+        saved = self.switcher.get_saved_accounts().get(self.account_name) if self.switcher else None
+        rank_str = match.get("rank") or (saved[2] if saved and saved[2] else "Unranked")
+        rank_icon_path = get_asset_path(f"{rank_str.lower().replace(' ', '_')}.png")
+        
+        rank_vbox = QVBoxLayout()
+        rank_vbox.setSpacing(1)
+        rank_vbox.setAlignment(Qt.AlignCenter)
+        if os.path.exists(rank_icon_path):
+            rank_lbl = QLabel()
+            rank_lbl.setPixmap(QPixmap(rank_icon_path).scaled(24, 24, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            rank_vbox.addWidget(rank_lbl, 0, Qt.AlignCenter)
+
+        rr_change = match.get("rr_change")
+        if rr_change is not None:
+            rr_sign = "+" if rr_change > 0 else ""
+            rr_color = "#38ef7d" if rr_change > 0 else ("#ff4b2b" if rr_change < 0 else "#b0bec5")
+            rr_chip = QLabel(f"<b>{rr_sign}{rr_change}</b>")
+            rr_chip.setStyleSheet(f"font-size: 11px; font-weight: 900; color: {rr_color}; background: transparent;")
+            rank_vbox.addWidget(rr_chip, 0, Qt.AlignCenter)
+        else:
+            rr_chip = QLabel("<b>--</b>")
+            rr_chip.setStyleSheet("font-size: 11px; font-weight: bold; color: #708090; background: transparent;")
+            rank_vbox.addWidget(rr_chip, 0, Qt.AlignCenter)
+
+        layout.addLayout(rank_vbox)
+
+        # 3. KDA & Score (Screenshot 2)
+        kda_vbox = QVBoxLayout()
+        kda_vbox.setSpacing(2)
+        kda_raw = match.get("kda", "0/0/0").replace(" / ", " / ")
+        kda_lbl = QLabel(f"<font color='#8090a0'>KDA</font> &nbsp;<b><font color='#ffffff' size='4'>{kda_raw}</font></b>")
+        kda_lbl.setStyleSheet("font-size: 13px; background: transparent;")
+        kda_vbox.addWidget(kda_lbl)
+
+        score_val = match.get("score", "0")
+        players = match.get("players", [])
+        for p in players:
+            if self.in_game_name and p.get("name", "").lower() == self.in_game_name.lower():
+                score_val = f"{p.get('score', 0):,}"
+                break
+        score_lbl = QLabel(f"<font color='#607080' size='1'>SCORE</font> &nbsp;<font color='#b0bec5' size='2'><b>{score_val}</b></font>")
+        score_lbl.setStyleSheet("background: transparent;")
+        kda_vbox.addWidget(score_lbl)
+        layout.addLayout(kda_vbox)
+
+        layout.addStretch(1)
+
+        # 4. Center: VICTORY / DEFEAT + Round Score
         res_layout = QVBoxLayout()
+        res_layout.setAlignment(Qt.AlignCenter)
+        res_layout.setSpacing(2)
+
         res_label = QLabel(result)
-        res_label.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {result_color};")
-        res_layout.addWidget(res_label)
+        res_label.setStyleSheet(f"font-size: 16px; font-weight: 900; color: {result_color}; letter-spacing: 1px; background: transparent;")
+        res_layout.addWidget(res_label, 0, Qt.AlignCenter)
 
         score_text = match.get("score", "-")
-        score_label = QLabel(score_text)
-        score_label.setStyleSheet("font-size: 13px; font-weight: bold; color: #ffffff;")
-        res_layout.addWidget(score_label)
-        layout.addLayout(res_layout, 1)
+        score_parts = score_text.split(" - ")
+        if len(score_parts) == 2:
+            s1, s2 = score_parts[0], score_parts[1]
+            if result == "VICTORY":
+                formatted_score_html = f"<font color='#38ef7d'><b>{s1}</b></font> <font color='#ffffff'>-</font> <font color='#b0bec5'>{s2}</font>"
+            else:
+                formatted_score_html = f"<font color='#ff4b2b'><b>{s1}</b></font> <font color='#ffffff'>-</font> <font color='#b0bec5'>{s2}</font>"
+        else:
+            formatted_score_html = score_text
 
-        map_layout = QVBoxLayout()
-        map_name = match.get("map", "Unknown Map")
-        map_label = QLabel(f"📍 <b>{map_name}</b>")
-        map_label.setStyleSheet("font-size: 13px; color: #ffffff;")
-        map_layout.addWidget(map_label)
+        score_label = QLabel(formatted_score_html)
+        score_label.setStyleSheet("font-size: 14px; font-weight: bold; background: transparent;")
+        res_layout.addWidget(score_label, 0, Qt.AlignCenter)
 
-        mode_name = match.get("mode", "Competitive")
-        mode_label = QLabel(mode_name)
-        mode_label.setStyleSheet("font-size: 11px; color: #b0a8a8;")
-        map_layout.addWidget(mode_label)
-        layout.addLayout(map_layout, 2)
+        layout.addLayout(res_layout)
+        layout.addStretch(1)
 
-        agent_layout = QVBoxLayout()
-        agent_name = match.get("agent", "Agent")
-        agent_icon = get_agent_icon_html(agent_name, self.switcher.base_dir) if self.switcher else "⚔️ "
-        agent_label = QLabel(f"{agent_icon}<b>{agent_name}</b>")
-        agent_label.setStyleSheet("font-size: 13px; color: #c89f68;")
-        agent_layout.addWidget(agent_label)
+        # 5. MATCH MVP / TEAM MVP Label overlay (Positioned to the right of VICTORY/DEFEAT, directly over left edge of map image)
+        is_match_mvp = match.get("is_user_match_mvp", False)
+        is_team_mvp = match.get("is_user_team_mvp", False)
+        if is_match_mvp or is_team_mvp:
+            mvp_lbl = QLabel("MATCH MVP" if is_match_mvp else "TEAM MVP")
+            mvp_color = "#ffd700" if is_match_mvp else "#ffffff"
+            mvp_lbl.setStyleSheet(f"font-size: 11px; font-weight: 900; color: {mvp_color}; background: transparent; letter-spacing: 0.5px;")
+            
+            shadow = QGraphicsDropShadowEffect()
+            shadow.setBlurRadius(8)
+            shadow.setColor(QColor(0, 0, 0, 220))
+            shadow.setOffset(0, 1)
+            mvp_lbl.setGraphicsEffect(shadow)
+            
+            layout.addWidget(mvp_lbl, 0, Qt.AlignVCenter)
+        else:
+            spacer_lbl = QLabel()
+            spacer_lbl.setFixedWidth(70)
+            layout.addWidget(spacer_lbl)
 
-        kda_text = match.get("kda", "-")
-        kda_label = QLabel(f"KDA: {kda_text}")
-        kda_label.setStyleSheet("font-size: 12px; color: #e0d6d1;")
-        agent_layout.addWidget(kda_label)
-        layout.addLayout(agent_layout, 2)
-
-        time_layout = QVBoxLayout()
-        kd_ratio = match.get("kd", "-")
-        kd_label = QLabel(f"KD: {kd_ratio}")
-        kd_label.setStyleSheet("font-size: 12px; font-weight: bold; color: #ffffff;")
-        time_layout.addWidget(kd_label)
-
-        date_text = match.get("date", "")
-        date_label = QLabel(date_text)
-        date_label.setStyleSheet("font-size: 10px; color: #888888;")
-        time_layout.addWidget(date_label)
-        layout.addLayout(time_layout, 1)
-
-        arrow_label = QLabel("➔")
-        arrow_label.setStyleSheet("font-size: 16px; color: #c89f68; font-weight: bold;")
-        layout.addWidget(arrow_label)
+        layout.addSpacing(140)
 
         def on_click(event):
             self.show_match_detail(match)
@@ -4494,179 +4161,254 @@ class AccountHistoryDialog(PopupDialog):
             if item and item.widget():
                 item.widget().deleteLater()
 
+        self.current_detail_match = match
         map_name = match.get("map", "Map")
         mode_name = match.get("mode", "Competitive")
         score_text = match.get("score", "-")
         result = match.get("result", "DRAW")
+        if result == "WIN":
+            result = "VICTORY"
+        elif result == "LOSS":
+            result = "DEFEAT"
+        t = get_theme()
 
         self.detail_header_label.setText(f"{map_name} • {mode_name} ({score_text})")
 
         banner = QWidget()
-        banner_bg = "#1e3025" if result == "WIN" else ("#351e24" if result == "LOSS" else "#282933")
-        banner_border = "#40a060" if result == "WIN" else ("#a04050" if result == "LOSS" else "#585b70")
-        banner.setStyleSheet(f"background-color: {banner_bg}; border: 1px solid {banner_border}; border-radius: 10px; padding: 10px;")
+        if result == "VICTORY":
+            banner_style = "background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 rgba(14, 85, 95, 0.9), stop:1 rgba(10, 45, 60, 0.9)); border: 1.5px solid #148f77;"
+            res_color = "#38ef7d"
+        elif result == "DEFEAT":
+            banner_style = "background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 rgba(95, 25, 45, 0.9), stop:1 rgba(50, 15, 30, 0.9)); border: 1.5px solid #922b21;"
+            res_color = "#ff4b2b"
+        else:
+            banner_style = "background: rgba(60, 70, 80, 0.9); border: 1.5px solid #5d6d7e;"
+            res_color = "#aeb6bf"
+
+        banner.setStyleSheet(f"{banner_style} border-radius: 8px; padding: 10px;")
         banner_layout = QHBoxLayout(banner)
 
-        res_lbl = QLabel(f"<b>{result}</b> ({score_text})")
-        res_lbl.setStyleSheet("font-size: 16px; color: #ffffff; border: none; background: transparent;")
+        rr_change = match.get("rr_change")
+        rr_text = f" <font color='{'#38ef7d' if rr_change and rr_change > 0 else '#ff4b2b'}'>({'+' if rr_change and rr_change > 0 else ''}{rr_change} RR)</font>" if rr_change is not None else ""
+        res_lbl = QLabel(f"<font color='{res_color}'><b>{result}</b></font> ({score_text}){rr_text}")
+        res_lbl.setStyleSheet("font-size: 17px; border: none; background: transparent;")
         banner_layout.addWidget(res_lbl)
         banner_layout.addStretch()
 
-        meta_lbl = QLabel(f"📍 {map_name} • {mode_name} • {match.get('date', '')}")
-        meta_lbl.setStyleSheet("font-size: 12px; color: #b0a8a8; border: none; background: transparent;")
+        meta_lbl = QLabel(f"📍 {map_name}  -  {mode_name}  -  {match.get('date', '')}")
+        meta_lbl.setStyleSheet(f"font-size: 13px; color: {t['text_secondary']}; border: none; background: transparent;")
         banner_layout.addWidget(meta_lbl)
 
         self.detail_layout.addWidget(banner)
 
-        players = match.get("players", [])
-        blue_players = [p for p in players if p.get("team", "").lower() == "blue"]
-        red_players = [p for p in players if p.get("team", "").lower() == "red"]
-
-        if not blue_players and not red_players and players:
-            blue_players = players[:5]
-            red_players = players[5:]
-
-        if blue_players:
-            blue_box = self._create_team_scoreboard("DEFENDERS", blue_players, "#3b82f6")
-            self.detail_layout.addWidget(blue_box)
-
-        if red_players:
-            red_box = self._create_team_scoreboard("ATTACKERS", red_players, "#ef4444")
-            self.detail_layout.addWidget(red_box)
-
+        self._render_scoreboard_content()
         self.stacked_widget.setCurrentIndex(1)
 
-    def _create_team_scoreboard(self, team_title, players_list, team_color):
-        title_str = str(team_title).upper()
-        if "BLUE" in title_str or "DEFEND" in title_str:
-            display_title = "DEFENDERS"
-            color_to_use = "#3b82f6"
-        elif "RED" in title_str or "ATTACK" in title_str:
-            display_title = "ATTACKERS"
-            color_to_use = "#ef4444"
-        else:
-            display_title = team_title
-            color_to_use = team_color
+    def _set_sort_mode(self, mode_key):
+        self.sort_mode = mode_key
+        if hasattr(self, 'current_detail_match'):
+            self.show_match_detail(self.current_detail_match)
 
+    def _render_scoreboard_content(self):
+        match = self.current_detail_match
+        players = list(match.get("players", []))
+
+        # Sort players based on selected column (Item 5)
+        if self.sort_mode == "acs":
+            players.sort(key=lambda p: p.get("acs", p.get("score", 0)), reverse=True)
+        elif self.sort_mode == "kd":
+            players.sort(key=lambda p: float(p.get("kd", 0)), reverse=True)
+        elif self.sort_mode == "kda":
+            players.sort(key=lambda p: (p.get("kills", 0) + p.get("assists", 0)) / max(1, p.get("deaths", 0)), reverse=True)
+        elif self.sort_mode == "econ":
+            players.sort(key=lambda p: p.get("econ_rating", 0), reverse=True)
+        elif self.sort_mode == "fb":
+            players.sort(key=lambda p: p.get("first_bloods", 0), reverse=True)
+        elif self.sort_mode == "plants":
+            players.sort(key=lambda p: p.get("plants", 0), reverse=True)
+        elif self.sort_mode == "defuses":
+            players.sort(key=lambda p: p.get("defuses", 0), reverse=True)
+
+        self.detail_layout.addWidget(self._create_team_scoreboard("INDIVIDUALLY SORTED", players, self.theme['accent']))
+
+    def _create_team_scoreboard(self, team_title, players_list, team_color):
+        t = get_theme()
         box = QWidget()
         box.setObjectName("TeamScoreboardBox")
-        box.setStyleSheet("""
-            #TeamScoreboardBox {
-                background-color: #343031;
+        box.setStyleSheet(f"""
+            #TeamScoreboardBox {{
+                background-color: {t['bg_card']};
                 border-radius: 10px;
-                border: none;
-            }
-            #TeamScoreboardBox QLabel {
+                border: 1px solid {t['border']};
+            }}
+            #TeamScoreboardBox QLabel {{
                 border: none;
                 background: transparent;
-            }
+            }}
         """)
         layout = QVBoxLayout(box)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(8)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(6)
 
-        t_lbl = QLabel(display_title)
-        t_lbl.setStyleSheet(f"font-size: 13px; font-weight: bold; color: {color_to_use}; border: none; background: transparent;")
-        layout.addWidget(t_lbl)
-
+        # Header Row with Interactive Clickable Sort Headers (Item 5)
         header_row = QWidget()
         header_row.setObjectName("TeamHeaderRow")
-        header_row.setStyleSheet("""
-            #TeamHeaderRow {
-                background-color: #2a2728;
+        header_row.setStyleSheet(f"""
+            #TeamHeaderRow {{
+                background-color: {t['bg_tertiary']};
                 border-radius: 6px;
                 border: none;
-            }
-            #TeamHeaderRow QLabel {
-                color: #888888;
+            }}
+            #TeamHeaderRow QLabel {{
+                color: {t['text_muted']};
                 font-size: 11px;
                 font-weight: bold;
                 border: none;
                 background: transparent;
-            }
+            }}
+            #TeamHeaderRow QLabel:hover {{
+                color: {t['accent']};
+            }}
         """)
         h_layout = QHBoxLayout(header_row)
-        h_layout.setContentsMargins(8, 4, 8, 4)
+        h_layout.setContentsMargins(8, 6, 8, 6)
 
-        h_player = QLabel("Player")
-        h_layout.addWidget(h_player, 3)
+        lbl_player = QLabel("PLAYER")
+        lbl_acs = QLabel("AVG COMBAT SCORE")
+        lbl_kda = QLabel("KDA")
+        lbl_kd = QLabel("K/D")
+        lbl_mvp = QLabel("AWARD / MVP")
 
-        h_agent = QLabel("Agent")
-        h_layout.addWidget(h_agent, 2)
+        for lbl, mode in [
+            (lbl_acs, "acs"), (lbl_kda, "kda"), (lbl_kd, "kd")
+        ]:
+            lbl.setCursor(Qt.PointingHandCursor)
+            lbl.mousePressEvent = lambda _, m=mode: self._set_sort_mode(m)
 
-        h_score = QLabel("ACS/Score")
-        h_layout.addWidget(h_score, 1)
-
-        h_kda = QLabel("K / D / A")
-        h_layout.addWidget(h_kda, 2)
-
-        h_kd = QLabel("K/D")
-        h_layout.addWidget(h_kd, 1)
+        h_layout.addWidget(lbl_player, 4)
+        h_layout.addWidget(lbl_acs, 2)
+        h_layout.addWidget(lbl_kda, 2)
+        h_layout.addWidget(lbl_kd, 2)
+        h_layout.addWidget(lbl_mvp, 2)
 
         layout.addWidget(header_row)
+
+        # Identify my team color for team-color container coding
+        my_team = "blue"
+        for p in players_list:
+            p_name = p.get("name", "")
+            if self.in_game_name and p_name.lower() == self.in_game_name.lower():
+                my_team = p.get("team", "blue").lower()
+                break
 
         for p in players_list:
             p_name = p.get("name", "Player")
             p_tag = p.get("tag", "")
             full_tag = f"{p_name}#{p_tag}" if p_tag else p_name
-
             is_me = (self.in_game_name and p_name.lower() == self.in_game_name.lower())
+            p_team = p.get("team", "red").lower()
+
+            if is_me:
+                row_bg = "rgba(200, 159, 104, 0.3)"
+                row_border = f"1.5px solid {t['accent']}"
+            elif p_team == my_team:
+                row_bg = "rgba(0, 150, 136, 0.3)"
+                row_border = "1px solid rgba(0, 150, 136, 0.6)"
+            else:
+                row_bg = "rgba(180, 40, 60, 0.3)"
+                row_border = "1px solid rgba(180, 40, 60, 0.6)"
 
             row = QWidget()
             row.setObjectName("PlayerRow")
-            if is_me:
-                row.setStyleSheet("""
-                    #PlayerRow {
-                        background-color: #4a3e2e;
-                        border: 1px solid #c89f68;
-                        border-radius: 6px;
-                    }
-                    #PlayerRow QLabel {
-                        border: none;
-                        background: transparent;
-                    }
-                """)
-            else:
-                row.setStyleSheet("""
-                    #PlayerRow {
-                        background-color: #2c2a2b;
-                        border: none;
-                        border-radius: 6px;
-                    }
-                    #PlayerRow QLabel {
-                        border: none;
-                        background: transparent;
-                    }
-                """)
+            row.setStyleSheet(f"""
+                #PlayerRow {{
+                    background-color: {row_bg};
+                    border: {row_border};
+                    border-radius: 6px;
+                }}
+                #PlayerRow:hover {{
+                    border: 1.5px solid {t['accent']};
+                    background-color: rgba(255, 255, 255, 0.08);
+                }}
+            """)
 
             r_layout = QHBoxLayout(row)
             r_layout.setContentsMargins(8, 6, 8, 6)
 
-            rank_text = p.get("rank", "Unranked")
-            r_name = QLabel(f"<b>{full_tag}</b><br><font color='#b0a8a8' size='2'>{rank_text}</font>")
-            r_name.setStyleSheet("font-size: 12px; color: #ffffff;" if is_me else "font-size: 12px; color: #e0d6d1;")
-            r_layout.addWidget(r_name, 3)
+            # 1. Player column: Large Agent Icon (36x36) + Rank Tier Icon (20x20) + Name
+            player_cell = QWidget()
+            pc_layout = QHBoxLayout(player_cell)
+            pc_layout.setContentsMargins(0, 0, 0, 0)
+            pc_layout.setSpacing(6)
 
             p_agent_name = p.get('character', 'Agent')
-            p_agent_icon = get_agent_icon_html(p_agent_name, self.switcher.base_dir) if self.switcher else "⚔️ "
-            r_agent = QLabel(f"{p_agent_icon}{p_agent_name}")
-            r_agent.setStyleSheet("font-size: 12px; color: #c89f68;")
-            r_layout.addWidget(r_agent, 2)
+            agent_icon_path = get_asset_path(f"{p_agent_name}.png")
+            if not os.path.exists(agent_icon_path) and self.switcher:
+                agent_icon_path = str(self.switcher.base_dir / "Agents" / f"{p_agent_name}.png")
 
-            r_score = QLabel(str(p.get("score", 0)))
-            r_score.setStyleSheet("font-size: 12px; color: #ffffff; font-weight: bold;")
-            r_layout.addWidget(r_score, 1)
+            agent_lbl = QLabel()
+            agent_lbl.setFixedSize(36, 36)
+            if os.path.exists(agent_icon_path):
+                agent_lbl.setPixmap(QPixmap(agent_icon_path).scaled(36, 36, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            else:
+                agent_lbl.setText("⚔️")
+            pc_layout.addWidget(agent_lbl)
 
-            k = p.get("kills", 0)
-            d = p.get("deaths", 0)
-            a = p.get("assists", 0)
+            rank_text = p.get("rank", "Unranked")
+            rank_icon_path = get_asset_path(f"{rank_text.lower().replace(' ', '_')}.png")
+            if os.path.exists(rank_icon_path):
+                rank_lbl = QLabel()
+                rank_lbl.setPixmap(QPixmap(rank_icon_path).scaled(20, 20, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                pc_layout.addWidget(rank_lbl)
+
+            name_lbl = QLabel(f"<b>{full_tag}</b>")
+            name_lbl.setStyleSheet(f"font-size: 13px; color: {t['text_primary']};")
+            pc_layout.addWidget(name_lbl)
+            pc_layout.addStretch()
+
+            r_layout.addWidget(player_cell, 4)
+
+            # 2. AVG COMBAT SCORE
+            acs_val = p.get("acs", 0)
+            r_acs = QLabel(str(acs_val))
+            r_acs.setStyleSheet("font-size: 13px; font-weight: bold; color: #ffffff;")
+            r_layout.addWidget(r_acs, 2)
+
+            # 3. KDA
+            k, d, a = p.get("kills", 0), p.get("deaths", 0), p.get("assists", 0)
             r_kda = QLabel(f"{k} / {d} / {a}")
             r_kda.setStyleSheet("font-size: 12px; color: #e0d6d1;")
             r_layout.addWidget(r_kda, 2)
 
+            # 4. K/D Ratio
+            kd_val = float(p.get("kd", 0))
+            kd_color = t['accent'] if kd_val >= 1.0 else t['danger']
             r_kd = QLabel(str(p.get("kd", "0.00")))
-            r_kd.setStyleSheet("font-size: 12px; font-weight: bold; color: #a6e3a1;" if float(p.get("kd", 0)) >= 1.0 else "font-size: 12px; font-weight: bold; color: #f38ba8;")
-            r_layout.addWidget(r_kd, 1)
+            r_kd.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {kd_color};")
+            r_layout.addWidget(r_kd, 2)
+
+            # 5. Dedicated AWARD / MVP Column (Unified aesthetics with Match Card)
+            r_mvp = QLabel("")
+            if p.get("is_match_mvp"):
+                r_mvp.setText("MATCH MVP")
+                r_mvp.setStyleSheet("font-size: 11px; font-weight: 900; color: #ffd700; background: transparent; letter-spacing: 0.5px;")
+                sh = QGraphicsDropShadowEffect()
+                sh.setBlurRadius(6)
+                sh.setColor(QColor(0, 0, 0, 200))
+                sh.setOffset(0, 1)
+                r_mvp.setGraphicsEffect(sh)
+            elif p.get("is_team_mvp"):
+                r_mvp.setText("TEAM MVP")
+                r_mvp.setStyleSheet("font-size: 10px; font-weight: 900; color: #ffffff; background: transparent; letter-spacing: 0.5px;")
+                sh = QGraphicsDropShadowEffect()
+                sh.setBlurRadius(6)
+                sh.setColor(QColor(0, 0, 0, 200))
+                sh.setOffset(0, 1)
+                r_mvp.setGraphicsEffect(sh)
+            else:
+                r_mvp.setStyleSheet("font-size: 11px; color: transparent;")
+            
+            r_layout.addWidget(r_mvp, 2)
 
             layout.addWidget(row)
 

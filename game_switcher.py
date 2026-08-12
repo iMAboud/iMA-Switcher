@@ -5,6 +5,7 @@ import json
 import ctypes
 import sys
 import threading
+import psutil
 import copy
 import logging
 from zipfile import ZipFile, BadZipFile
@@ -20,7 +21,7 @@ from pathlib import Path
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import QEvent
 
-APP_VERSION = "1.0.27"
+APP_VERSION = "1.0.30"
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -73,7 +74,8 @@ class GameSwitcher:
                     "show_current_rr": {"type": "boolean"},
                     "show_last_game_rr": {"type": "boolean"},
                     "show_splash_notification": {"type": "boolean"},
-                    "show_riot_client": {"type": "boolean"}
+                    "show_riot_client": {"type": "boolean"},
+                    "theme": {"type": "string"}
                 },
                 "required": [
                     "show_game_icons", "show_rank_tips", "tip_delay", "use_rank_icons",
@@ -135,7 +137,8 @@ class GameSwitcher:
             "show_current_rr": True,
             "show_last_game_rr": True,
             "show_splash_notification": True,
-            "show_riot_client": False
+            "show_riot_client": False,
+            "theme": "dark_gold"
         },
         "graphics_settings": {
             "display_mode": "Default",
@@ -323,6 +326,8 @@ class GameSwitcher:
             if path.exists():
                 return str(path)
         return None
+
+
 
     def _load_riot_games_config_defaults(self):
         return {
@@ -840,96 +845,109 @@ class GameSwitcher:
         elif game == 'both' and selected_game is not None:
             game = selected_game
 
-        self._terminate_processes()
-        # Poll processes to ensure they terminate quickly instead of fixed sleep
-        start_time = time.time()
-        all_procs = self.GAMES['valorant']["processes_to_kill"] + self.GAMES['lol']["processes_to_kill"]
-        while time.time() - start_time < 2.0:
-            time.sleep(0.1)
-            # Brief check
-            break
+        last_active = self.config.get("last_active_account") if self.config else None
+        is_same_account = (last_active == account_name)
 
-        backup_paths = {}
-        try:
-            # 1. Backup phase: Rename existing directories/junctions
-            for item_name in self.riot_games_config["LoginData"].keys():
-                riot_item_path = self.riot_client_data_path / item_name
-                backup_path = self.riot_client_data_path / f"{item_name}.bak"
-                
-                if riot_item_path.is_symlink() or riot_item_path.exists():
+        if not is_same_account:
+            self._terminate_processes()
+            # Poll processes to ensure they terminate completely before modifying junctions
+            start_time = time.time()
+            all_procs = set(self.GAMES['valorant']["processes_to_kill"] + self.GAMES['lol']["processes_to_kill"])
+            while time.time() - start_time < 3.0:
+                running = False
+                for proc in psutil.process_iter(['name']):
+                    try:
+                        if proc.info['name'] in all_procs:
+                            running = True
+                            break
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        pass
+                if not running:
+                    break
+                time.sleep(0.1)
+
+            backup_paths = {}
+            try:
+                # 1. Backup phase: Rename existing directories/junctions
+                for item_name in self.riot_games_config["LoginData"].keys():
+                    riot_item_path = self.riot_client_data_path / item_name
+                    backup_path = self.riot_client_data_path / f"{item_name}.bak"
+                    
+                    if riot_item_path.is_symlink() or riot_item_path.exists():
+                        if backup_path.is_symlink() or backup_path.exists():
+                            self._remove_junction_or_dir(backup_path)
+                        riot_item_path.rename(backup_path)
+                        backup_paths[item_name] = backup_path
+
+                # 2. Attempt phase: Create new junctions
+                for item_name in self.riot_games_config["LoginData"].keys():
+                    riot_item_path = self.riot_client_data_path / item_name
+                    profile_item_path = account_path / item_name
+                    
+                    if profile_item_path.exists():
+                        self._create_junction(str(profile_item_path), str(riot_item_path))
+
+                # 3. Commit phase: Delete backups
+                for backup_path in backup_paths.values():
                     if backup_path.is_symlink() or backup_path.exists():
                         self._remove_junction_or_dir(backup_path)
-                    riot_item_path.rename(backup_path)
-                    backup_paths[item_name] = backup_path
 
-            # 2. Attempt phase: Create new junctions
-            for item_name in self.riot_games_config["LoginData"].keys():
-                riot_item_path = self.riot_client_data_path / item_name
-                profile_item_path = account_path / item_name
-                
-                if profile_item_path.exists():
-                    self._create_junction(str(profile_item_path), str(riot_item_path))
-
-            # 3. Commit phase: Delete backups
-            for backup_path in backup_paths.values():
-                if backup_path.is_symlink() or backup_path.exists():
-                    self._remove_junction_or_dir(backup_path)
-
-            # Synchronously restore local account config BEFORE launching Riot Client
-            acc_config_dir = account_path / "Config"
-            if acc_config_dir.exists():
-                target_ini = self.get_valorant_ini_path(account_name, "RiotUserSettings.ini")
-                if target_ini and target_ini.parent:
-                    for cfg_file in ["RiotUserSettings.ini", "GameUserSettings.ini", "BackupKeybinds.json"]:
-                        src_f = acc_config_dir / cfg_file
-                        dst_f = target_ini.parent / cfg_file
-                        if src_f.exists():
-                            self._copy_file_if_different(src_f, dst_f)
-                            try:
-                                future_t = time.time() + 10
-                                os.utime(dst_f, (future_t, future_t))
-                            except Exception:
-                                pass
-                            sibling_dir = target_ini.parent.parent / ("WindowsClient" if target_ini.parent.name == "Windows" else "Windows")
-                            if sibling_dir.exists():
+                # Synchronously restore local account config BEFORE launching Riot Client
+                acc_config_dir = account_path / "Config"
+                if acc_config_dir.exists():
+                    target_ini = self.get_valorant_ini_path(account_name, "RiotUserSettings.ini")
+                    if target_ini and target_ini.parent:
+                        for cfg_file in ["RiotUserSettings.ini", "GameUserSettings.ini", "BackupKeybinds.json"]:
+                            src_f = acc_config_dir / cfg_file
+                            dst_f = target_ini.parent / cfg_file
+                            if src_f.exists():
+                                self._copy_file_if_different(src_f, dst_f)
                                 try:
-                                    shutil.copy2(dst_f, sibling_dir / cfg_file)
-                                    os.utime(sibling_dir / cfg_file, (future_t, future_t))
+                                    future_t = time.time() + 10
+                                    os.utime(dst_f, (future_t, future_t))
                                 except Exception:
                                     pass
+                                sibling_dir = target_ini.parent.parent / ("WindowsClient" if target_ini.parent.name == "Windows" else "Windows")
+                                if sibling_dir.exists():
+                                    try:
+                                        shutil.copy2(dst_f, sibling_dir / cfg_file)
+                                        os.utime(sibling_dir / cfg_file, (future_t, future_t))
+                                    except Exception:
+                                        pass
 
-        except Exception as e:
-            # 4. Rollback phase
-            logging.error(f"Account switch failed, rolling back. Error: {e}")
-            for item_name, backup_path in backup_paths.items():
-                riot_item_path = self.riot_client_data_path / item_name
+            except Exception as e:
+                # 4. Rollback phase
+                logging.error(f"Account switch failed, rolling back. Error: {e}")
+                for item_name, backup_path in backup_paths.items():
+                    riot_item_path = self.riot_client_data_path / item_name
+                    
+                    # Clean up the failed/partial new junction/directory
+                    if riot_item_path.is_symlink() or riot_item_path.exists():
+                        self._remove_junction_or_dir(riot_item_path)
+                    
+                    # Restore from backup
+                    if backup_path.is_symlink() or backup_path.exists():
+                        backup_path.rename(riot_item_path)
                 
-                # Clean up the failed/partial new junction/directory
-                if riot_item_path.is_symlink() or riot_item_path.exists():
-                    self._remove_junction_or_dir(riot_item_path)
-                
-                # Restore from backup
-                if backup_path.is_symlink() or backup_path.exists():
-                    backup_path.rename(riot_item_path)
-            
-            return False, f"Failed to create junction: {e}\nYour previous configuration has been restored.", None
+                return False, f"Failed to create junction: {e}\nYour previous configuration has been restored.", None
 
         try:
-            launch_args = self.GAMES[game]["launch_args"].split()
-            command = [self.riot_games_config["ExeLocationDefault"]] + launch_args
-            
+            exe_path = self.riot_games_config["ExeLocationDefault"]
             ui_settings = self.get_ima_config().get("ui_settings", {})
             show_riot_client = ui_settings.get("show_riot_client", False)
             
             creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW if (sys.platform == "win32" and not show_riot_client) else subprocess.CREATE_NEW_PROCESS_GROUP
-            
             startupinfo = None
             if sys.platform == "win32" and not show_riot_client:
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                 startupinfo.wShowWindow = subprocess.SW_HIDE
 
-            subprocess.Popen(command, creationflags=creationflags, close_fds=True, startupinfo=startupinfo)
+            launch_args = self.GAMES[game]["launch_args"].split()
+            command = [exe_path] + launch_args
+            working_dir = str(Path(exe_path).parent)
+            
+            subprocess.Popen(command, cwd=working_dir, creationflags=creationflags, close_fds=True, startupinfo=startupinfo)
 
             self.record_account_launch(account_name)
 
@@ -952,6 +970,8 @@ class GameSwitcher:
             return False, f"Riot Client not found at:\n{self.riot_games_config['ExeLocationDefault']}", None
         except Exception as e:
             return False, f"Failed to launch Riot Client: {e}", None
+
+
 
     def add_account_flow(self):
         if not self.is_admin(): return False
@@ -2034,9 +2054,13 @@ class GameSwitcher:
         config_data = self._load_game_config(account_name)
         config_data["last_launched_at"] = time.time()
         self._save_game_config(account_name, config_data)
+        
+        if self.config is not None:
+            self.config["last_active_account"] = account_name
+            self._save_config()
 
     def _monitor_game_session(self, account_name, on_update_callback=None):
-        target_processes = ["VALORANT-Win64-Shipping.exe", "VALORANT.exe", "RiotClientServices.exe"]
+        target_processes = ["VALORANT-Win64-Shipping.exe", "VALORANT.exe"]
         process_detected = False
         start_wait_time = time.time()
 
@@ -2125,7 +2149,17 @@ class GameSwitcher:
 
         account_config = self._load_game_config(account_name)
         last_launched_at = account_config.get("last_launched_at", 0.0)
-        rank_fetched_at = account_config.get("rank_fetched_at", account_config.get("last_fetched_at", 0.0))
+        rank_fetched_at = account_config.get("rank_fetched_at", 0.0)
+
+        # Smart Cooldown & Timestamp Verification
+        # 1. If rank was already fetched AFTER the last launch of this account, data is up-to-date.
+        # 2. If app was launched/fetched within 10 minutes (600s), apply cooldown to prevent API spam.
+        # (Both rules are bypassed if is_manual_refresh is True)
+        if not is_manual_refresh:
+            if rank_fetched_at > 0 and rank_fetched_at >= last_launched_at:
+                return
+            if time.time() - rank_fetched_at < 600:
+                return
 
         region = self._get_region()
 
@@ -2240,12 +2274,28 @@ class GameSwitcher:
         region = self._get_region()
         puuid = account_config.get("puuid")
 
+        # 1. Fetch Lifetime MMR History for exact per-game RR changes (/v1/lifetime/mmr_history)
+        mmr_history_map = {}
+        mmr_history_list = []
+        if in_game_name and in_game_tag:
+            try:
+                mmr_url = f"https://api.henrikdev.xyz/valorant/v1/lifetime/mmr_history/{region}/{in_game_name}/{in_game_tag}"
+                mmr_res = self._call_henrik_api(mmr_url)
+                mmr_history_list = mmr_res.get("data", []) if isinstance(mmr_res, dict) else []
+                for item in mmr_history_list:
+                    if isinstance(item, dict):
+                        m_id = item.get("match_id")
+                        last_change = item.get("last_mmr_change")
+                        if m_id and last_change is not None:
+                            mmr_history_map[m_id] = last_change
+            except Exception as e:
+                logging.debug(f"Could not fetch lifetime MMR history for {account_name}: {e}")
+
+        parsed_matches = []
         if puuid:
             url = f"https://api.henrikdev.xyz/valorant/v3/by-puuid/matches/{region}/{puuid}?size=15"
         else:
             url = f"https://api.henrikdev.xyz/valorant/v3/matches/{region}/{in_game_name}/{in_game_tag}?size=15"
-
-        parsed_matches = []
 
         try:
             try:
@@ -2264,8 +2314,17 @@ class GameSwitcher:
                 if not isinstance(match_item, dict):
                     continue
                 meta = match_item.get("metadata") or {}
+                match_id = meta.get("matchid") or meta.get("match_id") or ""
                 map_obj = meta.get("map")
-                map_name = map_obj.get("name") if isinstance(map_obj, dict) else str(map_obj or "Unknown")
+                if isinstance(map_obj, dict):
+                    map_name = map_obj.get("name") or map_obj.get("id") or "Unknown"
+                elif isinstance(map_obj, str):
+                    map_name = map_obj
+                else:
+                    map_name = meta.get("map_name") or "Unknown"
+
+                if map_name and "/" in map_name:
+                    map_name = map_name.rstrip("/").split("/")[-1].capitalize()
                 mode_name = meta.get("mode") or "Competitive"
                 game_start = meta.get("game_start") or 0
 
@@ -2276,6 +2335,54 @@ class GameSwitcher:
                         date_formatted = dt.strftime("%b %d, %H:%M")
                     except Exception:
                         pass
+
+                # Parse rounds data to calculate plants, defuses, damage dealt & credits spent per player
+                rounds_list = match_item.get("rounds") or []
+                player_plants_map = {}
+                player_defuses_map = {}
+                player_damage_map = {}
+                player_spent_map = {}
+                player_first_bloods_map = {}
+
+                for round_obj in rounds_list:
+                    if not isinstance(round_obj, dict):
+                        continue
+                    p_stats_list = round_obj.get("player_stats") or []
+                    for ps in p_stats_list:
+                        if not isinstance(ps, dict):
+                            continue
+                        p_puuid = str(ps.get("player_puuid") or ps.get("puuid") or ps.get("player_id") or "").strip()
+                        if not p_puuid:
+                            p_name = str(ps.get("player_display_name") or ps.get("name") or "").strip()
+                            p_puuid = p_name
+
+                        if not p_puuid:
+                            continue
+
+                        # Plants
+                        plant_events = ps.get("plant_events") or []
+                        if plant_events or ps.get("was_planter"):
+                            player_plants_map[p_puuid] = player_plants_map.get(p_puuid, 0) + (len(plant_events) if plant_events else 1)
+
+                        # Defuses
+                        defuse_events = ps.get("defuse_events") or []
+                        if defuse_events or ps.get("was_defuser"):
+                            player_defuses_map[p_puuid] = player_defuses_map.get(p_puuid, 0) + (len(defuse_events) if defuse_events else 1)
+
+                        # Damage
+                        dmg = ps.get("damage", 0)
+                        player_damage_map[p_puuid] = player_damage_map.get(p_puuid, 0) + dmg
+
+                        # Economy spent
+                        econ = ps.get("economy") or {}
+                        spent = econ.get("spent", 0)
+                        player_spent_map[p_puuid] = player_spent_map.get(p_puuid, 0) + spent
+
+                        # First bloods
+                        kills_list = ps.get("kill_events") or []
+                        for k_ev in kills_list:
+                            if isinstance(k_ev, dict) and k_ev.get("is_first_kill"):
+                                player_first_bloods_map[p_puuid] = player_first_bloods_map.get(p_puuid, 0) + 1
 
                 players_dict = match_item.get("players") or {}
                 all_players = players_dict.get("all_players") or []
@@ -2289,12 +2396,32 @@ class GameSwitcher:
                         p_team = str(player.get("team") or "Red").strip()
                         p_char = str(player.get("character") or "Agent").strip()
                         p_tier = str(player.get("currenttier_patched") or "Unranked").strip()
+                        p_puuid_val = str(player.get("puuid") or p_name).strip()
 
                         p_stats = player.get("stats") or {}
                         p_kills = p_stats.get("kills", 0)
                         p_deaths = p_stats.get("deaths", 0)
                         p_assists = p_stats.get("assists", 0)
                         p_score = p_stats.get("score", 0)
+
+                        # Calculate real Econ Rating = (Total Damage Dealt / Total Credits Spent) * 1000
+                        p_dmg = player_damage_map.get(p_puuid_val, p_stats.get("damage_dealt", p_stats.get("score", 0)))
+                        p_spent = player_spent_map.get(p_puuid_val, 0)
+                        if p_spent > 0:
+                            p_econ_rating = int((p_dmg / p_spent) * 1000)
+                        else:
+                            p_economy = player.get("economy") or {}
+                            p_econ_rating = p_economy.get("overall", {}).get("econ_rating", 0) if isinstance(p_economy.get("overall"), dict) else 0
+
+                        # Plants, Defuses, First Bloods from round parsing
+                        p_first_bloods = player_first_bloods_map.get(p_puuid_val, p_stats.get("first_bloods", p_stats.get("firstkills", 0)))
+                        p_plants = player_plants_map.get(p_puuid_val, p_stats.get("plants", 0))
+                        p_defuses = player_defuses_map.get(p_puuid_val, p_stats.get("defuses", 0))
+
+                        # Assets for agent icon & rank tier icon
+                        p_assets = player.get("assets") or {}
+                        agent_small_icon = p_assets.get("agent", {}).get("small") if isinstance(p_assets.get("agent"), dict) else None
+                        rank_small_icon = p_assets.get("card", {}).get("small") if isinstance(p_assets.get("card"), dict) else None
 
                         parsed_players_list.append({
                             "name": p_name,
@@ -2306,12 +2433,18 @@ class GameSwitcher:
                             "deaths": p_deaths,
                             "assists": p_assists,
                             "score": p_score,
-                            "kd": f"{(p_kills / max(1, p_deaths)):.2f}"
+                            "kd": f"{(p_kills / max(1, p_deaths)):.2f}",
+                            "econ_rating": p_econ_rating,
+                            "first_bloods": p_first_bloods,
+                            "plants": p_plants,
+                            "defuses": p_defuses,
+                            "agent_icon": agent_small_icon,
+                            "rank_icon": rank_small_icon
                         })
 
                         if puuid and str(player.get("puuid") or "").strip() == puuid:
                             target_player = player
-                        elif p_name.lower() == in_game_name.strip().lower() and p_tag.lower() == in_game_tag.strip().lower():
+                        elif in_game_name and p_name.lower() == in_game_name.strip().lower() and in_game_tag and p_tag.lower() == in_game_tag.strip().lower():
                             target_player = player
 
                 if not target_player and all_players and isinstance(all_players[0], dict):
@@ -2351,12 +2484,65 @@ class GameSwitcher:
                     team_won = blue_team.get("has_won", False)
                     my_score, opp_score = blue_rounds, red_rounds
 
-                match_result = "WIN" if team_won else ("LOSS" if my_score != opp_score else "DRAW")
+                # Determine Match MVP (highest score across all players) and Team MVPs (highest score per team)
+                highest_score_all = -1
+                highest_score_red = -1
+                highest_score_blue = -1
+                for p in parsed_players_list:
+                    sc = p.get("score", 0)
+                    if sc > highest_score_all:
+                        highest_score_all = sc
+                    if p.get("team", "").lower() == "red" and sc > highest_score_red:
+                        highest_score_red = sc
+                    elif p.get("team", "").lower() == "blue" and sc > highest_score_blue:
+                        highest_score_blue = sc
+
+                total_rounds = max(1, red_rounds + blue_rounds)
+                for p in parsed_players_list:
+                    sc = p.get("score", 0)
+                    p["acs"] = int(sc / total_rounds) # Calculate Average Combat Score
+                    p["is_match_mvp"] = (sc == highest_score_all and sc > 0)
+                    team_high = highest_score_red if p.get("team", "").lower() == "red" else highest_score_blue
+                    p["is_team_mvp"] = (sc == team_high and sc > 0 and not p["is_match_mvp"])
+
+                match_result = "VICTORY" if team_won else ("DEFEAT" if my_score != opp_score else "DRAW")
                 formatted_score = f"{my_score} - {opp_score}"
                 formatted_kda = f"{kills} / {deaths} / {assists}"
                 calculated_kd = f"{(kills / max(1, deaths)):.2f}"
 
+                # Multi-stage RR change extraction
+                rr_delta = mmr_history_map.get(match_id)
+                if rr_delta is None and mmr_history_list:
+                    # Match by index if mmr_history_list is ordered
+                    match_idx = len(parsed_matches)
+                    if match_idx < len(mmr_history_list):
+                        rr_delta = mmr_history_list[match_idx].get("last_mmr_change")
+                if rr_delta is None and target_player and isinstance(target_player, dict):
+                    rr_delta = target_player.get("mmr_change_to_last_game") or target_player.get("mmr_change")
+                if rr_delta is None and len(parsed_matches) == 0:
+                    # Fallback for the latest match from account saved state
+                    saved_acc = self.get_saved_accounts().get(account_name)
+                    if saved_acc and len(saved_acc) >= 7 and saved_acc[6] is not None:
+                        rr_delta = saved_acc[6]
+
+                # Check if current user is Match MVP or Team MVP
+                is_user_match_mvp = False
+                is_user_team_mvp = False
+                if target_player:
+                    target_name = str(target_player.get("name") or "").lower()
+                    target_tag = str(target_player.get("tag") or "").lower()
+                    for p in parsed_players_list:
+                        if p.get("name", "").lower() == target_name and p.get("tag", "").lower() == target_tag:
+                            is_user_match_mvp = p.get("is_match_mvp", False)
+                            is_user_team_mvp = p.get("is_team_mvp", False)
+                            break
+
+                # Skip corrupted / incomplete API match items (0-0 rounds, no players, or unparsed agent)
+                if not parsed_players_list or (my_score == 0 and opp_score == 0 and agent_name in ["Unknown", ""]):
+                    continue
+
                 parsed_matches.append({
+                    "match_id": match_id,
                     "map": map_name,
                     "mode": mode_name,
                     "agent": agent_name,
@@ -2365,17 +2551,46 @@ class GameSwitcher:
                     "kda": formatted_kda,
                     "kd": calculated_kd,
                     "date": date_formatted,
+                    "rr_change": rr_delta,
+                    "rank": target_player.get("currenttier_patched", "Unranked") if target_player else "Unranked",
+                    "is_user_match_mvp": is_user_match_mvp,
+                    "is_user_team_mvp": is_user_team_mvp,
                     "players": parsed_players_list
                 })
 
             if parsed_matches:
-                account_config["last_match_map"] = parsed_matches[0]["map"]
-                account_config["last_match_agent"] = parsed_matches[0]["agent"]
-                account_config["match_history"] = parsed_matches
+                # Merge newly fetched matches with cached history to persist rr_change across sessions
+                cached_history = account_config.get("match_history", [])
+                cached_map = {m.get("match_id"): m for m in cached_history if isinstance(m, dict) and m.get("match_id")}
+
+                final_history = []
+                for fresh in parsed_matches:
+                    m_id = fresh.get("match_id")
+                    if m_id and m_id in cached_map:
+                        cached_match = cached_map[m_id]
+                        if fresh.get("rr_change") is None and cached_match.get("rr_change") is not None:
+                            fresh["rr_change"] = cached_match.get("rr_change")
+                    final_history.append(fresh)
+
+                # Append any valid older cached matches not in the fresh fetch
+                fresh_ids = {m.get("match_id") for m in parsed_matches if m.get("match_id")}
+                for old in cached_history:
+                    if isinstance(old, dict) and old.get("match_id") not in fresh_ids:
+                        # Ensure old cached items are also valid matches
+                        if old.get("score") != "0 - 0" and old.get("agent") not in ["Unknown", ""]:
+                            final_history.append(old)
+
+                # Cap total accumulated history to 50 matches
+                final_history = final_history[:50]
+
+                account_config["last_match_map"] = final_history[0]["map"]
+                account_config["last_match_agent"] = final_history[0]["agent"]
+                account_config["match_history"] = final_history
                 account_config["history_fetched_at"] = time.time()
                 self._save_game_config(account_name, account_config)
                 if on_update_callback:
                     on_update_callback(account_name)
+                return final_history
 
         except Exception as e:
             logging.error(f"Failed to fetch match history from Henrik API for {account_name}: {e}")
@@ -2402,12 +2617,11 @@ class GameSwitcher:
             for account_name in accounts:
                 account_config = self._load_game_config(account_name)
                 last_launched_at = account_config.get("last_launched_at", 0.0)
-                history_fetched_at = account_config.get("history_fetched_at", account_config.get("last_fetched_at", 0.0))
+                history_fetched_at = account_config.get("history_fetched_at", 0.0)
                 
                 is_stale = (last_launched_at > 0 and last_launched_at > history_fetched_at)
-                is_active = (account_name == last_switched)
 
-                if is_manual_refresh or is_stale or is_active:
+                if is_manual_refresh or is_stale:
                     try:
                         self.fetch_account_match_history(account_name, force_refresh=is_manual_refresh, on_update_callback=on_update_callback)
                     except Exception as e:
@@ -2519,4 +2733,4 @@ del "%~f0" > NUL 2>&1
 
         creation_flags = 0x08000000 if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
         subprocess.Popen(["cmd.exe", "/c", str(batch_script_path)], creationflags=creation_flags)
-        QApplication.instance().quit()
+        QApplication.instance().quit()

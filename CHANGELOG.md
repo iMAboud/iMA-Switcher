@@ -1,5 +1,5 @@
-### What's New in v1.0.26
+### What's New in v1.0.30
 
-- **Instant Update Checks**: Fixed the "Checking for update..." screen so it immediately lets you know when your app is up to date.
-- **Smooth Auto-Updates**: Updates now download and install quietly in the background without any warning popups or terminal windows.
-- **Improved Stability**: Fixed background connection issues to ensure fast and reliable update checks on all Windows PCs.
+- **Overhauled Match History UI**: Re-architected match history cards with in-game map artwork underlays, soft translucent Victory/Defeat color gradients, and aligned MATCH MVP / TEAM MVP badges.
+- **Per-Match RR Tracking**: Added multi-stage RR delta resolution and persistent local match history caching across sessions.
+- **Scoreboard & Layout Refinements**: Added interactive hover effects across match history items, hidden scrollbar policy, and unified MVP badge styling.

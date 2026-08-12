@@ -3,7 +3,7 @@
 
 import os
 
-datas_list = [('Assets', 'Assets'), ('icons', 'icons'), ('Agents', 'Agents')]
+datas_list = [('Assets', 'Assets'), ('icons', 'icons'), ('Agents', 'Agents'), ('maps', 'maps')]
 if os.path.exists('credentials.json'):
     datas_list.append(('credentials.json', '.'))
 if os.path.exists('commit.txt'):
@@ -17,7 +17,7 @@ a = Analysis(
     binaries=[],
     datas=datas_list,
     hiddenimports=[
-        'game_switcher', 'actions_context', 'actions_settings', 'ui_components', 'updater', 'win32com.client', 'requests',
+        'game_switcher', 'actions_context', 'actions_settings', 'ui_components', 'theme_manager', 'updater', 'win32com.client', 'requests',
         'googleapiclient', 'google_auth_oauthlib', 'google.auth.transport.requests', 'jsonschema',
         'google_auth_oauthlib.flow', 'googleapiclient.discovery', 'googleapiclient.http', 'google.oauth2.credentials',
         'wsgiref', 'wsgiref.simple_server'
