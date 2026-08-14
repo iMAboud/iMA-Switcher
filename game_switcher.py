@@ -21,7 +21,7 @@ from pathlib import Path
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import QEvent
 
-APP_VERSION = "1.0.31"
+APP_VERSION = "1.0.32"
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -724,6 +724,20 @@ class GameSwitcher:
 
     def get_account_crosshairs(self, account_name):
         ini_path = self.get_valorant_ini_path(account_name, "RiotUserSettings.ini")
+        puuid = self.get_account_puuid(account_name)
+        if puuid:
+            config_dir = self.get_valorant_config_dir_for_puuid(puuid)
+            if config_dir:
+                win_path = config_dir / "Windows" / "RiotUserSettings.ini"
+                win_client_path = config_dir / "WindowsClient" / "RiotUserSettings.ini"
+                live_file = win_path if win_path.exists() else (win_client_path if win_client_path.exists() else None)
+                if live_file and ini_path:
+                    if not ini_path.exists() or (live_file.stat().st_mtime > ini_path.stat().st_mtime):
+                        try:
+                            shutil.copy2(live_file, ini_path)
+                        except Exception:
+                            pass
+
         if not ini_path or not ini_path.exists():
             return None
         settings = self.read_ini_settings(ini_path)
@@ -739,6 +753,18 @@ class GameSwitcher:
             logging.error(f"Error parsing crosshair JSON for {account_name}: {e}")
             return None
 
+    def set_account_crosshairs(self, account_name, crosshair_data):
+        ini_path = self.get_valorant_ini_path(account_name, "RiotUserSettings.ini")
+        if not ini_path:
+            return False
+        try:
+            json_str = json.dumps(crosshair_data, separators=(',', ':'))
+            escaped_val = '"' + json_str.replace('\\', '\\\\').replace('"', '\\"') + '"'
+            settings = {"EAresStringSettingName::SavedCrosshairProfileData": escaped_val}
+            return self.update_ini_settings(ini_path, settings)
+        except Exception as e:
+            logging.error(f"Error setting crosshair for {account_name}: {e}")
+            return False
 
     def unify_crosshairs_to_all(self, master_account_name):
         master_crosshairs = self.get_account_crosshairs(master_account_name)
@@ -1278,17 +1304,167 @@ class GameSwitcher:
             logging.error(f"Restore failed: {e}")
             return False
 
+    def get_registered_ima_shell_path(self):
+        if sys.platform != "win32":
+            return None
+        clsid_list = [
+            "{BAE3934B-8A6A-4BFB-81BD-3FC599A1BAF1}",
+            "{73ADF364-5A70-45E1-BD9D-F3D4636956BA}"
+        ]
+        registry_roots = [
+            (winreg.HKEY_CLASSES_ROOT, "CLSID"),
+            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Classes\CLSID"),
+            (winreg.HKEY_CURRENT_USER, r"Software\Classes\CLSID"),
+        ]
+        handler_roots = [
+            (winreg.HKEY_CLASSES_ROOT, r"*\shellex\ContextMenuHandlers"),
+            (winreg.HKEY_CLASSES_ROOT, r"Directory\shellex\ContextMenuHandlers"),
+            (winreg.HKEY_CLASSES_ROOT, r"Directory\Background\shellex\ContextMenuHandlers"),
+            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Classes\*\shellex\ContextMenuHandlers"),
+            (winreg.HKEY_CURRENT_USER, r"Software\Classes\*\shellex\ContextMenuHandlers"),
+        ]
+        for root, sub in handler_roots:
+            try:
+                with winreg.OpenKey(root, sub, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as k:
+                    for i in range(winreg.QueryInfoKey(k)[0]):
+                        handler_name = winreg.EnumKey(k, i)
+                        if "shell" in handler_name.lower() or "nilesoft" in handler_name.lower() or "ima" in handler_name.lower():
+                            try:
+                                with winreg.OpenKey(k, handler_name) as sk:
+                                    val, _ = winreg.QueryValueEx(sk, "")
+                                    if val and str(val).startswith("{") and val not in clsid_list:
+                                        clsid_list.insert(0, str(val))
+                            except OSError:
+                                pass
+            except OSError:
+                pass
+
+        for clsid in clsid_list:
+            for root, base_sub in registry_roots:
+                for access_flag in [winreg.KEY_READ | winreg.KEY_WOW64_64KEY, winreg.KEY_READ | winreg.KEY_WOW64_32KEY, winreg.KEY_READ]:
+                    try:
+                        key_path = f"{base_sub}\\{clsid}\\InprocServer32"
+                        with winreg.OpenKey(root, key_path, 0, access_flag) as k:
+                            for val_name in ["", "CodeBase"]:
+                                try:
+                                    dll_path, _ = winreg.QueryValueEx(k, val_name)
+                                    if dll_path:
+                                        p = Path(dll_path)
+                                        if p.exists():
+                                            folder = p.parent
+                                            if (folder / "shell.nss").exists() or (folder / "imports").exists() or (folder / "shell.dll").exists():
+                                                return folder
+                                except OSError:
+                                    pass
+                    except OSError:
+                        pass
+        return None
+
+    def get_inno_installed_ima_menu_path(self):
+        if sys.platform != "win32":
+            return None
+        uninstall_keys = [
+            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{C6E2E1A4-F2D7-4B5C-9E4B-8E2E8C2B3F6D}_is1"),
+            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\{C6E2E1A4-F2D7-4B5C-9E4B-8E2E8C2B3F6D}_is1"),
+            (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{C6E2E1A4-F2D7-4B5C-9E4B-8E2E8C2B3F6D}_is1")
+        ]
+        for root, sub in uninstall_keys:
+            for access in [winreg.KEY_READ | winreg.KEY_WOW64_64KEY, winreg.KEY_READ | winreg.KEY_WOW64_32KEY, winreg.KEY_READ]:
+                try:
+                    with winreg.OpenKey(root, sub, 0, access) as k:
+                        for val_name in ["Inno Setup: App Path", "InstallLocation"]:
+                            try:
+                                loc, _ = winreg.QueryValueEx(k, val_name)
+                                if loc:
+                                    p = Path(str(loc).rstrip("\\/"))
+                                    if p.exists() and ((p / "shell.nss").exists() or (p / "imports").exists() or (p / "shell.dll").exists()):
+                                        return p
+                            except OSError:
+                                pass
+                        try:
+                            unins, _ = winreg.QueryValueEx(k, "UninstallString")
+                            if unins:
+                                clean_unins = str(unins).strip('"').split('"')[0]
+                                p = Path(clean_unins).parent
+                                if p.exists() and ((p / "shell.nss").exists() or (p / "imports").exists() or (p / "shell.dll").exists()):
+                                    return p
+                        except OSError:
+                            pass
+                except OSError:
+                    pass
+        return None
+
+    def resolve_ima_menu_folder(self, raw_path):
+        if not raw_path:
+            return None
+        candidate = Path(raw_path)
+        if not candidate.exists():
+            return candidate
+        if candidate.is_file():
+            candidate = candidate.parent
+
+        if candidate.name.lower() == "imports" and candidate.parent.exists():
+            return candidate.parent
+
+        if (candidate / "shell.nss").exists() or (candidate / "shell.dll").exists() or (candidate / "imports").exists():
+            return candidate
+
+        child_ima = candidate / "iMA Menu"
+        if child_ima.exists() and ((child_ima / "shell.nss").exists() or (child_ima / "shell.dll").exists() or (child_ima / "imports").exists()):
+            return child_ima
+
+        child_nilesoft = candidate / "Nilesoft Shell"
+        if child_nilesoft.exists() and ((child_nilesoft / "shell.nss").exists() or (child_nilesoft / "shell.dll").exists() or (child_nilesoft / "imports").exists()):
+            return child_nilesoft
+
+        if child_ima.exists():
+            return child_ima
+
+        return candidate
+
+    def is_ima_menu_registered(self, path):
+        if not path:
+            return False
+        registered_path = self.get_registered_ima_shell_path()
+        if not registered_path:
+            return False
+        try:
+            return Path(path).resolve() == Path(registered_path).resolve()
+        except Exception:
+            return False
+
+    def get_ima_menu_registration_info(self, path=None):
+        target_path = self.resolve_ima_menu_folder(path) if path else self.find_ima_menu_path()
+        registered_path = self.get_registered_ima_shell_path()
+        if not target_path or not Path(target_path).exists():
+            return False, registered_path, "Folder not found or invalid"
+        if registered_path:
+            if Path(target_path).resolve() == Path(registered_path).resolve():
+                return True, registered_path, "Registered & Active in Windows Shell"
+            return False, registered_path, f"Not registered in shell (Active: {registered_path})"
+        return False, None, "Shell extension not registered"
+
     def find_ima_menu_path(self, saved_path=None):
         if saved_path:
-            existing_saved_path = Path(saved_path)
-            if existing_saved_path.exists() and (existing_saved_path / "shell.nss").exists():
-                return existing_saved_path
+            resolved_saved = self.resolve_ima_menu_folder(saved_path)
+            if resolved_saved and resolved_saved.exists() and ((resolved_saved / "shell.nss").exists() or (resolved_saved / "imports").exists() or (resolved_saved / "shell.dll").exists()):
+                return resolved_saved
+
+        registered_path = self.get_registered_ima_shell_path()
+        if registered_path and registered_path.exists():
+            logging.info(f"Auto-detected registered iMA Menu shell at: {registered_path}")
+            return registered_path
+
+        inno_path = self.get_inno_installed_ima_menu_path()
+        if inno_path and inno_path.exists():
+            logging.info(f"Auto-detected iMA Menu from Inno Setup registry at: {inno_path}")
+            return inno_path
 
         configured_path_str = self.get_ima_config().get("ima_menu_path")
         if configured_path_str:
-            configured_path = Path(configured_path_str)
-            if configured_path.exists() and (configured_path / "shell.nss").exists():
-                return configured_path
+            resolved_configured = self.resolve_ima_menu_folder(configured_path_str)
+            if resolved_configured and resolved_configured.exists() and ((resolved_configured / "shell.nss").exists() or (resolved_configured / "imports").exists() or (resolved_configured / "shell.dll").exists()):
+                return resolved_configured
 
         system_program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
         system_program_files_x86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
@@ -1308,13 +1484,23 @@ class GameSwitcher:
             candidate_paths.append(Path(local_app_data) / "iMA Menu")
             candidate_paths.append(Path(local_app_data) / "Nilesoft Shell")
 
-        for drive_letter in ["D", "E", "F", "G"]:
+        available_drives = []
+        for letter in "CDEFGHIJKLMNOPQRSTUVWXYZ":
+            drive_root = Path(f"{letter}:\\")
+            if drive_root.exists():
+                available_drives.append(letter)
+
+        for drive_letter in available_drives:
             candidate_paths.append(Path(f"{drive_letter}:\\Program Files\\iMA Menu"))
             candidate_paths.append(Path(f"{drive_letter}:\\iMA Menu"))
+            candidate_paths.append(Path(f"{drive_letter}:\\Program Files (x86)\\iMA Menu"))
+            candidate_paths.append(Path(f"{drive_letter}:\\Games\\iMA Menu"))
+            candidate_paths.append(Path(f"{drive_letter}:\\Program Files\\Nilesoft Shell"))
+            candidate_paths.append(Path(f"{drive_letter}:\\Nilesoft Shell"))
 
         for candidate in candidate_paths:
             try:
-                if candidate.exists() and (candidate / "shell.nss").exists():
+                if candidate.exists() and ((candidate / "shell.nss").exists() or (candidate / "imports").exists() or (candidate / "shell.dll").exists()):
                     logging.info(f"Auto-detected iMA Menu path at: {candidate}")
                     return candidate
             except Exception:
@@ -1329,20 +1515,21 @@ class GameSwitcher:
                     (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Nilesoft\Shell"),
                 ]
                 for root_key, sub_key in registry_keys:
-                    try:
-                        with winreg.OpenKey(root_key, sub_key) as open_key:
-                            for val_name in ["Path", "InstallLocation", "Folder", ""]:
-                                try:
-                                    registry_val, _ = winreg.QueryValueEx(open_key, val_name)
-                                    if registry_val:
-                                        resolved_path = Path(registry_val)
-                                        if resolved_path.exists() and (resolved_path / "shell.nss").exists():
-                                            logging.info(f"Auto-detected iMA Menu path from registry: {resolved_path}")
-                                            return resolved_path
-                                except OSError:
-                                    pass
-                    except OSError:
-                        pass
+                    for access in [winreg.KEY_READ | winreg.KEY_WOW64_64KEY, winreg.KEY_READ | winreg.KEY_WOW64_32KEY, winreg.KEY_READ]:
+                        try:
+                            with winreg.OpenKey(root_key, sub_key, 0, access) as open_key:
+                                for val_name in ["Path", "InstallLocation", "Folder", ""]:
+                                    try:
+                                        registry_val, _ = winreg.QueryValueEx(open_key, val_name)
+                                        if registry_val:
+                                            resolved_path = self.resolve_ima_menu_folder(registry_val)
+                                            if resolved_path and resolved_path.exists() and ((resolved_path / "shell.nss").exists() or (resolved_path / "imports").exists() or (resolved_path / "shell.dll").exists()):
+                                                logging.info(f"Auto-detected iMA Menu path from registry: {resolved_path}")
+                                                return resolved_path
+                                    except OSError:
+                                        pass
+                        except OSError:
+                            pass
 
                 uninstall_registry_keys = [
                     (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
@@ -1350,30 +1537,32 @@ class GameSwitcher:
                     (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall")
                 ]
                 for root_key, base_key in uninstall_registry_keys:
-                    try:
-                        with winreg.OpenKey(root_key, base_key) as open_key:
-                            subkey_count, _, _ = winreg.QueryInfoKey(open_key)
-                            for index in range(subkey_count):
-                                try:
-                                    sub_key_name = winreg.EnumKey(open_key, index)
-                                    with winreg.OpenKey(open_key, sub_key_name) as item_key:
-                                        try:
-                                            display_name, _ = winreg.QueryValueEx(item_key, "DisplayName")
-                                            if display_name and ("ima menu" in str(display_name).lower() or "nilesoft shell" in str(display_name).lower()):
-                                                try:
-                                                    install_loc, _ = winreg.QueryValueEx(item_key, "InstallLocation")
-                                                    if install_loc:
-                                                        resolved_install_path = Path(install_loc)
-                                                        if resolved_install_path.exists() and (resolved_install_path / "shell.nss").exists():
-                                                            return resolved_install_path
-                                                except OSError:
-                                                    pass
-                                        except OSError:
-                                            pass
-                                except OSError:
-                                    pass
-                    except OSError:
-                        pass
+                    for access in [winreg.KEY_READ | winreg.KEY_WOW64_64KEY, winreg.KEY_READ | winreg.KEY_WOW64_32KEY, winreg.KEY_READ]:
+                        try:
+                            with winreg.OpenKey(root_key, base_key, 0, access) as open_key:
+                                subkey_count, _, _ = winreg.QueryInfoKey(open_key)
+                                for index in range(subkey_count):
+                                    try:
+                                        sub_key_name = winreg.EnumKey(open_key, index)
+                                        with winreg.OpenKey(open_key, sub_key_name, 0, access) as item_key:
+                                            try:
+                                                display_name, _ = winreg.QueryValueEx(item_key, "DisplayName")
+                                                if display_name and ("ima menu" in str(display_name).lower() or "nilesoft shell" in str(display_name).lower()):
+                                                    for loc_field in ["InstallLocation", "Inno Setup: App Path"]:
+                                                        try:
+                                                            install_loc, _ = winreg.QueryValueEx(item_key, loc_field)
+                                                            if install_loc:
+                                                                resolved_install_path = self.resolve_ima_menu_folder(install_loc)
+                                                                if resolved_install_path and resolved_install_path.exists() and ((resolved_install_path / "shell.nss").exists() or (resolved_install_path / "imports").exists() or (resolved_install_path / "shell.dll").exists()):
+                                                                    return resolved_install_path
+                                                        except OSError:
+                                                            pass
+                                            except OSError:
+                                                pass
+                                    except OSError:
+                                        pass
+                        except OSError:
+                            pass
             except Exception as e:
                 logging.debug(f"Registry query exception: {e}")
 
@@ -1387,7 +1576,7 @@ class GameSwitcher:
             return
 
         output_dir = ima_menu_path / "imports"
-        output_dir.mkdir(exist_ok=True)
+        output_dir.mkdir(parents=True, exist_ok=True)
         
         logging.info(f"iMA Auto-Update: Action='{action}', Name='{name}'")
         
@@ -1399,6 +1588,8 @@ class GameSwitcher:
             pass
         
         ima_config["ordered_accounts"] = current_ordered_list
+        ima_config["ima_menu_path"] = str(ima_menu_path)
+        ima_config["output_dir"] = str(output_dir)
         self.set_ima_config(ima_config)
         
         try:
@@ -1418,11 +1609,13 @@ class GameSwitcher:
         shell_nss_path = Path(ima_menu_path) / 'shell.nss'
         target_import_statement = "import 'imports/valo.nss'"
 
-        if not shell_nss_path.exists():
-            logging.error(f"shell.nss not found at {shell_nss_path}")
-            return False, f"shell.nss not found at the specified path."
-
         try:
+            if not shell_nss_path.exists():
+                with open(shell_nss_path, 'w', encoding='utf-8') as file_handle:
+                    file_handle.write(f"{target_import_statement}\n")
+                logging.info(f"Created {shell_nss_path} with import statement.")
+                return True, "Successfully created shell.nss with valo.nss import."
+
             with open(shell_nss_path, 'r', encoding='utf-8', errors='ignore') as file_handle:
                 lines = file_handle.readlines()
             
@@ -1592,7 +1785,48 @@ class GameSwitcher:
                 tip_arg = f" tip={tip_val}" if tip_val else ""
                 item_line = f"item(title='{account_name}'{tip_arg} cmd='{cmd_executable}' args='{cmd_args}'{item_icon_arg})"
                 script_content.append(f"    {item_line}")
+
+        show_map_planner = ui_settings.get("show_map_planner_in_menu", False)
+        if show_map_planner:
+            planner_icon_src = Path(self.base_dir) / "Assets" / "map_planner.png"
+            if not planner_icon_src.exists():
+                planner_icon_src = Path(self.base_dir) / "Assets" / "crosshair.png"
+            if not planner_icon_src.exists():
+                planner_icon_src = Path(self.base_dir) / "Assets" / "Options.png"
             
+            dest_planner_icon = icons_dir / "map_planner.png"
+            if planner_icon_src.exists() and not dest_planner_icon.exists():
+                try:
+                    shutil.copy(planner_icon_src, dest_planner_icon)
+                except Exception:
+                    pass
+            
+            if getattr(sys, 'frozen', False):
+                planner_args = '--map-planner'
+            else:
+                main_script = str((Path(self.base_dir) / "main.pyw").resolve())
+                planner_args = f'"{main_script}" --map-planner'
+            
+            planner_item = f"item(title='Map Planner' cmd='{cmd_executable}' args='{planner_args}' icon='@app.dir\\imports\\icons\\map_planner.png')"
+            script_content.append(f"    {planner_item}")
+
+        include_app_shortcut = ui_settings.get("include_app_shortcut", False)
+        if include_app_shortcut:
+            if getattr(sys, 'frozen', False):
+                app_exe_path = sys.executable
+            else:
+                config_app_path = self.get_ima_config().get("app_install_path")
+                if config_app_path and (Path(config_app_path) / "iMA Switcher.exe").exists():
+                    app_exe_path = str(Path(config_app_path) / "iMA Switcher.exe")
+                elif (Path(self.base_dir) / "iMA Switcher.exe").exists():
+                    app_exe_path = str(Path(self.base_dir) / "iMA Switcher.exe")
+                else:
+                    app_exe_path = sys.executable
+            
+            app_exe_escaped = str(app_exe_path).replace('/', '\\')
+            app_shortcut_item = f"item(title='iMA Switcher' image=image.res('{app_exe_escaped}') cmd='{app_exe_escaped}')"
+            script_content.append(f"    {app_shortcut_item}")
+
         script_content.append("}")
         final_script = "\n".join(script_content)
         with open(script_path, 'w', encoding='utf-8') as f:
@@ -2103,7 +2337,8 @@ class GameSwitcher:
     def _get_or_fetch_account_puuid(self, account_name, in_game_name=None, in_game_tag=None):
         account_config = self._load_game_config(account_name)
         puuid = account_config.get("puuid")
-        if puuid:
+        banner_url = account_config.get("banner_card_url")
+        if puuid and banner_url:
             return puuid
 
         if not in_game_name or not in_game_tag:
@@ -2112,25 +2347,35 @@ class GameSwitcher:
                 _, _, _, in_game_name, in_game_tag, _, _ = saved
 
         if not in_game_name or not in_game_tag:
-            return None
+            return puuid
 
         try:
             url = f"https://api.henrikdev.xyz/valorant/v1/account/{in_game_name}/{in_game_tag}"
             res_json = self._call_henrik_api(url)
             data_obj = res_json.get("data") if isinstance(res_json, dict) else {}
-            if isinstance(data_obj, dict) and data_obj.get("puuid"):
+            if isinstance(data_obj, dict):
                 fetched_puuid = data_obj.get("puuid")
                 current_name = data_obj.get("name", in_game_name)
                 current_tag = data_obj.get("tag", in_game_tag)
-                account_config["puuid"] = fetched_puuid
+                card_obj = data_obj.get("card") or {}
+                if fetched_puuid:
+                    account_config["puuid"] = fetched_puuid
+                if isinstance(card_obj, dict):
+                    card_banner = card_obj.get("wide") or card_obj.get("large") or card_obj.get("small")
+                    if card_banner:
+                        account_config["banner_card_url"] = card_banner
+                        account_config["card_icon"] = card_banner
+                if data_obj.get("account_level"):
+                    account_config["level"] = data_obj.get("account_level")
+
                 self._save_game_config(account_name, account_config)
                 if current_name != in_game_name or current_tag != in_game_tag:
                     self.set_account_in_game_name_tag(account_name, current_name, current_tag)
-                return fetched_puuid
+                return fetched_puuid or puuid
         except Exception as e:
-            logging.warning(f"Could not fetch PUUID for {account_name}: {e}")
+            logging.warning(f"Could not fetch account details for {account_name}: {e}")
 
-        return None
+        return puuid
 
     def fetch_and_update_rank_data(self, account_name, is_manual_refresh=False, on_update_callback=None):
         ui_settings = self.get_ima_config().get("ui_settings", {})
@@ -2152,9 +2397,6 @@ class GameSwitcher:
         rank_fetched_at = account_config.get("rank_fetched_at", 0.0)
 
         # Smart Cooldown & Timestamp Verification
-        # 1. If rank was already fetched AFTER the last launch of this account, data is up-to-date.
-        # 2. If app was launched/fetched within 10 minutes (600s), apply cooldown to prevent API spam.
-        # (Both rules are bypassed if is_manual_refresh is True)
         if not is_manual_refresh:
             if rank_fetched_at > 0 and rank_fetched_at >= last_launched_at:
                 return
@@ -2274,44 +2516,11 @@ class GameSwitcher:
         region = self._get_region()
         puuid = account_config.get("puuid")
 
-        # 1. Fetch Lifetime MMR History for exact per-game RR changes (/v1/by-puuid/mmr_history or /v1/mmr_history)
-        mmr_history_map = {}
-        mmr_history_list = []
-        try:
-            if puuid:
-                mmr_url = f"https://api.henrikdev.xyz/valorant/v1/by-puuid/mmr_history/{region}/{puuid}"
-            elif in_game_name and in_game_tag:
-                mmr_url = f"https://api.henrikdev.xyz/valorant/v1/mmr_history/{region}/{in_game_name}/{in_game_tag}"
-            else:
-                mmr_url = None
-
-            if mmr_url:
-                try:
-                    mmr_res = self._call_henrik_api(mmr_url)
-                except Exception as primary_mmr_err:
-                    if not puuid and in_game_name and in_game_tag:
-                        puuid = self._get_or_fetch_account_puuid(account_name, in_game_name, in_game_tag)
-                    if puuid:
-                        fallback_mmr_url = f"https://api.henrikdev.xyz/valorant/v1/by-puuid/mmr_history/{region}/{puuid}"
-                        mmr_res = self._call_henrik_api(fallback_mmr_url)
-                    else:
-                        raise primary_mmr_err
-
-                mmr_history_list = mmr_res.get("data", []) if isinstance(mmr_res, dict) else []
-                for item in mmr_history_list:
-                    if isinstance(item, dict):
-                        m_id = item.get("match_id")
-                        last_change = item.get("last_mmr_change")
-                        if m_id and last_change is not None:
-                            mmr_history_map[str(m_id).strip()] = last_change
-        except Exception as e:
-            logging.debug(f"Could not fetch lifetime MMR history for {account_name}: {e}")
-
         parsed_matches = []
         if puuid:
-            url = f"https://api.henrikdev.xyz/valorant/v3/by-puuid/matches/{region}/{puuid}?size=15"
+            url = f"https://api.henrikdev.xyz/valorant/v3/by-puuid/matches/{region}/{puuid}?size=10"
         else:
-            url = f"https://api.henrikdev.xyz/valorant/v3/matches/{region}/{in_game_name}/{in_game_tag}?size=15"
+            url = f"https://api.henrikdev.xyz/valorant/v3/matches/{region}/{in_game_name}/{in_game_tag}?size=10"
 
         try:
             try:
@@ -2320,12 +2529,12 @@ class GameSwitcher:
                 if not puuid:
                     puuid = self._get_or_fetch_account_puuid(account_name, in_game_name, in_game_tag)
                 if puuid:
-                    fallback_url = f"https://api.henrikdev.xyz/valorant/v3/by-puuid/matches/{region}/{puuid}?size=15"
+                    fallback_url = f"https://api.henrikdev.xyz/valorant/v3/by-puuid/matches/{region}/{puuid}?size=10"
                     response_json = self._call_henrik_api(fallback_url)
                 else:
                     raise primary_e
 
-            match_list = response_json.get("data", [])
+            match_list = response_json.get("data", []) if isinstance(response_json, dict) else []
             for match_item in match_list:
                 if not isinstance(match_item, dict):
                     continue
@@ -2354,7 +2563,7 @@ class GameSwitcher:
                     except Exception:
                         pass
 
-                # Parse rounds data to calculate plants, defuses, damage dealt & credits spent per player
+                # Parse Henrik v3 rounds data for plant_events, defuse_events, damage, spent, and first bloods
                 rounds_list = match_item.get("rounds") or []
                 player_plants_map = {}
                 player_defuses_map = {}
@@ -2365,42 +2574,70 @@ class GameSwitcher:
                 for round_obj in rounds_list:
                     if not isinstance(round_obj, dict):
                         continue
+
+                    # 1. Plants
+                    plant_ev = round_obj.get("plant_events") or {}
+                    if isinstance(plant_ev, dict) and plant_ev:
+                        planter_info = plant_ev.get("planted_by") or {}
+                        planter = str(planter_info.get("puuid") or planter_info.get("display_name") or plant_ev.get("planted_by") or "").strip().lower()
+                        if planter:
+                            player_plants_map[planter] = player_plants_map.get(planter, 0) + 1
+                    elif isinstance(plant_ev, list):
+                        for pev in plant_ev:
+                            if isinstance(pev, dict):
+                                pinfo = pev.get("planted_by") or {}
+                                planter = str(pinfo.get("puuid") or pinfo.get("display_name") or pev.get("planted_by") or "").strip().lower()
+                                if planter:
+                                    player_plants_map[planter] = player_plants_map.get(planter, 0) + 1
+
+                    # 2. Defuses
+                    defuse_ev = round_obj.get("defuse_events") or {}
+                    if isinstance(defuse_ev, dict) and defuse_ev:
+                        defuser_info = defuse_ev.get("defused_by") or {}
+                        defuser = str(defuser_info.get("puuid") or defuser_info.get("display_name") or defuse_ev.get("defused_by") or "").strip().lower()
+                        if defuser:
+                            player_defuses_map[defuser] = player_defuses_map.get(defuser, 0) + 1
+                    elif isinstance(defuse_ev, list):
+                        for dev in defuse_ev:
+                            if isinstance(dev, dict):
+                                dinfo = dev.get("defused_by") or {}
+                                defuser = str(dinfo.get("puuid") or dinfo.get("display_name") or dev.get("defused_by") or "").strip().lower()
+                                if defuser:
+                                    player_defuses_map[defuser] = player_defuses_map.get(defuser, 0) + 1
+
+                    # 3. First Blood
+                    earliest_kill_time = float("inf")
+                    first_killer_id = None
+
                     p_stats_list = round_obj.get("player_stats") or []
                     for ps in p_stats_list:
                         if not isinstance(ps, dict):
                             continue
-                        p_puuid = str(ps.get("player_puuid") or ps.get("puuid") or ps.get("player_id") or "").strip()
-                        if not p_puuid:
-                            p_name = str(ps.get("player_display_name") or ps.get("name") or "").strip()
-                            p_puuid = p_name
-
+                        
+                        p_puuid = str(ps.get("player_puuid") or ps.get("puuid") or ps.get("player_id") or ps.get("player_display_name") or "").strip().lower()
                         if not p_puuid:
                             continue
 
-                        # Plants
-                        plant_events = ps.get("plant_events") or []
-                        if plant_events or ps.get("was_planter"):
-                            player_plants_map[p_puuid] = player_plants_map.get(p_puuid, 0) + (len(plant_events) if plant_events else 1)
-
-                        # Defuses
-                        defuse_events = ps.get("defuse_events") or []
-                        if defuse_events or ps.get("was_defuser"):
-                            player_defuses_map[p_puuid] = player_defuses_map.get(p_puuid, 0) + (len(defuse_events) if defuse_events else 1)
-
                         # Damage
-                        dmg = ps.get("damage", 0)
+                        dmg = int(ps.get("damage") or 0)
                         player_damage_map[p_puuid] = player_damage_map.get(p_puuid, 0) + dmg
 
                         # Economy spent
                         econ = ps.get("economy") or {}
-                        spent = econ.get("spent", 0)
+                        spent = int(econ.get("spent") or 0)
                         player_spent_map[p_puuid] = player_spent_map.get(p_puuid, 0) + spent
 
-                        # First bloods
-                        kills_list = ps.get("kill_events") or []
-                        for k_ev in kills_list:
-                            if isinstance(k_ev, dict) and k_ev.get("is_first_kill"):
-                                player_first_bloods_map[p_puuid] = player_first_bloods_map.get(p_puuid, 0) + 1
+                        # Check kill events for first blood of the round
+                        kill_events = ps.get("kill_events") or []
+                        for k in kill_events:
+                            if isinstance(k, dict):
+                                k_time = k.get("kill_time_in_round", float("inf"))
+                                if k_time < earliest_kill_time:
+                                    earliest_kill_time = k_time
+                                    first_killer_id = p_puuid
+
+                    if first_killer_id:
+                        player_first_bloods_map[first_killer_id] = player_first_bloods_map.get(first_killer_id, 0) + 1
 
                 players_dict = match_item.get("players") or {}
                 all_players = players_dict.get("all_players") or []
@@ -2415,31 +2652,34 @@ class GameSwitcher:
                         p_char = str(player.get("character") or "Agent").strip()
                         p_tier = str(player.get("currenttier_patched") or "Unranked").strip()
                         p_puuid_val = str(player.get("puuid") or p_name).strip()
+                        p_party_id = str(player.get("party_id") or "").strip()
 
                         p_stats = player.get("stats") or {}
-                        p_kills = p_stats.get("kills", 0)
-                        p_deaths = p_stats.get("deaths", 0)
-                        p_assists = p_stats.get("assists", 0)
-                        p_score = p_stats.get("score", 0)
+                        p_kills = int(p_stats.get("kills") or 0)
+                        p_deaths = int(p_stats.get("deaths") or 0)
+                        p_assists = int(p_stats.get("assists") or 0)
+                        p_score = int(p_stats.get("score") or 0)
 
-                        # Calculate real Econ Rating = (Total Damage Dealt / Total Credits Spent) * 1000
-                        p_dmg = player_damage_map.get(p_puuid_val, p_stats.get("damage_dealt", p_stats.get("score", 0)))
-                        p_spent = player_spent_map.get(p_puuid_val, 0)
+                        p_puuid_clean = p_puuid_val.lower()
+                        p_name_clean = p_name.lower()
+
+                        p_dmg = player_damage_map.get(p_puuid_clean, player_damage_map.get(p_name_clean, p_stats.get("damage_dealt", p_score)))
+                        p_spent = player_spent_map.get(p_puuid_clean, player_spent_map.get(p_name_clean, 0))
                         if p_spent > 0:
                             p_econ_rating = int((p_dmg / p_spent) * 1000)
                         else:
                             p_economy = player.get("economy") or {}
                             p_econ_rating = p_economy.get("overall", {}).get("econ_rating", 0) if isinstance(p_economy.get("overall"), dict) else 0
 
-                        # Plants, Defuses, First Bloods from round parsing
-                        p_first_bloods = player_first_bloods_map.get(p_puuid_val, p_stats.get("first_bloods", p_stats.get("firstkills", 0)))
-                        p_plants = player_plants_map.get(p_puuid_val, p_stats.get("plants", 0))
-                        p_defuses = player_defuses_map.get(p_puuid_val, p_stats.get("defuses", 0))
+                        p_first_bloods = player_first_bloods_map.get(p_puuid_clean, player_first_bloods_map.get(p_name_clean, p_stats.get("first_bloods", p_stats.get("firstkills", 0))))
+                        p_plants = player_plants_map.get(p_puuid_clean, player_plants_map.get(p_name_clean, p_stats.get("plants", 0)))
+                        p_defuses = player_defuses_map.get(p_puuid_clean, player_defuses_map.get(p_name_clean, p_stats.get("defuses", 0)))
 
-                        # Assets for agent icon & rank tier icon
+                        # Assets for agent icon & rank tier icon & card banner
                         p_assets = player.get("assets") or {}
                         agent_small_icon = p_assets.get("agent", {}).get("small") if isinstance(p_assets.get("agent"), dict) else None
                         rank_small_icon = p_assets.get("card", {}).get("small") if isinstance(p_assets.get("card"), dict) else None
+                        card_wide_icon = p_assets.get("card", {}).get("wide") if isinstance(p_assets.get("card"), dict) else None
 
                         parsed_players_list.append({
                             "name": p_name,
@@ -2456,8 +2696,10 @@ class GameSwitcher:
                             "first_bloods": p_first_bloods,
                             "plants": p_plants,
                             "defuses": p_defuses,
+                            "party_id": p_party_id,
                             "agent_icon": agent_small_icon,
-                            "rank_icon": rank_small_icon
+                            "rank_icon": rank_small_icon,
+                            "card_icon": card_wide_icon or rank_small_icon
                         })
 
                         if puuid and str(player.get("puuid") or "").strip() == puuid:
@@ -2475,12 +2717,19 @@ class GameSwitcher:
                     agent_name = target_player.get("character") or "Unknown"
                     player_team = target_player.get("team") or "Red"
                     player_stats = target_player.get("stats") or {}
-                    kills = player_stats.get("kills", 0)
-                    deaths = player_stats.get("deaths", 0)
-                    assists = player_stats.get("assists", 0)
+                    kills = int(player_stats.get("kills") or 0)
+                    deaths = int(player_stats.get("deaths") or 0)
+                    assists = int(player_stats.get("assists") or 0)
 
-                    if not account_config.get("puuid") and target_player.get("puuid"):
-                        account_config["puuid"] = target_player.get("puuid")
+                    t_puuid = target_player.get("puuid")
+                    if t_puuid and not account_config.get("puuid"):
+                        account_config["puuid"] = t_puuid
+
+                    t_assets = target_player.get("assets") or {}
+                    t_card = t_assets.get("card", {}).get("wide") or t_assets.get("card", {}).get("small")
+                    if t_card and not account_config.get("banner_card_url"):
+                        account_config["banner_card_url"] = t_card
+                        account_config["card_icon"] = t_card
 
                     p_name = target_player.get("name")
                     p_tag = target_player.get("tag")
@@ -2492,8 +2741,8 @@ class GameSwitcher:
                 red_team = teams_data.get("red") or {}
                 blue_team = teams_data.get("blue") or {}
                 red_won = red_team.get("has_won", False)
-                red_rounds = red_team.get("rounds_won", 0)
-                blue_rounds = blue_team.get("rounds_won", 0)
+                red_rounds = int(red_team.get("rounds_won") or 0)
+                blue_rounds = int(blue_team.get("rounds_won") or 0)
 
                 if red_rounds == 0 and blue_rounds == 0 and (agent_name == "Unknown" or not parsed_players_list):
                     continue
@@ -2505,12 +2754,12 @@ class GameSwitcher:
                     team_won = blue_team.get("has_won", False)
                     my_score, opp_score = blue_rounds, red_rounds
 
-                # Determine Match MVP (highest score across all players) and Team MVPs (highest score per team)
+                # Determine Match MVP and Team MVPs
                 highest_score_all = -1
                 highest_score_red = -1
                 highest_score_blue = -1
                 for p in parsed_players_list:
-                    sc = p.get("score", 0)
+                    sc = int(p.get("score") or 0)
                     if sc > highest_score_all:
                         highest_score_all = sc
                     if p.get("team", "").lower() == "red" and sc > highest_score_red:
@@ -2520,8 +2769,8 @@ class GameSwitcher:
 
                 total_rounds = max(1, red_rounds + blue_rounds)
                 for p in parsed_players_list:
-                    sc = p.get("score", 0)
-                    p["acs"] = int(sc / total_rounds) # Calculate Average Combat Score
+                    sc = int(p.get("score") or 0)
+                    p["acs"] = int(sc / total_rounds)
                     p["is_match_mvp"] = (sc == highest_score_all and sc > 0)
                     team_high = highest_score_red if p.get("team", "").lower() == "red" else highest_score_blue
                     p["is_team_mvp"] = (sc == team_high and sc > 0 and not p["is_match_mvp"])
@@ -2530,24 +2779,6 @@ class GameSwitcher:
                 formatted_score = f"{my_score} - {opp_score}"
                 formatted_kda = f"{kills} / {deaths} / {assists}"
                 calculated_kd = f"{(kills / max(1, deaths)):.2f}"
-
-                # Strict RR change extraction via MMR history match_id or list index
-                rr_delta = mmr_history_map.get(str(match_id).strip())
-                if rr_delta is None and mmr_history_list:
-                    match_idx = len(parsed_matches)
-                    if match_idx < len(mmr_history_list):
-                        rr_delta = mmr_history_list[match_idx].get("last_mmr_change")
-                
-                # Sanitize sign consistency: if WIN, RR should be positive or 0; if LOSS, negative or 0
-                if rr_delta is not None:
-                    try:
-                        rr_val = int(rr_delta)
-                        if match_result == "VICTORY" and rr_val < 0:
-                            rr_delta = abs(rr_val)
-                        elif match_result == "DEFEAT" and rr_val > 0:
-                            rr_delta = -abs(rr_val)
-                    except (ValueError, TypeError):
-                        pass
 
                 # Check if current user is Match MVP or Team MVP
                 is_user_match_mvp = False
@@ -2571,7 +2802,7 @@ class GameSwitcher:
                     "kda": formatted_kda,
                     "kd": calculated_kd,
                     "date": date_formatted,
-                    "rr_change": rr_delta,
+                    "rr_change": None,
                     "rank": target_player.get("currenttier_patched", "Unranked") if target_player else "Unranked",
                     "is_user_match_mvp": is_user_match_mvp,
                     "is_user_team_mvp": is_user_team_mvp,
@@ -2579,7 +2810,7 @@ class GameSwitcher:
                 })
 
             if parsed_matches:
-                # Merge newly fetched matches with cached history to persist rr_change across sessions
+                # Merge newly fetched matches with cached history
                 cached_history = account_config.get("match_history", [])
                 cached_map = {m.get("match_id"): m for m in cached_history if isinstance(m, dict) and m.get("match_id")}
 
@@ -2592,24 +2823,10 @@ class GameSwitcher:
                             fresh["rr_change"] = cached_match.get("rr_change")
                     final_history.append(fresh)
 
-                # Append any older cached matches not in the fresh fetch
                 fresh_ids = {m.get("match_id") for m in parsed_matches if m.get("match_id")}
                 for old in cached_history:
                     if isinstance(old, dict) and old.get("match_id") not in fresh_ids:
                         final_history.append(old)
-
-                # Sanitize sign consistency across all matches in history
-                for m in final_history:
-                    if isinstance(m, dict) and m.get("rr_change") is not None:
-                        res = m.get("result", "").upper()
-                        try:
-                            val = int(m["rr_change"])
-                            if (res in ["DEFEAT", "LOSS"]) and val > 0:
-                                m["rr_change"] = -val
-                            elif (res in ["VICTORY", "WIN"]) and val < 0:
-                                m["rr_change"] = abs(val)
-                        except (ValueError, TypeError):
-                            pass
 
                 # Cap total accumulated history to 50 matches
                 final_history = final_history[:50]

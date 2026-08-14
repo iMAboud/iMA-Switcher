@@ -1,5 +1,5 @@
-from PyQt5.QtWidgets import QMessageBox, QDialog
-from ui_components import InputDialog, ConfirmDeleteDialog, IconPickerDialog, AccountHistoryDialog
+from PyQt5.QtWidgets import QDialog
+from ui_components import InputDialog, ConfirmDeleteDialog, IconPickerDialog, AccountHistoryDialog, CustomMessageDialog, CustomizeAccountDialog
 import logging
 from pathlib import Path
 
@@ -7,6 +7,14 @@ class ContextActions:
     def __init__(self, parent):
         self.parent = parent
         self.switcher = parent.switcher
+
+    def customize_account(self):
+        name = self.parent.get_selected_account_name()
+        if not name: return
+        dialog = CustomizeAccountDialog(name, self.switcher, self.parent)
+        if dialog.exec_() == QDialog.Accepted:
+            self.parent.status_label.setText(f"Customized account '{name}'.")
+            self.parent.load_accounts()
 
     def rename(self):
         old_name = self.parent.get_selected_account_name()
@@ -38,13 +46,13 @@ class ContextActions:
             
             if new_name != old_name and new_name in self.switcher.get_saved_accounts():
                 logging.warning(f"Attempted to rename account '{old_name}' to '{new_name}', but an account with that name already exists.")
-                QMessageBox.warning(self.parent, "Account Exists", f'An account named "{new_name}" already exists. Please choose a different name.')
+                CustomMessageDialog.warning(self.parent, "Account Exists", f'An account named "{new_name}" already exists. Please choose a different name.')
                 return
             
             if new_name != old_name:
                 if not self.switcher.rename_account(old_name, new_name):
                     logging.error(f"Failed to rename account '{old_name}' to '{new_name}'. Switcher returned False.")
-                    QMessageBox.critical(self.parent, "Rename Failed", f"Failed to rename '{old_name}' to '{new_name}'. Please try again.")
+                    CustomMessageDialog.critical(self.parent, "Rename Failed", f"Failed to rename '{old_name}' to '{new_name}'. Please try again.")
                     return
                 self.parent.status_label.setText(f"Renamed '{old_name}' to '{new_name}'.")
                 self.parent.selected_account_name = new_name

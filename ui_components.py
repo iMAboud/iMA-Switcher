@@ -4,6 +4,8 @@ import logging
 import os
 import threading
 import time
+import ctypes
+import webbrowser
 from datetime import datetime
 from pathlib import Path
 from PyQt5.QtWidgets import (
@@ -18,6 +20,9 @@ from PyQt5.QtWidgets import (
     QScrollArea,
     QGridLayout,
     QGraphicsDropShadowEffect,
+    QGraphicsBlurEffect,
+    QGraphicsScene,
+    QGraphicsPixmapItem,
     QDesktopWidget,
     QStyleOption,
     QStyle,
@@ -37,10 +42,19 @@ from PyQt5.QtWidgets import (
     QInputDialog,
     QProgressBar,
     QTextEdit,
-    QStyle,
-    QStyleOption,
+    QMenu,
+    QMessageBox,
 )
-from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QPainterPath, QLinearGradient
+
+def download_and_open_ima_menu():
+    repo_url = "https://github.com/iMAboud/iMA-Menu"
+    direct_download_url = "https://github.com/iMAboud/iMA-Menu/releases/latest/download/iMA.Menu.exe"
+    try:
+        webbrowser.open(repo_url)
+        webbrowser.open(direct_download_url)
+    except Exception as e:
+        logging.error(f"Failed to open iMA Menu download link: {e}")
+from PyQt5.QtGui import QIcon, QPixmap, QImage, QPainter, QColor, QFont, QPainterPath, QLinearGradient, QPen
 from PyQt5.QtCore import (
     Qt,
     QSize,
@@ -106,12 +120,22 @@ def get_icon_paths_from_folder(folder_path):
     return icon_paths
 
 
+VALORANT_CROSSHAIR_PRESETS = {
+    "TenZ (1-4-2-2 Cyan)": "0;s;1;P;c;5;h;0;m;0;0l;4;0v;4;0g;1;0o;2;0a;1;0f;0;1b;0",
+    "Dot (Green ScreaM)": "0;P;c;1;d;1;a;1;z;3;h;0;0b;0;1b;0",
+    "Chronicle (Red Box)": "0;P;c;7;o;1;d;1;z;1;0t;1;0l;3;0o;1;0a;1;0f;0;1b;0",
+    "Boaster (Cyan 1-2-2-0)": "0;P;c;5;o;1;d;1;z;1;0b;0;0l;2;0o;2;0a;1;0f;0;1b;0",
+    "Clean Plus (1-4-2-2)": "0;P;c;5;h;1;0t;1;0l;4;0o;2;0a;1;1b;0",
+    "Competitive (1-4-2-0 Green)": "0;P;c;1;h;1;0t;1;0l;4;0o;2;0a;1;0f;0;1b;0",
+    "Hollow Box (4-1-1-0 Cyan)": "0;P;c;5;h;1;0t;4;0l;1;0o;1;0a;1;1b;0"
+}
+
 class CrosshairCanvasWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedSize(220, 220)
+        self.setFixedSize(200, 200)
         self.bg_type = "Dark Grid"
-        self.zoom = 1.0
+        self.zoom = 2.0
         self.profile = {}
 
     def set_profile(self, profile):
@@ -132,17 +156,19 @@ class CrosshairCanvasWidget(QWidget):
 
         w = self.width()
         h = self.height()
-        cx = w / 2.0
-        cy = h / 2.0
+        cx = int(w // 2)
+        cy = int(h // 2)
 
         if self.bg_type == "Light Grid":
             painter.fillRect(0, 0, w, h, QColor("#e8e2de"))
             painter.setPen(QColor("#d4ceca"))
             for x in range(0, w, 20): painter.drawLine(x, 0, x, h)
             for y in range(0, h, 20): painter.drawLine(0, y, w, y)
-        else: # Dark Grid (Default)
-            painter.fillRect(0, 0, w, h, QColor("#1f1d1e"))
-            painter.setPen(QColor("#2d292a"))
+        elif self.bg_type == "Pure Black":
+            painter.fillRect(0, 0, w, h, QColor("#0d0e12"))
+        else:
+            painter.fillRect(0, 0, w, h, QColor("#181a1f"))
+            painter.setPen(QColor("#262930"))
             for x in range(0, w, 20): painter.drawLine(x, 0, x, h)
             for y in range(0, h, 20): painter.drawLine(0, y, w, y)
 
@@ -151,109 +177,143 @@ class CrosshairCanvasWidget(QWidget):
 
         primary = self.profile.get("primary", {})
         preset_colors = [
-            QColor(255, 255, 255), QColor(0, 255, 0), QColor(127, 255, 0),
-            QColor(190, 255, 0), QColor(255, 255, 0), QColor(0, 255, 255),
-            QColor(255, 0, 255), QColor(255, 0, 0),
+            QColor(255, 255, 255),  # 0: White
+            QColor(0, 255, 0),      # 1: Green
+            QColor(127, 255, 0),    # 2: Yellow Green
+            QColor(190, 255, 0),    # 3: Green Yellow
+            QColor(255, 255, 0),    # 4: Yellow
+            QColor(0, 255, 255),    # 5: Cyan
+            QColor(255, 0, 255),    # 6: Pink
+            QColor(255, 0, 0),      # 7: Red
         ]
 
-        # Resolution of exact color
-        p_col_dict = primary.get("primaryColor")
-        if isinstance(p_col_dict, dict) and 'r' in p_col_dict:
-            main_color = QColor(
-                int(p_col_dict.get('r', 255)),
-                int(p_col_dict.get('g', 255)),
-                int(p_col_dict.get('b', 255)),
-                int(p_col_dict.get('a', 255))
-            )
-        elif primary.get("bUseCustomColor", False):
-            custom_hex = primary.get("customColor", "#00FF88FF")
-            main_color = QColor(custom_hex) if isinstance(custom_hex, str) and custom_hex.startswith("#") else QColor(0, 255, 136)
-        else:
-            color_idx = primary.get("color", 0)
-            if isinstance(color_idx, int) and 0 <= color_idx < len(preset_colors):
-                main_color = preset_colors[color_idx]
-            elif isinstance(color_idx, dict):
-                main_color = QColor(color_idx.get('r', 0), color_idx.get('g', 255), color_idx.get('b', 136), color_idx.get('a', 255))
-            else:
-                main_color = QColor(255, 255, 255)
+        main_color = None
+        col_val = primary.get("color")
+        if col_val is None:
+            col_val = primary.get("primaryColor")
 
-        scale = self.zoom
-        b_outline = primary.get("bOutlineEnabled", True)
+        if isinstance(col_val, dict):
+            r_val = col_val.get('r', col_val.get('R', None))
+            g_val = col_val.get('g', col_val.get('G', None))
+            b_val = col_val.get('b', col_val.get('B', None))
+            a_val = col_val.get('a', col_val.get('A', 255))
+            if r_val is not None and g_val is not None and b_val is not None:
+                r_int = int(round(r_val * 255)) if isinstance(r_val, float) and r_val <= 1.0 else int(r_val)
+                g_int = int(round(g_val * 255)) if isinstance(g_val, float) and g_val <= 1.0 else int(g_val)
+                b_int = int(round(b_val * 255)) if isinstance(b_val, float) and b_val <= 1.0 else int(b_val)
+                a_int = int(round(a_val * 255)) if isinstance(a_val, float) and a_val <= 1.0 else int(a_val)
+                main_color = QColor(max(0, min(255, r_int)), max(0, min(255, g_int)), max(0, min(255, b_int)), max(0, min(255, a_int)))
+        elif isinstance(col_val, int) and 0 <= col_val < len(preset_colors):
+            main_color = preset_colors[col_val]
+        elif primary.get("bUseCustomColor", False) or "colorCustom" in primary or "customColor" in primary:
+            custom_dict = primary.get("colorCustom") or primary.get("customColor")
+            if isinstance(custom_dict, dict):
+                r = int(custom_dict.get('r', custom_dict.get('R', 255)))
+                g = int(custom_dict.get('g', custom_dict.get('G', 255)))
+                b = int(custom_dict.get('b', custom_dict.get('B', 255)))
+                main_color = QColor(r, g, b)
+            elif isinstance(custom_dict, str) and custom_dict.startswith("#"):
+                main_color = QColor(custom_dict)
+            else:
+                main_color = QColor(0, 255, 136)
+
+        if not main_color or not main_color.isValid():
+            main_color = QColor(255, 255, 255)
+
+        scale = max(1, int(round(self.zoom)))
+        b_outline = primary.get("bHasOutline", primary.get("bOutlineEnabled", True))
         outline_op = float(primary.get("outlineOpacity", 1.0))
-        outline_thick = float(primary.get("outlineThickness", 1)) * scale
+        outline_thick = max(1, int(primary.get("outlineThickness", 1))) * scale
         outline_color = QColor(0, 0, 0, int(outline_op * 255))
 
-        def draw_rect(x_center, y_center, rect_w, rect_h, color):
-            rx = cx + x_center * scale - (rect_w * scale) / 2.0
-            ry = cy + y_center * scale - (rect_h * scale) / 2.0
-            rw = rect_w * scale
-            rh = rect_h * scale
+        outline_quads = []
+        fill_quads = []
 
-            if b_outline and outline_thick > 0:
-                out_x = rx - outline_thick
-                out_y = ry - outline_thick
-                out_w = rw + outline_thick * 2
-                out_h = rh + outline_thick * 2
-                painter.fillRect(QRectF(out_x, out_y, out_w, out_h), outline_color)
-
-            painter.fillRect(QRectF(rx, ry, rw, rh), color)
-
-        # 1. Outer Lines (Strict Boolean Check)
         outer = primary.get("outerLines", {})
-        o_len = float(outer.get("lineLength", 0))
-        o_op = float(outer.get("lineOpacity", 1.0))
-        is_outer_enabled = outer.get("bDisplayOuterLines", outer.get("bbDisplayOuterLines", False))
-        if is_outer_enabled and o_len > 0 and o_op > 0:
-            o_thick = float(outer.get("lineThickness", 2))
-            o_off = float(outer.get("lineOffset", 10))
+        o_len = int(outer.get("lineLength", 0))
+        o_vlen = int(outer.get("lineLengthVertical", o_len)) if not outer.get("bAllowVertScaling", False) else int(outer.get("lineLengthVertical", o_len))
+        o_op = float(outer.get("opacity", outer.get("lineOpacity", 0.35)))
+        is_outer_enabled = outer.get("bShowLines", outer.get("bDisplayOuterLines", outer.get("bbDisplayOuterLines", False)))
+        if is_outer_enabled and (o_len > 0 or o_vlen > 0) and o_op > 0:
+            o_thick = max(1, int(outer.get("lineThickness", 2)))
+            o_off = int(outer.get("lineOffset", 10))
             show_top = outer.get("bShowTopLine", True)
             line_col = QColor(main_color.red(), main_color.green(), main_color.blue(), int(o_op * 255))
 
-            draw_rect(-(o_off + o_len / 2.0), 0, o_len, o_thick, line_col)
-            draw_rect((o_off + o_len / 2.0), 0, o_len, o_thick, line_col)
-            draw_rect(0, (o_off + o_len / 2.0), o_thick, o_len, line_col)
-            if show_top: draw_rect(0, -(o_off + o_len / 2.0), o_thick, o_len, line_col)
+            t_px = o_thick * scale
+            l_px = o_len * scale
+            vl_px = o_vlen * scale
+            off_px = o_off * scale
+            t_half = (o_thick // 2) * scale
 
-        # 2. Inner Lines
+            if show_top and vl_px > 0:
+                fill_quads.append((QRect(cx - t_half, cy - off_px - vl_px, t_px, vl_px), line_col))
+                outline_quads.append(QRect(cx - t_half - outline_thick, cy - off_px - vl_px - outline_thick, t_px + 2*outline_thick, vl_px + 2*outline_thick))
+            if vl_px > 0:
+                fill_quads.append((QRect(cx - t_half, cy + off_px, t_px, vl_px), line_col))
+                outline_quads.append(QRect(cx - t_half - outline_thick, cy + off_px - outline_thick, t_px + 2*outline_thick, vl_px + 2*outline_thick))
+            if l_px > 0:
+                fill_quads.append((QRect(cx - off_px - l_px, cy - t_half, l_px, t_px), line_col))
+                outline_quads.append(QRect(cx - off_px - l_px - outline_thick, cy - t_half - outline_thick, l_px + 2*outline_thick, t_px + 2*outline_thick))
+            if l_px > 0:
+                fill_quads.append((QRect(cx + off_px, cy - t_half, l_px, t_px), line_col))
+                outline_quads.append(QRect(cx + off_px - outline_thick, cy - t_half - outline_thick, l_px + 2*outline_thick, t_px + 2*outline_thick))
+
         inner = primary.get("innerLines", {})
-        i_len = float(inner.get("lineLength", 0))
-        i_op = float(inner.get("lineOpacity", 1.0))
-        is_inner_enabled = inner.get("bDisplayInnerLines", inner.get("bbDisplayInnerLines", True))
-        if is_inner_enabled and i_len > 0 and i_op > 0:
-            i_thick = float(inner.get("lineThickness", 2))
-            i_off = float(inner.get("lineOffset", 3))
+        i_len = int(inner.get("lineLength", 0))
+        i_vlen = int(inner.get("lineLengthVertical", i_len)) if not inner.get("bAllowVertScaling", False) else int(inner.get("lineLengthVertical", i_len))
+        i_op = float(inner.get("opacity", inner.get("lineOpacity", 1.0)))
+        is_inner_enabled = inner.get("bShowLines", inner.get("bDisplayInnerLines", inner.get("bbDisplayInnerLines", False)))
+        if is_inner_enabled and (i_len > 0 or i_vlen > 0) and i_op > 0:
+            i_thick = max(1, int(inner.get("lineThickness", 2)))
+            i_off = int(inner.get("lineOffset", 3))
             show_top = inner.get("bShowTopLine", True)
             line_col = QColor(main_color.red(), main_color.green(), main_color.blue(), int(i_op * 255))
 
-            draw_rect(-(i_off + i_len / 2.0), 0, i_len, i_thick, line_col)
-            draw_rect((i_off + i_len / 2.0), 0, i_len, i_thick, line_col)
-            draw_rect(0, (i_off + i_len / 2.0), i_thick, i_len, line_col)
-            if show_top: draw_rect(0, -(i_off + i_len / 2.0), i_thick, i_len, line_col)
+            t_px = i_thick * scale
+            l_px = i_len * scale
+            vl_px = i_vlen * scale
+            off_px = i_off * scale
+            t_half = (i_thick // 2) * scale
 
-        # 3. Center Dot (Rendered as Anti-Aliased Circle)
+            if show_top and vl_px > 0:
+                fill_quads.append((QRect(cx - t_half, cy - off_px - vl_px, t_px, vl_px), line_col))
+                outline_quads.append(QRect(cx - t_half - outline_thick, cy - off_px - vl_px - outline_thick, t_px + 2*outline_thick, vl_px + 2*outline_thick))
+            if vl_px > 0:
+                fill_quads.append((QRect(cx - t_half, cy + off_px, t_px, vl_px), line_col))
+                outline_quads.append(QRect(cx - t_half - outline_thick, cy + off_px - outline_thick, t_px + 2*outline_thick, vl_px + 2*outline_thick))
+            if l_px > 0:
+                fill_quads.append((QRect(cx - off_px - l_px, cy - t_half, l_px, t_px), line_col))
+                outline_quads.append(QRect(cx - off_px - l_px - outline_thick, cy - t_half - outline_thick, l_px + 2*outline_thick, t_px + 2*outline_thick))
+            if l_px > 0:
+                fill_quads.append((QRect(cx + off_px, cy - t_half, l_px, t_px), line_col))
+                outline_quads.append(QRect(cx + off_px - outline_thick, cy - t_half - outline_thick, l_px + 2*outline_thick, t_px + 2*outline_thick))
+
+        if b_outline and outline_thick > 0 and outline_op > 0:
+            for out_rect in outline_quads:
+                painter.fillRect(out_rect, outline_color)
+
+        for rect, col in fill_quads:
+            painter.fillRect(rect, col)
+
         if primary.get("bDisplayCenterDot", False):
             dot_op = float(primary.get("centerDotOpacity", 1.0))
-            dot_size = float(primary.get("centerDotSize", 2))
+            dot_size = max(1, int(primary.get("centerDotSize", 2)))
             dot_col = QColor(main_color.red(), main_color.green(), main_color.blue(), int(dot_op * 255))
+            dot_px = dot_size * scale
+            dot_half = (dot_size // 2) * scale
 
             painter.setRenderHint(QPainter.Antialiasing, True)
-            rx = cx - (dot_size * scale) / 2.0
-            ry = cy - (dot_size * scale) / 2.0
-            rw = dot_size * scale
-            rh = dot_size * scale
-
-            if b_outline and outline_thick > 0:
-                out_x = rx - outline_thick
-                out_y = ry - outline_thick
-                out_w = rw + outline_thick * 2
-                out_h = rh + outline_thick * 2
-                painter.setBrush(outline_color)
+            if b_outline and outline_thick > 0 and outline_op > 0:
+                out_rect = QRect(cx - dot_half - outline_thick, cy - dot_half - outline_thick, dot_px + 2*outline_thick, dot_px + 2*outline_thick)
                 painter.setPen(Qt.NoPen)
-                painter.drawEllipse(QRectF(out_x, out_y, out_w, out_h))
+                painter.setBrush(outline_color)
+                painter.drawEllipse(out_rect)
 
-            painter.setBrush(dot_col)
+            dot_rect = QRect(cx - dot_half, cy - dot_half, dot_px, dot_px)
             painter.setPen(Qt.NoPen)
-            painter.drawEllipse(QRectF(rx, ry, rw, rh))
+            painter.setBrush(dot_col)
+            painter.drawEllipse(dot_rect)
             painter.setRenderHint(QPainter.Antialiasing, False)
 
 
@@ -277,20 +337,28 @@ class ValorantCrosshairCodeParser:
                 "centerDotOpacity": 1.0,
                 "centerDotSize": 2,
                 "innerLines": {
-                    "bDisplayInnerLines": True,
+                    "bDisplayInnerLines": False,
                     "lineOpacity": 1.0,
                     "lineLength": 6,
+                    "lineLengthVertical": 6,
+                    "bIgnoreVerticalLength": True,
                     "lineThickness": 2,
                     "lineOffset": 3,
-                    "bShowTopLine": True
+                    "bShowTopLine": True,
+                    "bShowMovementError": False,
+                    "bShowShootingError": False
                 },
                 "outerLines": {
                     "bDisplayOuterLines": False,
                     "lineOpacity": 0.35,
                     "lineLength": 2,
+                    "lineLengthVertical": 2,
+                    "bIgnoreVerticalLength": True,
                     "lineThickness": 2,
                     "lineOffset": 10,
-                    "bShowTopLine": True
+                    "bShowTopLine": True,
+                    "bShowMovementError": False,
+                    "bShowShootingError": False
                 }
             }
         }
@@ -309,6 +377,7 @@ class ValorantCrosshairCodeParser:
                 primary["bUseCustomColor"] = True
                 c_val = tokens[i+1]
                 if not c_val.startswith("#"): c_val = "#" + c_val
+                if len(c_val) == 7: c_val += "FF"
                 primary["customColor"] = c_val
                 i += 1
             elif t == "b" and i + 1 < len(tokens):
@@ -333,18 +402,25 @@ class ValorantCrosshairCodeParser:
                 try: primary["centerDotSize"] = int(tokens[i+1])
                 except: pass
                 i += 1
-            elif (t == "h" or t == "0h") and i + 1 < len(tokens):
+            elif (t == "h" or t == "0h" or t == "0b") and i + 1 < len(tokens):
                 inner["bDisplayInnerLines"] = (tokens[i+1] == "1")
                 i += 1
             elif t == "0t" and i + 1 < len(tokens):
                 try: inner["lineThickness"] = int(tokens[i+1])
                 except: pass
-                inner["bDisplayInnerLines"] = True
+                if tokens[i+1] != "0": inner["bDisplayInnerLines"] = True
                 i += 1
             elif t == "0l" and i + 1 < len(tokens):
                 try: inner["lineLength"] = int(tokens[i+1])
                 except: pass
-                inner["bDisplayInnerLines"] = True
+                if tokens[i+1] != "0": inner["bDisplayInnerLines"] = True
+                i += 1
+            elif t == "0v" and i + 1 < len(tokens):
+                try: inner["lineLengthVertical"] = int(tokens[i+1])
+                except: pass
+                i += 1
+            elif t == "0g" and i + 1 < len(tokens):
+                inner["bIgnoreVerticalLength"] = (tokens[i+1] == "1")
                 i += 1
             elif t == "0o" and i + 1 < len(tokens):
                 try: inner["lineOffset"] = int(tokens[i+1])
@@ -357,32 +433,33 @@ class ValorantCrosshairCodeParser:
             elif t == "0s" and i + 1 < len(tokens):
                 inner["bShowTopLine"] = (tokens[i+1] == "1")
                 i += 1
-            elif t == "1h" and i + 1 < len(tokens):
+            elif (t == "1h" or t == "1b") and i + 1 < len(tokens):
                 outer["bDisplayOuterLines"] = (tokens[i+1] == "1")
-                i += 1
-            elif t == "1b" and i + 1 < len(tokens):
-                # 1b in Valorant is Outer Line Outline Enabled, outer lines active!
-                outer["bDisplayOuterLines"] = True
                 i += 1
             elif t == "1t" and i + 1 < len(tokens):
                 try: outer["lineThickness"] = int(tokens[i+1])
                 except: pass
-                outer["bDisplayOuterLines"] = True
+                if tokens[i+1] != "0": outer["bDisplayOuterLines"] = True
                 i += 1
             elif t == "1l" and i + 1 < len(tokens):
                 try: outer["lineLength"] = int(tokens[i+1])
                 except: pass
-                outer["bDisplayOuterLines"] = True
+                if tokens[i+1] != "0": outer["bDisplayOuterLines"] = True
+                i += 1
+            elif t == "1v" and i + 1 < len(tokens):
+                try: outer["lineLengthVertical"] = int(tokens[i+1])
+                except: pass
+                i += 1
+            elif t == "1g" and i + 1 < len(tokens):
+                outer["bIgnoreVerticalLength"] = (tokens[i+1] == "1")
                 i += 1
             elif t == "1o" and i + 1 < len(tokens):
                 try: outer["lineOffset"] = int(tokens[i+1])
                 except: pass
-                outer["bDisplayOuterLines"] = True
                 i += 1
             elif t == "1a" and i + 1 < len(tokens):
                 try: outer["lineOpacity"] = float(tokens[i+1])
                 except: pass
-                outer["bDisplayOuterLines"] = True
                 i += 1
             elif t == "1s" and i + 1 < len(tokens):
                 outer["bShowTopLine"] = (tokens[i+1] == "1")
@@ -585,7 +662,7 @@ class ValueSlider(QWidget):
         self.spin_box.setRange(min_val, max_val)
         self.spin_box.setSingleStep(step)
         self.spin_box.setDecimals(1) # Display one decimal place
-        self.spin_box.setFixedWidth(60)
+        self.spin_box.setFixedWidth(70)
         self.spin_box.setAlignment(Qt.AlignCenter)
 
         layout.addWidget(self.slider)
@@ -607,9 +684,9 @@ class RadioButtonGroup(QWidget):
     def __init__(self, text_true, text_false, parent=None):
         super().__init__(parent)
         main_layout = QHBoxLayout(self)
-        main_layout.setContentsMargins(0,0,0,0)
-        main_layout.setSpacing(10)
-        main_layout.setAlignment(Qt.AlignRight)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(8)
+        main_layout.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         
         self.btn_true = QPushButton(text_true)
         self.btn_false = QPushButton(text_false)
@@ -617,12 +694,34 @@ class RadioButtonGroup(QWidget):
         self.btn_true.setCheckable(True)
         self.btn_false.setCheckable(True)
 
+        toggle_style = """
+            QPushButton {
+                background-color: #242933;
+                color: #8fa7bb;
+                border: 1px solid #3b4252;
+                border-radius: 12px;
+                padding: 6px 14px;
+                font-size: 11px;
+                font-weight: bold;
+                min-width: 85px;
+            }
+            QPushButton:hover {
+                background-color: #2e3440;
+                color: #ffffff;
+                border-color: #4c566a;
+            }
+            QPushButton:checked {
+                background-color: #20e693;
+                color: #064e3b;
+                border: 1px solid #20e693;
+            }
+        """
+        self.btn_true.setStyleSheet(toggle_style)
+        self.btn_false.setStyleSheet(toggle_style)
+
         self.btn_true.clicked.connect(lambda: self.set_state(True))
         self.btn_false.clicked.connect(lambda: self.set_state(False))
 
-        self.btn_true.setObjectName("ToggleOptionButton")
-        self.btn_false.setObjectName("ToggleOptionButton")
-        
         main_layout.addWidget(self.btn_false)
         main_layout.addWidget(self.btn_true)
     
@@ -719,8 +818,9 @@ class ExportIMAMenuDialog(QDialog):
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
         self.setAttribute(Qt.WA_TranslucentBackground)
 
-        self.setMinimumWidth(750)
+        self.setMinimumWidth(780)
         default_settings = default_settings or {}
+        self.switcher = parent.switcher if (parent and hasattr(parent, 'switcher')) else None
         
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
@@ -746,7 +846,7 @@ class ExportIMAMenuDialog(QDialog):
         content_layout.addLayout(top_layout)
         
         left_layout = QVBoxLayout()
-        left_layout.setSpacing(15)
+        left_layout.setSpacing(12)
         top_layout.addLayout(left_layout, 5)
         
         right_layout = QVBoxLayout()
@@ -756,16 +856,115 @@ class ExportIMAMenuDialog(QDialog):
         self.accounts_data = accounts_data
         self.menu_icon_path = default_settings.get("menu_icon_path", "")
         if not self.menu_icon_path:
-            base_dir = parent.switcher.base_dir if (parent and hasattr(parent, 'switcher')) else Path(__file__).parent
+            base_dir = self.switcher.base_dir if self.switcher else Path(__file__).parent
             default_icon = Path(base_dir) / "Assets" / "valorant" / "5.png"
             if default_icon.exists():
                 self.menu_icon_path = str(default_icon)
         
-        left_layout.addWidget(QLabel("Menu Title:"))
+        group_style = """
+            QGroupBox {
+                color: #FFFFFF; font-size: 13px; font-weight: bold;
+                border: 1px solid #c89f68; border-radius: 8px; margin-top: 6px;
+            }
+            QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; padding: 0 8px; left: 10px; color: #FFFFFF; }
+        """
+
+        path_group = QGroupBox("iMA Menu Installation")
+        path_group.setStyleSheet(group_style)
+        path_layout = QVBoxLayout(path_group)
+        path_layout.setSpacing(6)
+
+        self.path_stack = QStackedWidget()
+
+        detected_widget = QWidget()
+        detected_layout = QVBoxLayout(detected_widget)
+        detected_layout.setContentsMargins(0, 0, 0, 0)
+        detected_layout.setSpacing(6)
+
+        path_input_layout = QHBoxLayout()
+        path_input_layout.setSpacing(8)
+
+        current_path_str = default_settings.get("ima_menu_path", "")
+        if not current_path_str and self.switcher:
+            current_path_str = str(self.switcher.find_ima_menu_path() or "")
+
+        self.path_edit = QLineEdit(current_path_str)
+        self.path_edit.setPlaceholderText("Path to iMA Menu folder or its parent directory")
+        self.path_edit.textChanged.connect(self.update_path_status)
+        path_input_layout.addWidget(self.path_edit)
+
+        browse_path_button = QPushButton("Browse...")
+        browse_path_button.setObjectName("ApplyButton")
+        browse_path_button.clicked.connect(self.browse_path)
+        path_input_layout.addWidget(browse_path_button)
+
+        detect_button = QPushButton("Detect Active")
+        detect_button.setToolTip("Auto-detect the active registered iMA Menu from Windows Registry")
+        detect_button.setStyleSheet("""
+            QPushButton {
+                background-color: #4a4647; color: #e0d6d1; font-weight: bold; font-size: 11px;
+                border-radius: 6px; padding: 6px 12px; border: 1px solid #6b6365;
+            }
+            QPushButton:hover { background-color: #5a5556; border-color: #c89f68; }
+        """)
+        detect_button.clicked.connect(self.detect_active_path)
+        path_input_layout.addWidget(detect_button)
+        detected_layout.addLayout(path_input_layout)
+
+        self.path_status_label = QLabel()
+        self.path_status_label.setStyleSheet("font-size: 11px; font-weight: bold;")
+        detected_layout.addWidget(self.path_status_label)
+
+        self.path_stack.addWidget(detected_widget)
+
+        missing_widget = QWidget()
+        missing_layout = QVBoxLayout(missing_widget)
+        missing_layout.setContentsMargins(4, 4, 4, 4)
+        missing_layout.setSpacing(6)
+
+        banner_title = QLabel("Install iMA Menu to use this feature")
+        banner_title.setStyleSheet("color: #FFFFFF; font-size: 13px; font-weight: bold;")
+        missing_layout.addWidget(banner_title)
+
+        banner_desc = QLabel("iMA Menu is a highly customizable Context menu enhancer tool with smart and beautiful features.")
+        banner_desc.setWordWrap(True)
+        banner_desc.setStyleSheet("color: #e0d6d1; font-size: 11px;")
+        missing_layout.addWidget(banner_desc)
+
+        banner_btn_layout = QHBoxLayout()
+        banner_btn_layout.setSpacing(8)
+
+        download_btn = QPushButton("Download")
+        download_btn.setObjectName("ApplyButton")
+        download_btn.clicked.connect(download_and_open_ima_menu)
+        banner_btn_layout.addWidget(download_btn)
+
+        detect_ima_btn = QPushButton("Detect iMA Menu")
+        detect_ima_btn.clicked.connect(self.detect_active_path)
+        banner_btn_layout.addWidget(detect_ima_btn)
+
+        locate_btn = QPushButton("Browse...")
+        locate_btn.clicked.connect(self.browse_path)
+        banner_btn_layout.addWidget(locate_btn)
+        banner_btn_layout.addStretch()
+
+        missing_layout.addLayout(banner_btn_layout)
+
+        self.path_stack.addWidget(missing_widget)
+
+        path_layout.addWidget(self.path_stack)
+        left_layout.addWidget(path_group)
+
+        menu_details_group = QGroupBox("Menu Details")
+        menu_details_group.setStyleSheet(group_style)
+        menu_details_layout = QVBoxLayout(menu_details_group)
+        menu_details_layout.setSpacing(8)
+
+        menu_details_layout.addWidget(QLabel("Menu Title:"))
         self.title_edit = QLineEdit(default_settings.get("title", "Valorant"))
-        left_layout.addWidget(self.title_edit)
+        menu_details_layout.addWidget(self.title_edit)
         
-        left_layout.addWidget(QLabel("Menu Icon:"))
+        menu_details_layout.addWidget(QLabel("Menu Icon:"))
         icon_layout = QHBoxLayout()
         icon_layout.setSpacing(8)
         self.icon_path_edit = QLineEdit(self.menu_icon_path)
@@ -773,8 +972,8 @@ class ExportIMAMenuDialog(QDialog):
         self.icon_path_edit.textChanged.connect(self.update_icon_preview)
 
         self.icon_preview_btn = QPushButton()
-        self.icon_preview_btn.setFixedSize(40, 40)
-        self.icon_preview_btn.setIconSize(QSize(28, 28))
+        self.icon_preview_btn.setFixedSize(36, 36)
+        self.icon_preview_btn.setIconSize(QSize(26, 26))
         self.icon_preview_btn.setToolTip("Click to choose a Valorant menu icon style")
         self.icon_preview_btn.setStyleSheet("""
             QPushButton {
@@ -791,10 +990,13 @@ class ExportIMAMenuDialog(QDialog):
         icon_layout.addWidget(self.icon_path_edit)
         icon_layout.addWidget(self.icon_preview_btn)
         icon_layout.addWidget(browse_button)
-        left_layout.addLayout(icon_layout)
+        menu_details_layout.addLayout(icon_layout)
+        left_layout.addWidget(menu_details_group)
+
         self.update_icon_preview(self.menu_icon_path)
         
         settings_group = QGroupBox("iMA Menu Settings")
+        settings_group.setStyleSheet(group_style)
         settings_layout = QGridLayout(settings_group)
         settings_layout.setSpacing(10)
         
@@ -813,6 +1015,16 @@ class ExportIMAMenuDialog(QDialog):
         self.tip_delay_slider.setValue(ui_settings.get("tip_delay", 1.0))
         settings_layout.addWidget(QLabel("Tip Delay (seconds):"), 2, 0)
         settings_layout.addWidget(self.tip_delay_slider, 2, 1)
+
+        self.include_app_shortcut_toggle = RadioButtonGroup("On", "Off")
+        self.include_app_shortcut_toggle.set_state(ui_settings.get("include_app_shortcut", False))
+        settings_layout.addWidget(QLabel("Add iMA Switcher to Menu:"), 3, 0)
+        settings_layout.addWidget(self.include_app_shortcut_toggle, 3, 1)
+
+        self.show_map_planner_toggle = RadioButtonGroup("On", "Off")
+        self.show_map_planner_toggle.set_state(ui_settings.get("show_map_planner_in_menu", False))
+        settings_layout.addWidget(QLabel("Show Map Planner in Menu:"), 4, 0)
+        settings_layout.addWidget(self.show_map_planner_toggle, 4, 1)
         
         left_layout.addWidget(settings_group)
         left_layout.addStretch()
@@ -834,12 +1046,20 @@ class ExportIMAMenuDialog(QDialog):
 
         export_button = QPushButton("Export")
         export_button.setObjectName("ApplyButton")
-        export_button.clicked.connect(self.accept)
+        export_button.clicked.connect(self.on_export_clicked)
         button_layout.addWidget(export_button)
         
         button_layout.addStretch()
         content_layout.addLayout(button_layout)
+
+        self.update_path_status(self.path_edit.text())
     
+    def on_export_clicked(self):
+        if not self.accounts_data:
+            CustomMessageDialog.warning(self, "No Accounts", "You must save at least one account before exporting.")
+            return
+        self.accept()
+        
     def showEvent(self, event):
         super().showEvent(event)
         self.center_on_parent()
@@ -848,6 +1068,50 @@ class ExportIMAMenuDialog(QDialog):
         if self.parent():
             parent_geom = self.parent().geometry()
             self.move(parent_geom.center() - self.rect().center())
+
+    def browse_path(self):
+        initial = self.path_edit.text().strip()
+        chosen = QFileDialog.getExistingDirectory(self, "Select iMA Menu Folder or Parent Folder", initial)
+        if chosen:
+            if self.switcher:
+                resolved = self.switcher.resolve_ima_menu_folder(chosen)
+                self.path_edit.setText(str(resolved))
+            else:
+                self.path_edit.setText(chosen)
+
+    def detect_active_path(self):
+        if self.switcher:
+            detected = self.switcher.get_registered_ima_shell_path() or self.switcher.find_ima_menu_path()
+            if detected:
+                self.path_edit.setText(str(detected))
+                self.update_path_status(str(detected))
+            else:
+                self.update_path_status("")
+
+    def update_path_status(self, text=None):
+        path_val = (text if text is not None else self.path_edit.text()).strip()
+        if not path_val:
+            self.path_stack.setCurrentIndex(1)
+            return
+        if self.switcher:
+            resolved = self.switcher.resolve_ima_menu_folder(path_val)
+            is_reg, active_reg, _ = self.switcher.get_ima_menu_registration_info(resolved)
+            if not resolved or not Path(resolved).exists():
+                self.path_stack.setCurrentIndex(1)
+            else:
+                self.path_stack.setCurrentIndex(0)
+                if is_reg:
+                    self.path_status_label.setText(f"<font color='#2ecc71'>● Active & Registered in Windows Shell: {resolved}</font>")
+                elif active_reg:
+                    self.path_status_label.setText(f"<font color='#f39c12'>● Custom Path (Live shell registered at: {active_reg})</font>")
+                else:
+                    self.path_status_label.setText(f"<font color='#f39c12'>● Custom Path (Shell not registered)</font>")
+        else:
+            if Path(path_val).exists():
+                self.path_stack.setCurrentIndex(0)
+                self.path_status_label.setText("<font color='#2ecc71'>● Folder exists</font>")
+            else:
+                self.path_stack.setCurrentIndex(1)
 
     def update_icon_preview(self, path_text):
         self.menu_icon_path = path_text.strip()
@@ -897,10 +1161,13 @@ class ExportIMAMenuDialog(QDialog):
         return {
             "title": self.title_edit.text(), 
             "menu_icon_path": self.menu_icon_path, 
+            "ima_menu_path": self.path_edit.text().strip(),
             "ordered_accounts": [self.accounts_list.item(i).text() for i in range(self.accounts_list.count())],
             "show_rank_tips": self.show_rank_tips_toggle.get_state(),
             "show_rr_in_tip": self.show_rr_in_tip_toggle.get_state(),
-            "tip_delay": self.tip_delay_slider.value()
+            "tip_delay": self.tip_delay_slider.value(),
+            "include_app_shortcut": self.include_app_shortcut_toggle.get_state(),
+            "show_map_planner_in_menu": self.show_map_planner_toggle.get_state()
         }
 
 class PopupDialog(QDialog):
@@ -940,22 +1207,19 @@ class PopupDialog(QDialog):
 class CustomMessageDialog(PopupDialog):
     def __init__(self, title, message, parent=None):
         super().__init__(title, parent)
-        self.setFixedSize(350, 180)
+        self.resize(380, 190)
+        self.setMinimumSize(340, 160)
         
         message_label = QLabel(message)
-        message_label.setStyleSheet("color: #e0d6d1; font-size: 16px; font-weight: bold; text-align: center;")
+        message_label.setWordWrap(True)
+        message_label.setStyleSheet("color: #e0d6d1; font-size: 13px; font-weight: 500; padding: 10px 5px;")
         message_label.setAlignment(Qt.AlignCenter)
         self.content_layout.addWidget(message_label)
         
         ok_button = QPushButton("OK")
-        ok_button.setStyleSheet("""
-            QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold; border-radius: 15px; padding: 10px 20px;
-            }
-            QPushButton:hover {
-                background-color: #d9b68b; /* Brighter coffee color */
-            }
-        """)
+        ok_button.setObjectName("ApplyButton")
+        ok_button.setProperty("accent", True)
+        ok_button.setMinimumWidth(100)
         ok_button.clicked.connect(self.accept)
         
         button_layout = QHBoxLayout()
@@ -963,6 +1227,21 @@ class CustomMessageDialog(PopupDialog):
         button_layout.addWidget(ok_button)
         button_layout.addStretch()
         self.content_layout.addLayout(button_layout)
+
+    @classmethod
+    def information(cls, parent, title, message):
+        dlg = cls(title, message, parent)
+        return dlg.exec_()
+
+    @classmethod
+    def warning(cls, parent, title, message):
+        dlg = cls(title, message, parent)
+        return dlg.exec_()
+
+    @classmethod
+    def critical(cls, parent, title, message):
+        dlg = cls(title, message, parent)
+        return dlg.exec_()
 
 class InputDialog(PopupDialog):
     def __init__(self, title, prompt, default_text="", in_game_name_default="", in_game_tag_default="", parent=None):
@@ -1178,18 +1457,20 @@ class SettingsDropdownMenu(QWidget):
         row1.setSpacing(6)
 
         add_btn = QPushButton(" Add")
+        add_btn.setStyleSheet("font-size: 14px; font-weight: bold; padding: 10px 18px;")
         add_icon = Path(get_asset_path("Add.png"))
         if add_icon.exists():
             add_btn.setIcon(QIcon(str(add_icon)))
-            add_btn.setIconSize(QSize(16, 16))
+            add_btn.setIconSize(QSize(18, 18))
         add_btn.clicked.connect(lambda: self.execute_action(self.actions_handler.add_account))
         row1.addWidget(add_btn)
 
         save_btn = QPushButton(" Save")
+        save_btn.setStyleSheet("font-size: 14px; font-weight: bold; padding: 10px 18px;")
         save_icon = Path(get_asset_path("Save.png"))
         if save_icon.exists():
             save_btn.setIcon(QIcon(str(save_icon)))
-            save_btn.setIconSize(QSize(16, 16))
+            save_btn.setIconSize(QSize(18, 18))
         save_btn.clicked.connect(lambda: self.execute_action(self.actions_handler.save_current_account))
         row1.addWidget(save_btn)
 
@@ -1199,36 +1480,40 @@ class SettingsDropdownMenu(QWidget):
         row2.setSpacing(6)
 
         backup_btn = QPushButton(" Backup")
+        backup_btn.setStyleSheet("font-size: 14px; font-weight: bold; padding: 10px 18px;")
         backup_icon = Path(get_asset_path("Backup.png"))
         if backup_icon.exists():
             backup_btn.setIcon(QIcon(str(backup_icon)))
-            backup_btn.setIconSize(QSize(16, 16))
+            backup_btn.setIconSize(QSize(18, 18))
         backup_btn.clicked.connect(lambda: self.execute_action(self.actions_handler._handle_backup_selection))
         row2.addWidget(backup_btn)
 
         restore_btn = QPushButton(" Restore")
+        restore_btn.setStyleSheet("font-size: 14px; font-weight: bold; padding: 10px 18px;")
         restore_icon = Path(get_asset_path("Restore.png"))
         if restore_icon.exists():
             restore_btn.setIcon(QIcon(str(restore_icon)))
-            restore_btn.setIconSize(QSize(16, 16))
+            restore_btn.setIconSize(QSize(18, 18))
         restore_btn.clicked.connect(lambda: self.execute_action(self.actions_handler._handle_restore_selection))
         row2.addWidget(restore_btn)
 
         main_layout.addLayout(row2)
 
         ima_btn = QPushButton(" iMA Menu")
+        ima_btn.setStyleSheet("font-size: 14px; font-weight: bold; padding: 10px 18px;")
         ima_icon = Path(get_asset_path("ima.png"))
         if ima_icon.exists():
             ima_btn.setIcon(QIcon(str(ima_icon)))
-            ima_btn.setIconSize(QSize(18, 18))
+            ima_btn.setIconSize(QSize(20, 20))
         ima_btn.clicked.connect(lambda: self.execute_action(self.actions_handler.export_ima_menu))
         main_layout.addWidget(ima_btn)
 
         options_btn = QPushButton(" Options")
+        options_btn.setStyleSheet("font-size: 14px; font-weight: bold; padding: 10px 18px;")
         options_icon = Path(get_asset_path("Options.png"))
         if options_icon.exists():
             options_btn.setIcon(QIcon(str(options_icon)))
-            options_btn.setIconSize(QSize(18, 18))
+            options_btn.setIconSize(QSize(20, 20))
         options_btn.clicked.connect(lambda: self.execute_action(self.actions_handler.open_options_dialog))
         main_layout.addWidget(options_btn)
 
@@ -1313,7 +1598,8 @@ class OptionsDialog(PopupDialog):
     def __init__(self, switcher_instance, parent=None):
         super().__init__("Options", parent)
         self.switcher = switcher_instance
-        self.setFixedSize(760, 680)
+        self.resize(780, 680)
+        self.setMinimumSize(720, 580)
 
         open_folder_btn = HoverButton()
         open_folder_btn.setFixedSize(30, 30)
@@ -1385,7 +1671,9 @@ class OptionsDialog(PopupDialog):
         self.setup_audio_tab()       # Page 3: Audio
         self.setup_advanced_tab()    # Page 4: Quality Presets & Riot Client
         self.setup_crosshairs_tab()  # Page 5: Crosshair Manager
-        self.setup_updates_tab()     # Page 6: Software Updates
+        self.setup_ima_menu_tab()    # Page 6: iMA Menu
+        self.setup_map_planner_tab() # Page 7: Map Planner
+        self.setup_updates_tab()     # Page 8: Software Updates
 
         self.nav_list.currentRowChanged.connect(self.pages_widget.setCurrentIndex)
         self.nav_list.setCurrentRow(0)
@@ -1541,44 +1829,60 @@ class OptionsDialog(PopupDialog):
     def setup_audio_tab(self):
         audio_tab = QWidget()
         main_layout = QVBoxLayout(audio_tab)
-        main_layout.setContentsMargins(15, 5, 15, 15)
-        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(10, 5, 10, 10)
+        main_layout.setSpacing(12)
         main_layout.setAlignment(Qt.AlignTop)
 
         general_group = QGroupBox("General Volume")
         general_layout = QFormLayout(general_group)
         general_layout.setSpacing(10)
+        general_layout.setLabelAlignment(Qt.AlignLeft)
+        general_layout.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         general_keys = ["EAresFloatSettingName::OverallVolume", "EAresFloatSettingName::SoundEffectsVolume", "EAresFloatSettingName::VoiceOverVolume", "EAresFloatSettingName::VideoVolume"]
         for key in general_keys:
             slider = ValueSlider(0, 100)
             self.audio_controls[key] = slider
-            general_layout.addRow(QLabel(self.audio_settings_map[key] + ":"), slider)
+            lbl = QLabel(self.audio_settings_map[key] + ":")
+            lbl.setMinimumWidth(110)
+            general_layout.addRow(lbl, slider)
         main_layout.addWidget(general_group)
 
         music_group = QGroupBox("Music")
         music_layout = QFormLayout(music_group)
         music_layout.setSpacing(10)
+        music_layout.setLabelAlignment(Qt.AlignLeft)
+        music_layout.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         music_keys = ["EAresFloatSettingName::AllMusicOverallVolume", "EAresFloatSettingName::MenuAndLobbyMusicVolume", "EAresFloatSettingName::CharacterSelectMusicVolume"]
         for key in music_keys:
             slider = ValueSlider(0, 100)
             self.audio_controls[key] = slider
-            music_layout.addRow(QLabel(self.audio_settings_map[key] + ":"), slider)
+            lbl = QLabel(self.audio_settings_map[key] + ":")
+            lbl.setMinimumWidth(110)
+            music_layout.addRow(lbl, slider)
         main_layout.addWidget(music_group)
         
-        voice_group = QGroupBox("Voice & Communication")
+        voice_group = QGroupBox("Voice Communication")
         voice_layout = QFormLayout(voice_group)
         voice_layout.setSpacing(10)
+        voice_layout.setLabelAlignment(Qt.AlignLeft)
+        voice_layout.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         voice_keys = ["EAresIntSettingName::MicVolume", "EAresIntSettingName::VoiceVolume"]
         for key in voice_keys:
             slider = ValueSlider(0, 100)
             self.audio_controls[key] = slider
-            voice_layout.addRow(QLabel(self.audio_settings_map[key] + ":"), slider)
+            lbl = QLabel(self.audio_settings_map[key] + ":")
+            lbl.setMinimumWidth(110)
+            voice_layout.addRow(lbl, slider)
         
         self.audio_controls["EAresBoolSettingName::PushToTalkEnabled"] = RadioButtonGroup("Push to Talk", "Automatic")
-        voice_layout.addRow(QLabel(self.audio_settings_map["EAresBoolSettingName::PushToTalkEnabled"] + ":"), self.audio_controls["EAresBoolSettingName::PushToTalkEnabled"])
+        lbl_ptt = QLabel(self.audio_settings_map["EAresBoolSettingName::PushToTalkEnabled"] + ":")
+        lbl_ptt.setMinimumWidth(110)
+        voice_layout.addRow(lbl_ptt, self.audio_controls["EAresBoolSettingName::PushToTalkEnabled"])
         
         self.audio_controls["EAresBoolSettingName::EnableHRTF"] = RadioButtonGroup("On", "Off")
-        voice_layout.addRow(QLabel(self.audio_settings_map["EAresBoolSettingName::EnableHRTF"] + ":"), self.audio_controls["EAresBoolSettingName::EnableHRTF"])
+        lbl_hrtf = QLabel(self.audio_settings_map["EAresBoolSettingName::EnableHRTF"] + ":")
+        lbl_hrtf.setMinimumWidth(110)
+        voice_layout.addRow(lbl_hrtf, self.audio_controls["EAresBoolSettingName::EnableHRTF"])
         main_layout.addWidget(voice_group)
 
         main_layout.addStretch()
@@ -1679,6 +1983,10 @@ class OptionsDialog(PopupDialog):
         top_layout.addWidget(QLabel("Last Game's Agent & Map:"), 5, 0)
         top_layout.addWidget(self.show_last_match_info_toggle, 5, 1)
 
+        self.show_map_background_toggle = RadioButtonGroup("On", "Off")
+        top_layout.addWidget(QLabel("Account Map Background:"), 6, 0)
+        top_layout.addWidget(self.show_map_background_toggle, 6, 1)
+
         bottom_group = QGroupBox("Layout Settings")
         bottom_layout = QGridLayout(bottom_group)
         bottom_layout.setSpacing(10)
@@ -1709,28 +2017,12 @@ class OptionsDialog(PopupDialog):
 
         combo_style = """
             QComboBox { 
-                background-color: #4a4647; border: 1px solid #c89f68; border-radius: 6px; padding: 4px 8px; color: #e0d6d1; font-weight: bold;
+                background-color: #353233; border: 1px solid #4a4647; border-radius: 8px; padding: 6px 10px; color: #e0d6d1; font-weight: bold;
             }
-            QComboBox:hover { border: 1px solid #d9b68b; }
+            QComboBox:hover { border-color: #c89f68; }
             QComboBox QAbstractItemView { 
-                background-color: #3a3637; border: 1px solid #c89f68; selection-background-color: #c89f68; color: #e0d6d1; selection-color: #2c2a2b; padding: 4px;
+                background-color: #2c2a2b; border: 1px solid #4a4647; selection-background-color: #c89f68; color: #e0d6d1; selection-color: #2c2a2b; padding: 4px;
             }
-        """
-        btn_style = """
-            QPushButton {
-                background-color: #4a4647; color: #e0d6d1; font-weight: bold; font-size: 11px;
-                border-radius: 6px; padding: 6px 12px; border: 1px solid #6b6365;
-            }
-            QPushButton:hover { background-color: #5a5556; border-color: #c89f68; }
-            QPushButton:pressed { background-color: #3a3637; }
-        """
-        gold_btn_style = """
-            QPushButton {
-                background-color: #c89f68; color: #2c2a2b; font-weight: bold; font-size: 11px;
-                border-radius: 6px; padding: 6px 12px; border: none;
-            }
-            QPushButton:hover { background-color: #d9b68b; }
-            QPushButton:pressed { background-color: #b88f58; }
         """
 
         top_bar = QHBoxLayout()
@@ -1746,31 +2038,46 @@ class OptionsDialog(PopupDialog):
         self.crosshair_profile_combo.setStyleSheet(combo_style)
         top_bar.addWidget(self.crosshair_profile_combo, 1)
 
-
-
+        self.crosshair_preset_combo = QComboBox()
+        self.crosshair_preset_combo.setStyleSheet(combo_style)
+        self.crosshair_preset_combo.addItem("Presets...")
+        for p_name in VALORANT_CROSSHAIR_PRESETS.keys():
+            self.crosshair_preset_combo.addItem(p_name)
+        self.crosshair_preset_combo.currentIndexChanged.connect(self.on_crosshair_preset_selected)
+        top_bar.addWidget(self.crosshair_preset_combo, 1)
 
         layout.addLayout(top_bar)
 
         main_split = QHBoxLayout()
-        main_split.setSpacing(12)
+        main_split.setSpacing(14)
 
         left_col = QVBoxLayout()
         left_col.setSpacing(6)
 
+        canvas_frame = QWidget()
+        canvas_frame.setStyleSheet("background-color: transparent; border: 1px solid #4a4647; border-radius: 12px;")
+        canvas_layout = QVBoxLayout(canvas_frame)
+        canvas_layout.setContentsMargins(0, 0, 0, 0)
+        canvas_layout.setSpacing(0)
+
         self.ch_canvas = CrosshairCanvasWidget()
-        left_col.addWidget(self.ch_canvas, 0, Qt.AlignCenter)
+        canvas_layout.addWidget(self.ch_canvas)
+        left_col.addWidget(canvas_frame)
 
         bg_bar = QHBoxLayout()
-        bg_bar.setSpacing(6)
+        bg_bar.setSpacing(4)
         bg_bar.addWidget(QLabel("BG:"))
         self.ch_bg_combo = QComboBox()
-        self.ch_bg_combo.addItems(["Dark Grid", "Light Grid"])
-        bg_bar.addWidget(self.ch_bg_combo)
+        self.ch_bg_combo.setStyleSheet(combo_style)
+        self.ch_bg_combo.addItems(["Dark Grid", "Light Grid", "Pure Black"])
+        bg_bar.addWidget(self.ch_bg_combo, 1)
 
         bg_bar.addWidget(QLabel("Zoom:"))
         self.ch_zoom_combo = QComboBox()
-        self.ch_zoom_combo.addItems(["1x", "2x"])
-        bg_bar.addWidget(self.ch_zoom_combo)
+        self.ch_zoom_combo.setStyleSheet(combo_style)
+        self.ch_zoom_combo.addItems(["1x", "2x", "4x", "8x"])
+        self.ch_zoom_combo.setCurrentIndex(1)
+        bg_bar.addWidget(self.ch_zoom_combo, 1)
         left_col.addLayout(bg_bar)
         left_col.addStretch()
 
@@ -1785,10 +2092,12 @@ class OptionsDialog(PopupDialog):
         layout_color.setSpacing(6)
         
         self.ch_color_combo = QComboBox()
+        self.ch_color_combo.setStyleSheet(combo_style)
         self.ch_color_combo.addItems(["White", "Green", "Yellow Green", "Green Yellow", "Yellow", "Cyan", "Pink", "Red", "Custom Hex"])
         layout_color.addRow(QLabel("Color Preset:"), self.ch_color_combo)
 
         self.ch_custom_hex_edit = QLineEdit("#00FF88FF")
+        self.ch_custom_hex_edit.setStyleSheet("background-color: #353233; border: 1px solid #4a4647; border-radius: 6px; padding: 4px 8px; color: #e0d6d1;")
         layout_color.addRow(QLabel("Custom Hex:"), self.ch_custom_hex_edit)
 
         self.ch_dot_enable_cb = QCheckBox("Enable Center Dot")
@@ -1875,21 +2184,28 @@ class OptionsDialog(PopupDialog):
         action_bar.setSpacing(8)
 
         btn_import = QPushButton("Import Code")
-        btn_import.setStyleSheet(btn_style)
         btn_import.clicked.connect(self.on_import_crosshair_code)
         action_bar.addWidget(btn_import)
 
-        btn_export = QPushButton("Copy Code")
-        btn_export.setStyleSheet(btn_style)
+        btn_export = QPushButton("Copy In-Game Code")
         btn_export.clicked.connect(self.on_export_crosshair_code)
         action_bar.addWidget(btn_export)
 
+        action_bar.addStretch()
 
+        btn_save = QPushButton("Save to Account")
+        btn_save.setObjectName("ApplyButton")
+        btn_save.clicked.connect(self.on_save_crosshairs_to_account)
+        action_bar.addWidget(btn_save)
 
         layout.addLayout(action_bar)
 
         self.ch_bg_combo.currentIndexChanged.connect(lambda: self.ch_canvas.set_bg(self.ch_bg_combo.currentText()))
-        self.ch_zoom_combo.currentIndexChanged.connect(lambda: self.ch_canvas.set_zoom(2.0 if "2" in self.ch_zoom_combo.currentText() else 1.0))
+        self.ch_zoom_combo.currentIndexChanged.connect(lambda: self.ch_canvas.set_zoom(
+            8.0 if "8" in self.ch_zoom_combo.currentText() else
+            4.0 if "4" in self.ch_zoom_combo.currentText() else
+            2.0 if "2" in self.ch_zoom_combo.currentText() else 1.0
+        ))
 
         self.ch_updating_controls = False
         for widget in [self.ch_color_combo, self.ch_custom_hex_edit, self.ch_dot_enable_cb,
@@ -1912,6 +2228,364 @@ class OptionsDialog(PopupDialog):
         self.crosshair_profile_combo.currentIndexChanged.connect(self.on_crosshair_profile_selected)
 
         self.add_page("Crosshair", "crosshair.png", crosshair_page)
+
+    def setup_ima_menu_tab(self):
+        ima_tab = QWidget()
+        main_layout = QVBoxLayout(ima_tab)
+        main_layout.setContentsMargins(15, 15, 15, 15)
+        main_layout.setSpacing(15)
+        main_layout.setAlignment(Qt.AlignTop)
+
+        group_style = """
+            QGroupBox {
+                color: #FFFFFF; font-size: 13px; font-weight: bold;
+                border: 1px solid #c89f68; border-radius: 8px; margin-top: 10px;
+            }
+            QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; padding: 0 8px; left: 10px; color: #FFFFFF; }
+        """
+
+        path_group = QGroupBox("iMA Menu Installation")
+        path_group.setStyleSheet(group_style)
+        path_layout = QVBoxLayout(path_group)
+        path_layout.setSpacing(6)
+
+        self.options_ima_path_stack = QStackedWidget()
+
+        detected_widget = QWidget()
+        detected_layout = QVBoxLayout(detected_widget)
+        detected_layout.setContentsMargins(0, 0, 0, 0)
+        detected_layout.setSpacing(6)
+
+        path_input_layout = QHBoxLayout()
+        path_input_layout.setSpacing(8)
+
+        self.options_ima_path_edit = QLineEdit()
+        self.options_ima_path_edit.setPlaceholderText("Select iMA Menu folder or its parent directory")
+        self.options_ima_path_edit.textChanged.connect(self.update_options_ima_path_status)
+        path_input_layout.addWidget(self.options_ima_path_edit)
+
+        browse_btn = QPushButton("Browse...")
+        browse_btn.setObjectName("ApplyButton")
+        browse_btn.clicked.connect(self.browse_options_ima_path)
+        path_input_layout.addWidget(browse_btn)
+
+        detect_btn = QPushButton("Detect Active")
+        detect_btn.setToolTip("Detect active registered iMA Menu from Windows Registry")
+        detect_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4a4647; color: #e0d6d1; font-weight: bold; font-size: 11px;
+                border-radius: 6px; padding: 6px 12px; border: 1px solid #6b6365;
+            }
+            QPushButton:hover { background-color: #5a5556; border-color: #c89f68; }
+        """)
+        detect_btn.clicked.connect(self.detect_options_ima_registered_path)
+        path_input_layout.addWidget(detect_btn)
+        detected_layout.addLayout(path_input_layout)
+
+        self.options_ima_status_label = QLabel()
+        self.options_ima_status_label.setStyleSheet("font-size: 11px; font-weight: bold;")
+        detected_layout.addWidget(self.options_ima_status_label)
+
+        action_buttons_layout = QHBoxLayout()
+        action_buttons_layout.setSpacing(8)
+
+        open_folder_btn = QPushButton("Open Folder")
+        open_folder_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4a4647; color: #e0d6d1; font-weight: bold; font-size: 11px;
+                border-radius: 6px; padding: 6px 12px; border: 1px solid #6b6365;
+            }
+            QPushButton:hover { background-color: #5a5556; border-color: #c89f68; }
+        """)
+        open_folder_btn.clicked.connect(self.open_options_ima_folder)
+        action_buttons_layout.addWidget(open_folder_btn)
+
+        open_valo_btn = QPushButton("Open valo.nss")
+        open_valo_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4a4647; color: #e0d6d1; font-weight: bold; font-size: 11px;
+                border-radius: 6px; padding: 6px 12px; border: 1px solid #6b6365;
+            }
+            QPushButton:hover { background-color: #5a5556; border-color: #c89f68; }
+        """)
+        open_valo_btn.clicked.connect(self.open_options_valo_nss)
+        action_buttons_layout.addWidget(open_valo_btn)
+        action_buttons_layout.addStretch()
+        detected_layout.addLayout(action_buttons_layout)
+
+        self.options_ima_path_stack.addWidget(detected_widget)
+
+        missing_widget = QWidget()
+        missing_layout = QVBoxLayout(missing_widget)
+        missing_layout.setContentsMargins(4, 4, 4, 4)
+        missing_layout.setSpacing(6)
+
+        banner_title = QLabel("Install iMA Menu to use this feature")
+        banner_title.setStyleSheet("color: #FFFFFF; font-size: 13px; font-weight: bold;")
+        missing_layout.addWidget(banner_title)
+
+        banner_desc = QLabel("iMA Menu is a highly customizable Context menu enhancer tool with smart and beautiful features.")
+        banner_desc.setWordWrap(True)
+        banner_desc.setStyleSheet("color: #e0d6d1; font-size: 11px;")
+        missing_layout.addWidget(banner_desc)
+
+        banner_btn_layout = QHBoxLayout()
+        banner_btn_layout.setSpacing(8)
+
+        download_btn = QPushButton("Download")
+        download_btn.setObjectName("ApplyButton")
+        download_btn.clicked.connect(download_and_open_ima_menu)
+        banner_btn_layout.addWidget(download_btn)
+
+        detect_ima_btn = QPushButton("Detect iMA Menu")
+        detect_ima_btn.clicked.connect(self.detect_options_ima_registered_path)
+        banner_btn_layout.addWidget(detect_ima_btn)
+
+        locate_btn = QPushButton("Browse...")
+        locate_btn.clicked.connect(self.browse_options_ima_path)
+        banner_btn_layout.addWidget(locate_btn)
+        banner_btn_layout.addStretch()
+
+        missing_layout.addLayout(banner_btn_layout)
+
+        self.options_ima_path_stack.addWidget(missing_widget)
+
+        path_layout.addWidget(self.options_ima_path_stack)
+        main_layout.addWidget(path_group)
+
+        menu_settings_group = QGroupBox("iMA Menu Configuration")
+        menu_settings_group.setStyleSheet(group_style)
+        menu_settings_layout = QGridLayout(menu_settings_group)
+        menu_settings_layout.setSpacing(10)
+
+        menu_settings_layout.addWidget(QLabel("Menu Title:"), 0, 0)
+        self.options_ima_title_edit = QLineEdit("Valorant")
+        menu_settings_layout.addWidget(self.options_ima_title_edit, 0, 1)
+
+        menu_settings_layout.addWidget(QLabel("Menu Icon:"), 1, 0)
+        icon_input_layout = QHBoxLayout()
+        icon_input_layout.setSpacing(8)
+        self.options_ima_icon_edit = QLineEdit()
+        self.options_ima_icon_edit.setPlaceholderText("Optional menu icon path")
+        self.options_ima_icon_edit.textChanged.connect(self.update_options_ima_icon_preview)
+        
+        self.options_ima_icon_preview = QPushButton()
+        self.options_ima_icon_preview.setFixedSize(36, 36)
+        self.options_ima_icon_preview.setIconSize(QSize(24, 24))
+        self.options_ima_icon_preview.setStyleSheet("""
+            QPushButton {
+                background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px;
+            }
+            QPushButton:hover { background-color: #5a5556; border-color: #d9b68b; }
+        """)
+        self.options_ima_icon_preview.clicked.connect(self.open_options_ima_icon_picker)
+
+        browse_icon_btn = QPushButton("Browse...")
+        browse_icon_btn.setObjectName("ApplyButton")
+        browse_icon_btn.clicked.connect(self.browse_options_ima_icon)
+
+        icon_input_layout.addWidget(self.options_ima_icon_edit)
+        icon_input_layout.addWidget(self.options_ima_icon_preview)
+        icon_input_layout.addWidget(browse_icon_btn)
+        menu_settings_layout.addLayout(icon_input_layout, 1, 1)
+
+        self.options_show_rank_tips_toggle = RadioButtonGroup("On", "Off")
+        menu_settings_layout.addWidget(QLabel("Show Rank Tips:"), 2, 0)
+        menu_settings_layout.addWidget(self.options_show_rank_tips_toggle, 2, 1)
+
+        self.options_show_rr_in_tip_toggle = RadioButtonGroup("On", "Off")
+        menu_settings_layout.addWidget(QLabel("Show Current RR in Tip:"), 3, 0)
+        menu_settings_layout.addWidget(self.options_show_rr_in_tip_toggle, 3, 1)
+
+        self.options_tip_delay_slider = ValueSlider(0.0, 2.0, 0.1)
+        menu_settings_layout.addWidget(QLabel("Tip Delay (seconds):"), 4, 0)
+        menu_settings_layout.addWidget(self.options_tip_delay_slider, 4, 1)
+
+        self.options_include_app_shortcut_toggle = RadioButtonGroup("On", "Off")
+        menu_settings_layout.addWidget(QLabel("Add iMA Switcher to Menu:"), 5, 0)
+        menu_settings_layout.addWidget(self.options_include_app_shortcut_toggle, 5, 1)
+
+        self.options_show_map_planner_toggle = RadioButtonGroup("On", "Off")
+        menu_settings_layout.addWidget(QLabel("Show Map Planner in Menu:"), 6, 0)
+        menu_settings_layout.addWidget(self.options_show_map_planner_toggle, 6, 1)
+
+        export_layout = QHBoxLayout()
+        export_layout.addStretch()
+        export_ima_btn = QPushButton("Export to iMA Menu")
+        export_ima_btn.setObjectName("ApplyButton")
+        export_ima_btn.clicked.connect(self.export_ima_menu_from_tab)
+        export_layout.addWidget(export_ima_btn)
+        menu_settings_layout.addLayout(export_layout, 7, 0, 1, 2)
+
+        main_layout.addWidget(menu_settings_group)
+        main_layout.addStretch()
+
+        self.add_page("iMA Menu", "ima.png", ima_tab)
+
+    def browse_options_ima_path(self):
+        initial = self.options_ima_path_edit.text().strip()
+        chosen = QFileDialog.getExistingDirectory(self, "Select iMA Menu Folder or Parent Folder", initial)
+        if chosen:
+            resolved = self.switcher.resolve_ima_menu_folder(chosen)
+            self.options_ima_path_edit.setText(str(resolved))
+
+    def detect_options_ima_registered_path(self):
+        detected = self.switcher.get_registered_ima_shell_path() or self.switcher.find_ima_menu_path()
+        if detected:
+            self.options_ima_path_edit.setText(str(detected))
+            self.update_options_ima_path_status(str(detected))
+            self.status_label.setText(f"iMA Menu detected at: {detected}")
+        else:
+            self.update_options_ima_path_status("")
+            self.status_label.setText("iMA Menu installation could not be detected. Please install or click 'Browse...'.")
+
+    def update_options_ima_path_status(self, text=None):
+        path_val = (text if text is not None else self.options_ima_path_edit.text()).strip()
+        if not path_val:
+            self.options_ima_path_stack.setCurrentIndex(1)
+            return
+        resolved = self.switcher.resolve_ima_menu_folder(path_val)
+        is_reg, active_reg, _ = self.switcher.get_ima_menu_registration_info(resolved)
+        if not resolved or not Path(resolved).exists():
+            self.options_ima_path_stack.setCurrentIndex(1)
+        else:
+            self.options_ima_path_stack.setCurrentIndex(0)
+            if is_reg:
+                self.options_ima_status_label.setText(f"<font color='#2ecc71'>● Active & Registered in Windows Shell: {resolved}</font>")
+            elif active_reg:
+                self.options_ima_status_label.setText(f"<font color='#f39c12'>● Custom Path (Live shell registered at: {active_reg})</font>")
+            else:
+                self.options_ima_status_label.setText(f"<font color='#f39c12'>● Custom Path (Shell not registered)</font>")
+
+    def open_options_ima_folder(self):
+        path_val = self.options_ima_path_edit.text().strip()
+        resolved = self.switcher.resolve_ima_menu_folder(path_val) if path_val else self.switcher.find_ima_menu_path()
+        if resolved and Path(resolved).exists():
+            try:
+                os.startfile(str(resolved))
+            except Exception as e:
+                CustomMessageDialog.warning(self, "Error Opening Folder", f"Could not open folder:\n{e}")
+        else:
+            CustomMessageDialog.warning(self, "Folder Not Found", "The iMA Menu folder does not exist.")
+
+    def open_options_valo_nss(self):
+        path_val = self.options_ima_path_edit.text().strip()
+        resolved = self.switcher.resolve_ima_menu_folder(path_val) if path_val else self.switcher.find_ima_menu_path()
+        if resolved and Path(resolved).exists():
+            valo_path = Path(resolved) / "imports" / "valo.nss"
+            if valo_path.exists():
+                try:
+                    os.startfile(str(valo_path))
+                except Exception as e:
+                    CustomMessageDialog.warning(self, "Error Opening File", f"Could not open valo.nss:\n{e}")
+            else:
+                CustomMessageDialog.warning(self, "File Not Found", f"valo.nss was not found at:\n{valo_path}\n\nPlease click 'Export to iMA Menu' first to generate the configuration.")
+        else:
+            CustomMessageDialog.warning(self, "Folder Not Found", "Please specify or detect a valid iMA Menu folder first.")
+
+    def update_options_ima_icon_preview(self, path_text):
+        clean_path = path_text.strip()
+        if clean_path and Path(clean_path).exists():
+            self.options_ima_icon_preview.setIcon(self.switcher.get_qicon_from_path(clean_path))
+        else:
+            self.options_ima_icon_preview.setIcon(QIcon())
+
+    def browse_options_ima_icon(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Select Icon", "", "Icon Files (*.ico *.png)")
+        if path:
+            self.options_ima_icon_edit.setText(path)
+
+    def open_options_ima_icon_picker(self):
+        picker = ValorantIconPickerDialog(self, switcher_instance=self.switcher)
+        if picker.exec_() == QDialog.Accepted and picker.get_selected_icon_path():
+            self.options_ima_icon_edit.setText(picker.get_selected_icon_path())
+
+    def export_ima_menu_from_tab(self):
+        accounts_data = self.switcher.get_saved_accounts()
+        if not accounts_data:
+            CustomMessageDialog.warning(self, "No Accounts", "You must save at least one account before exporting.")
+            return
+
+        raw_path = self.options_ima_path_edit.text().strip()
+        resolved_ima_path = self.switcher.resolve_ima_menu_folder(raw_path) if raw_path else self.switcher.find_ima_menu_path()
+        if not resolved_ima_path or not Path(resolved_ima_path).exists():
+            CustomMessageDialog.warning(self, "Path Error", "Please specify or detect a valid iMA Menu folder first.")
+            return
+
+        ima_config = self.switcher.get_ima_config()
+        output_dir = resolved_ima_path / "imports"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        ui_settings = ima_config.get("ui_settings", {})
+        ui_settings["show_rank_tips"] = self.options_show_rank_tips_toggle.get_state()
+        ui_settings["show_rr_in_tip"] = self.options_show_rr_in_tip_toggle.get_state()
+        ui_settings["tip_delay"] = self.options_tip_delay_slider.value()
+        ui_settings["include_app_shortcut"] = self.options_include_app_shortcut_toggle.get_state()
+        ui_settings["show_map_planner_in_menu"] = self.options_show_map_planner_toggle.get_state()
+
+        ima_config["ima_menu_path"] = str(resolved_ima_path)
+        ima_config["output_dir"] = str(output_dir)
+        ima_config["title"] = self.options_ima_title_edit.text().strip() or "Valorant"
+        ima_config["menu_icon_path"] = self.options_ima_icon_edit.text().strip()
+        ima_config["ui_settings"] = ui_settings
+        self.switcher.set_ima_config(ima_config)
+
+        try:
+            self.switcher.generate_ima_menu_script(
+                output_dir=str(output_dir),
+                title=ima_config["title"],
+                ordered_accounts=ima_config.get("ordered_accounts", []),
+                menu_icon_path=ima_config["menu_icon_path"],
+                save_config=False
+            )
+            success, message = self.switcher.update_ima_shell_script(resolved_ima_path)
+            if success:
+                CustomMessageDialog.information(self, "Export Successful", f"Successfully exported iMA Menu configuration to:\n{output_dir / 'valo.nss'}")
+            else:
+                CustomMessageDialog.warning(self, "Shell Script Warning", message)
+        except Exception as e:
+            CustomMessageDialog.critical(self, "Export Failed", f"An error occurred: {e}")
+
+    def setup_map_planner_tab(self):
+        planner_tab = QWidget()
+        main_layout = QVBoxLayout(planner_tab)
+        main_layout.setContentsMargins(15, 15, 15, 15)
+        main_layout.setSpacing(15)
+        main_layout.setAlignment(Qt.AlignTop)
+
+        group_style = """
+            QGroupBox {
+                color: #FFFFFF; font-size: 13px; font-weight: bold;
+                border: 1px solid #c89f68; border-radius: 8px; margin-top: 10px;
+            }
+            QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; padding: 0 8px; left: 10px; color: #FFFFFF; }
+        """
+
+        launcher_group = QGroupBox("Valorant Tactical Map Planner", planner_tab)
+        launcher_group.setStyleSheet(group_style)
+        launcher_layout = QVBoxLayout(launcher_group)
+        launcher_layout.setSpacing(12)
+        launcher_layout.setContentsMargins(15, 20, 15, 15)
+
+        desc_label = QLabel("Interactive tactical planning board with agent positioning, vision cones, execute paths, smokes, pings, and strategy export.")
+        desc_label.setWordWrap(True)
+        desc_label.setStyleSheet("color: #e0d6d1; font-size: 12px;")
+        launcher_layout.addWidget(desc_label)
+
+        open_planner_btn = QPushButton("Open Map Planner")
+        open_planner_btn.setObjectName("ApplyButton")
+        open_planner_btn.clicked.connect(self.open_map_planner_dialog)
+        launcher_layout.addWidget(open_planner_btn)
+
+        main_layout.addWidget(launcher_group)
+        main_layout.addStretch()
+
+        self.add_page("Map Planner", "maps/maps planner/Bind.png", planner_tab)
+
+    def open_map_planner_dialog(self):
+        from map_planner import MapPlannerDialog
+        dialog = MapPlannerDialog(self)
+        dialog.exec_()
 
     def setup_updates_tab(self):
         updates_tab = QWidget()
@@ -2025,48 +2699,63 @@ class OptionsDialog(PopupDialog):
 
         self.ch_updating_controls = True
 
-        p_col_dict = primary.get("primaryColor")
-        if isinstance(p_col_dict, dict) and 'r' in p_col_dict:
-            r, g, b = int(p_col_dict.get('r', 255)), int(p_col_dict.get('g', 255)), int(p_col_dict.get('b', 255))
-            if r == 255 and g == 255 and b == 255: self.ch_color_combo.setCurrentIndex(0)
-            elif r == 0 and g == 255 and b == 0: self.ch_color_combo.setCurrentIndex(1)
-            elif r == 127 and g == 255 and b == 0: self.ch_color_combo.setCurrentIndex(2)
-            elif r == 190 and g == 255 and b == 0: self.ch_color_combo.setCurrentIndex(3)
-            elif r == 255 and g == 255 and b == 0: self.ch_color_combo.setCurrentIndex(4)
-            elif r == 0 and g == 255 and b == 255: self.ch_color_combo.setCurrentIndex(5)
-            elif r == 255 and g == 0 and b == 255: self.ch_color_combo.setCurrentIndex(6)
-            elif r == 255 and g == 0 and b == 0: self.ch_color_combo.setCurrentIndex(7)
-            else:
-                self.ch_color_combo.setCurrentIndex(8)
-                self.ch_custom_hex_edit.setText(f"#{r:02X}{g:02X}{b:02X}FF")
-        elif primary.get('bUseCustomColor', False):
-            self.ch_color_combo.setCurrentIndex(8)
-            custom_hex = primary.get('customColor', '#00FF88FF')
-            if isinstance(custom_hex, str): self.ch_custom_hex_edit.setText(custom_hex)
-        else:
-            color_idx = primary.get('color', 0)
-            if isinstance(color_idx, int) and 0 <= color_idx <= 7:
-                self.ch_color_combo.setCurrentIndex(color_idx)
+        col_val = primary.get("color")
+        if col_val is None:
+            col_val = primary.get("primaryColor")
+
+        if isinstance(col_val, dict):
+            r_val = col_val.get('r', col_val.get('R', None))
+            g_val = col_val.get('g', col_val.get('G', None))
+            b_val = col_val.get('b', col_val.get('B', None))
+            if r_val is not None and g_val is not None and b_val is not None:
+                r = int(round(r_val * 255)) if isinstance(r_val, float) and r_val <= 1.0 else int(r_val)
+                g = int(round(g_val * 255)) if isinstance(g_val, float) and g_val <= 1.0 else int(g_val)
+                b = int(round(b_val * 255)) if isinstance(b_val, float) and b_val <= 1.0 else int(b_val)
+                if r >= 230 and g >= 230 and b >= 230: self.ch_color_combo.setCurrentIndex(0)
+                elif r <= 40 and g >= 230 and b <= 40: self.ch_color_combo.setCurrentIndex(1)
+                elif r >= 110 and r <= 150 and g >= 230 and b <= 40: self.ch_color_combo.setCurrentIndex(2)
+                elif r >= 170 and r <= 215 and g >= 230 and b <= 40: self.ch_color_combo.setCurrentIndex(3)
+                elif r >= 230 and g >= 230 and b <= 40: self.ch_color_combo.setCurrentIndex(4)
+                elif r <= 40 and g >= 230 and b >= 230: self.ch_color_combo.setCurrentIndex(5)
+                elif r >= 230 and g <= 40 and b >= 230: self.ch_color_combo.setCurrentIndex(6)
+                elif r >= 230 and g <= 40 and b <= 40: self.ch_color_combo.setCurrentIndex(7)
+                else:
+                    self.ch_color_combo.setCurrentIndex(8)
+                    self.ch_custom_hex_edit.setText(f"#{r:02X}{g:02X}{b:02X}FF")
             else:
                 self.ch_color_combo.setCurrentIndex(0)
+        elif isinstance(col_val, int) and 0 <= col_val <= 7:
+            self.ch_color_combo.setCurrentIndex(col_val)
+        elif primary.get('bUseCustomColor', False) or 'colorCustom' in primary or 'customColor' in primary:
+            self.ch_color_combo.setCurrentIndex(8)
+            custom_dict = primary.get('colorCustom') or primary.get('customColor')
+            if isinstance(custom_dict, dict):
+                r = int(custom_dict.get('r', 255))
+                g = int(custom_dict.get('g', 255))
+                b = int(custom_dict.get('b', 255))
+                self.ch_custom_hex_edit.setText(f"#{r:02X}{g:02X}{b:02X}FF")
+            elif isinstance(custom_dict, str):
+                self.ch_custom_hex_edit.setText(custom_dict)
+        else:
+            self.ch_color_combo.setCurrentIndex(0)
 
         self.ch_dot_enable_cb.setChecked(primary.get('bDisplayCenterDot', False))
         self.ch_dot_opacity_slider.setValue(int(float(primary.get('centerDotOpacity', 1.0)) * 100))
         self.ch_dot_size_slider.setValue(int(primary.get('centerDotSize', 2)))
 
-        self.ch_outline_enable_cb.setChecked(primary.get('bOutlineEnabled', True))
+        self.ch_outline_enable_cb.setChecked(primary.get('bHasOutline', primary.get('bOutlineEnabled', True)))
         self.ch_outline_opacity_slider.setValue(int(float(primary.get('outlineOpacity', 1.0)) * 100))
         self.ch_outline_thick_slider.setValue(int(primary.get('outlineThickness', 1)))
 
-        self.ch_inner_enable_cb.setChecked(inner.get('bbDisplayInnerLines', inner.get('bDisplayInnerLines', True)))
-        self.ch_inner_opacity_slider.setValue(int(float(inner.get('lineOpacity', 1.0)) * 100))
+        self.ch_inner_enable_cb.setChecked(inner.get('bShowLines', inner.get('bbDisplayInnerLines', inner.get('bDisplayInnerLines', False))))
+        self.ch_inner_opacity_slider.setValue(int(float(inner.get('opacity', inner.get('lineOpacity', 1.0))) * 100))
         self.ch_inner_len_slider.setValue(int(inner.get('lineLength', 6)))
         self.ch_inner_thick_slider.setValue(int(inner.get('lineThickness', 2)))
         self.ch_inner_off_slider.setValue(int(inner.get('lineOffset', 3)))
         self.ch_inner_top_cb.setChecked(inner.get('bShowTopLine', True))
 
-        self.ch_outer_enable_cb.setChecked(outer.get('bbDisplayOuterLines', outer.get('bDisplayOuterLines', False)))
-        self.ch_outer_opacity_slider.setValue(int(float(outer.get('lineOpacity', 0.35)) * 100))
+        self.ch_outer_enable_cb.setChecked(outer.get('bShowLines', outer.get('bbDisplayOuterLines', outer.get('bDisplayOuterLines', False))))
+        self.ch_outer_opacity_slider.setValue(int(float(outer.get('opacity', outer.get('lineOpacity', 0.35))) * 100))
         self.ch_outer_len_slider.setValue(int(outer.get('lineLength', 2)))
         self.ch_outer_thick_slider.setValue(int(outer.get('lineThickness', 2)))
         self.ch_outer_off_slider.setValue(int(outer.get('lineOffset', 10)))
@@ -2146,6 +2835,46 @@ class OptionsDialog(PopupDialog):
         outer['bShowTopLine'] = self.ch_outer_top_cb.isChecked()
 
         self.ch_canvas.set_profile(p)
+
+    def on_crosshair_preset_selected(self, index):
+        if index <= 0:
+            return
+        preset_name = self.crosshair_preset_combo.currentText()
+        code = VALORANT_CROSSHAIR_PRESETS.get(preset_name)
+        if not code:
+            return
+        imported_profile = ValorantCrosshairCodeParser.parse_code(code)
+        if not imported_profile:
+            return
+
+        idx = self.crosshair_profile_combo.currentIndex()
+        if not hasattr(self, '_current_crosshair_data') or not self._current_crosshair_data:
+            self._current_crosshair_data = {"currentProfile": 0, "profiles": []}
+        profiles = self._current_crosshair_data.get('profiles', [])
+        if 0 <= idx < len(profiles):
+            imported_profile["profileName"] = profiles[idx].get("profileName", preset_name)
+            profiles[idx] = imported_profile
+        else:
+            imported_profile["profileName"] = preset_name
+            profiles.append(imported_profile)
+            self._current_crosshair_data['currentProfile'] = len(profiles) - 1
+
+        self.on_crosshair_profile_selected()
+        self.status_label.setText(f"Loaded preset: '{preset_name}'. Click 'Save to Account' to apply.")
+        self.crosshair_preset_combo.blockSignals(True)
+        self.crosshair_preset_combo.setCurrentIndex(0)
+        self.crosshair_preset_combo.blockSignals(False)
+
+    def on_save_crosshairs_to_account(self):
+        acc = self.crosshair_account_combo.currentText()
+        if not acc or not hasattr(self, '_current_crosshair_data') or not self._current_crosshair_data:
+            self.status_label.setText("No active crosshair profile to save.")
+            return
+        success = self.switcher.set_account_crosshairs(acc, self._current_crosshair_data)
+        if success:
+            self.status_label.setText(f"Successfully saved crosshairs to account '{acc}'.")
+        else:
+            self.status_label.setText(f"Failed to save crosshairs to account '{acc}'.")
 
     def on_import_crosshair_code(self):
         code, ok = QInputDialog.getText(self, "Import Valorant Crosshair Code", "Paste Crosshair Profile Code (e.g., 0;P;c;5;o;1;...):")
@@ -2231,6 +2960,7 @@ class OptionsDialog(PopupDialog):
             "show_current_rr": self.show_current_rr_toggle.get_state() if hasattr(self, 'show_current_rr_toggle') else True,
             "show_last_game_rr": self.show_last_game_rr_toggle.get_state() if hasattr(self, 'show_last_game_rr_toggle') else True,
             "show_last_match_info": self.show_last_match_info_toggle.get_state() if hasattr(self, 'show_last_match_info_toggle') else True,
+            "show_map_background": self.show_map_background_toggle.get_state() if hasattr(self, 'show_map_background_toggle') else False,
             "rank_check_region": self.rank_check_region_combo.currentData() if hasattr(self, 'rank_check_region_combo') else "eu",
             "auto_rank_update": self.auto_rank_update_toggle.get_state() if hasattr(self, 'auto_rank_update_toggle') else True,
             "grid_size": int(self.grid_size_combo.currentText()) if hasattr(self, 'grid_size_combo') else 4,
@@ -2242,6 +2972,13 @@ class OptionsDialog(PopupDialog):
             "sync_keybinds": self.sync_keybinds_toggle.get_state() if hasattr(self, 'sync_keybinds_toggle') else False,
         }
 
+        if hasattr(self, 'options_show_rank_tips_toggle'):
+            ui_settings_to_save["show_rank_tips"] = self.options_show_rank_tips_toggle.get_state()
+            ui_settings_to_save["show_rr_in_tip"] = self.options_show_rr_in_tip_toggle.get_state()
+            ui_settings_to_save["tip_delay"] = self.options_tip_delay_slider.value()
+            ui_settings_to_save["include_app_shortcut"] = self.options_include_app_shortcut_toggle.get_state()
+            ui_settings_to_save["show_map_planner_in_menu"] = self.options_show_map_planner_toggle.get_state()
+
         settings_to_save = {
             "display_mode": self.display_mode_combo.currentText(),
             "quality": quality_settings,
@@ -2251,7 +2988,33 @@ class OptionsDialog(PopupDialog):
         }
         self.switcher.save_graphics_settings(settings_to_save)
         success, message = self.switcher.update_all_game_user_settings(settings_to_save)
-        self.switcher.update_ima_menu_if_enabled('update', None)
+
+        if hasattr(self, 'options_ima_path_edit'):
+            raw_path = self.options_ima_path_edit.text().strip()
+            resolved_ima_path = self.switcher.resolve_ima_menu_folder(raw_path) if raw_path else self.switcher.find_ima_menu_path()
+            if resolved_ima_path:
+                ima_config = self.switcher.get_ima_config()
+                ima_config["ima_menu_path"] = str(resolved_ima_path)
+                ima_config["output_dir"] = str(resolved_ima_path / "imports")
+                ima_config["title"] = self.options_ima_title_edit.text().strip() or "Valorant"
+                ima_config["menu_icon_path"] = self.options_ima_icon_edit.text().strip()
+                ima_config["ui_settings"] = ui_settings_to_save
+                self.switcher.set_ima_config(ima_config)
+                try:
+                    output_dir = resolved_ima_path / "imports"
+                    output_dir.mkdir(parents=True, exist_ok=True)
+                    self.switcher.generate_ima_menu_script(
+                        output_dir=str(output_dir),
+                        title=ima_config["title"],
+                        ordered_accounts=ima_config.get("ordered_accounts", []),
+                        menu_icon_path=ima_config["menu_icon_path"],
+                        save_config=False
+                    )
+                    self.switcher.update_ima_shell_script(resolved_ima_path)
+                except Exception as e:
+                    logging.error(f"Error applying iMA Menu settings: {e}")
+        else:
+            self.switcher.update_ima_menu_if_enabled('update', None)
 
         if hasattr(self, 'theme_combo'):
             selected_theme = self.theme_combo.currentData()
@@ -2320,6 +3083,7 @@ class OptionsDialog(PopupDialog):
         if hasattr(self, 'show_current_rr_toggle'): self.show_current_rr_toggle.set_state(ui_settings.get("show_current_rr", True))
         if hasattr(self, 'show_last_game_rr_toggle'): self.show_last_game_rr_toggle.set_state(ui_settings.get("show_last_game_rr", True))
         if hasattr(self, 'show_last_match_info_toggle'): self.show_last_match_info_toggle.set_state(ui_settings.get("show_last_match_info", True))
+        if hasattr(self, 'show_map_background_toggle'): self.show_map_background_toggle.set_state(ui_settings.get("show_map_background", False))
         if hasattr(self, 'grid_size_combo'): self.grid_size_combo.setCurrentText(str(ui_settings.get("grid_size", 4)))
         if hasattr(self, 'theme_combo'):
             saved_theme = ui_settings.get("theme", "dark_gold")
@@ -2329,7 +3093,25 @@ class OptionsDialog(PopupDialog):
         if hasattr(self, 'show_splash_notification_toggle'): self.show_splash_notification_toggle.set_state(ui_settings.get("show_splash_notification", True))
         if hasattr(self, 'show_riot_client_toggle'): self.show_riot_client_toggle.set_state(ui_settings.get("show_riot_client", False))
         
-
+        ima_config = self.switcher.get_ima_config()
+        if hasattr(self, 'options_ima_path_edit'):
+            saved_ima_path = ima_config.get("ima_menu_path")
+            if not saved_ima_path:
+                detected_path = self.switcher.find_ima_menu_path()
+                saved_ima_path = str(detected_path) if detected_path else ""
+            self.options_ima_path_edit.setText(saved_ima_path or "")
+            self.update_options_ima_path_status(saved_ima_path)
+            self.options_ima_title_edit.setText(ima_config.get("title", "Valorant"))
+            self.options_ima_icon_edit.setText(ima_config.get("menu_icon_path", ""))
+            self.update_options_ima_icon_preview(ima_config.get("menu_icon_path", ""))
+            self.options_show_rank_tips_toggle.set_state(ui_settings.get("show_rank_tips", False))
+            self.options_show_rr_in_tip_toggle.set_state(ui_settings.get("show_rr_in_tip", False))
+            self.options_tip_delay_slider.setValue(ui_settings.get("tip_delay", 1.0))
+            if hasattr(self, 'options_include_app_shortcut_toggle'):
+                self.options_include_app_shortcut_toggle.set_state(ui_settings.get("include_app_shortcut", False))
+            if hasattr(self, 'options_show_map_planner_toggle'):
+                self.options_show_map_planner_toggle.set_state(ui_settings.get("show_map_planner_in_menu", False))
+        
         # Account tab settings
         self.auto_rank_update_toggle.set_state(ui_settings.get("auto_rank_update", True))
         saved_region = ui_settings.get("rank_check_region", "eu")
@@ -2825,34 +3607,62 @@ class RiotClientNotFoundDialog(PopupDialog):
 
 class IMAMenuPathDialog(PopupDialog):
     def __init__(self, parent=None, default_path=""):
-        super().__init__("iMA Menu Path Not Found", parent)
-        self.setFixedSize(450, 250)
+        super().__init__("iMA Menu Path", parent)
+        self.setFixedSize(520, 290)
+        self.switcher = parent.switcher if (parent and hasattr(parent, 'switcher')) else None
         
-        message_text = "Could not locate <b>shell.nss</b>.<br><br>Please select your iMA Menu installation folder (the one containing 'shell.nss' and the 'imports' folder)."
+        message_text = "Select your <b>iMA Menu</b> installation folder or its parent directory.<br><span style='font-size:11px; color:#c89f68;'>Structure: <b>iMA Menu\\imports\\valo.nss</b></span>"
         message_label = QLabel(message_text)
         message_label.setWordWrap(True)
-        message_label.setStyleSheet("color: #e0d6d1; font-size: 14px; text-align: center;")
+        message_label.setStyleSheet("color: #e0d6d1; font-size: 13px; text-align: center;")
         message_label.setAlignment(Qt.AlignCenter)
         self.content_layout.addWidget(message_label)
 
         self.path_edit = QLineEdit(default_path)
-        self.path_edit.setPlaceholderText("Path to iMA Menu folder")
+        self.path_edit.setPlaceholderText("Path to iMA Menu folder or parent directory")
         self.path_edit.setStyleSheet("background-color: #4a4647; border: 1px solid #c89f68; border-radius: 8px; padding: 8px; color: #e0d6d1;")
+        self.path_edit.textChanged.connect(self.update_status)
         self.content_layout.addWidget(self.path_edit)
 
+        self.status_label = QLabel()
+        self.status_label.setStyleSheet("font-size: 11px; font-weight: bold;")
+        self.content_layout.addWidget(self.status_label)
+
         button_layout = QHBoxLayout()
-        button_layout.setSpacing(10)
+        button_layout.setSpacing(8)
+
+        download_button = QPushButton("Download iMA Menu")
+        download_button.setStyleSheet('''
+            QPushButton {
+                background-color: #4a4647; color: #c89f68; font-weight: bold; 
+                border-radius: 8px; padding: 8px 12px; border: 1px solid #c89f68;
+            }
+            QPushButton:hover { background-color: #5a5556; color: #d9b68b; }
+        ''')
+        download_button.clicked.connect(download_and_open_ima_menu)
+        button_layout.addWidget(download_button)
         
         browse_button = QPushButton("Browse...")
         browse_button.setStyleSheet('''
             QPushButton {
                 background-color: #4f4a4b; color: #e0d6d1; font-weight: bold; 
-                border-radius: 8px; padding: 8px 15px; border: 1px solid transparent;
+                border-radius: 8px; padding: 8px 14px; border: 1px solid transparent;
             }
             QPushButton:hover { background-color: #5a5556; border: 1px solid #c89f68; }
         ''')
         browse_button.clicked.connect(self.browse)
         button_layout.addWidget(browse_button)
+
+        detect_button = QPushButton("Detect Active")
+        detect_button.setStyleSheet('''
+            QPushButton {
+                background-color: #4f4a4b; color: #e0d6d1; font-weight: bold; 
+                border-radius: 8px; padding: 8px 14px; border: 1px solid transparent;
+            }
+            QPushButton:hover { background-color: #5a5556; border: 1px solid #c89f68; }
+        ''')
+        detect_button.clicked.connect(self.detect_active)
+        button_layout.addWidget(detect_button)
         
         button_layout.addStretch()
 
@@ -2860,7 +3670,7 @@ class IMAMenuPathDialog(PopupDialog):
         ok_button.setStyleSheet('''
             QPushButton {
                 background-color: #c89f68; color: #2c2a2b; font-weight: bold; 
-                border-radius: 8px; padding: 8px 25px;
+                border-radius: 8px; padding: 8px 22px;
             }
             QPushButton:hover { background-color: #d9b68b; }
         ''')
@@ -2868,14 +3678,48 @@ class IMAMenuPathDialog(PopupDialog):
         button_layout.addWidget(ok_button)
         
         self.content_layout.addLayout(button_layout)
+        self.update_status(self.path_edit.text())
 
     def browse(self):
-        path = QFileDialog.getExistingDirectory(self, "Select iMA Menu Folder", self.path_edit.text())
-        if path:
-            self.path_edit.setText(str(Path(path)))
+        initial = self.path_edit.text()
+        chosen = QFileDialog.getExistingDirectory(self, "Select iMA Menu Folder or Parent Folder", initial)
+        if chosen:
+            resolved = self.switcher.resolve_ima_menu_folder(chosen) if self.switcher else Path(chosen)
+            self.path_edit.setText(str(resolved))
+
+    def detect_active(self):
+        if self.switcher:
+            detected = self.switcher.get_registered_ima_shell_path() or self.switcher.find_ima_menu_path()
+            if detected:
+                self.path_edit.setText(str(detected))
+
+    def update_status(self, text=None):
+        path_val = (text if text is not None else self.path_edit.text()).strip()
+        if not path_val:
+            self.status_label.setText("<font color='#e74c3c'>● No path specified</font>")
+            return
+        if self.switcher:
+            resolved = self.switcher.resolve_ima_menu_folder(path_val)
+            is_reg, active_reg, _ = self.switcher.get_ima_menu_registration_info(resolved)
+            if not resolved or not Path(resolved).exists():
+                self.status_label.setText(f"<font color='#e74c3c'>● Folder does not exist: {path_val}</font>")
+            elif is_reg:
+                self.status_label.setText(f"<font color='#2ecc71'>● Active & Registered: {resolved}</font>")
+            elif active_reg:
+                self.status_label.setText(f"<font color='#f39c12'>● Custom (Live shell: {active_reg})</font>")
+            else:
+                self.status_label.setText(f"<font color='#f39c12'>● Custom Folder</font>")
+        else:
+            if Path(path_val).exists():
+                self.status_label.setText("<font color='#2ecc71'>● Folder exists</font>")
+            else:
+                self.status_label.setText("<font color='#e74c3c'>● Folder does not exist</font>")
 
     def get_path(self):
-        return self.path_edit.text()
+        raw = self.path_edit.text().strip()
+        if self.switcher and raw:
+            return str(self.switcher.resolve_ima_menu_folder(raw))
+        return raw
 
 class ConfirmDeleteDialog(PopupDialog):
     def __init__(self, account_name, parent=None, title="Confirm Delete", message=None):
@@ -3084,7 +3928,7 @@ class AccountWidget(QWidget):
                 last_map, last_agent = self.switcher.get_account_last_match_info(self.account_name)
                 if last_map or last_agent:
                     match_parts = []
-                    if last_map: match_parts.append(f"📍 {last_map}")
+                    if last_map: match_parts.append(last_map)
                     if last_agent:
                         agent_icon = get_agent_icon_html(last_agent, self.switcher.base_dir, width=16, height=16)
                         match_parts.append(f"{agent_icon}{last_agent}")
@@ -3111,27 +3955,306 @@ class AccountWidget(QWidget):
         path.addEllipse(0, 0, size, size)
         painter.setClipPath(path)
 
-        source_pixmap = icon.pixmap(icon.actualSize(QSize(256, 256)))
-        scaled_pixmap = source_pixmap.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-
-        x = (size - scaled_pixmap.width()) / 2
-        y = (size - scaled_pixmap.height()) / 2
-        painter.drawPixmap(int(x), int(y), scaled_pixmap)
+        if icon and not icon.isNull():
+            source_pixmap = icon.pixmap(icon.actualSize(QSize(256, 256)))
+            scaled_pixmap = source_pixmap.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            x = (size - scaled_pixmap.width()) / 2
+            y = (size - scaled_pixmap.height()) / 2
+            painter.drawPixmap(int(x), int(y), scaled_pixmap)
+        else:
+            default_icon_path = get_asset_path("valorant.png")
+            if os.path.exists(default_icon_path):
+                def_pix = QPixmap(default_icon_path).scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                painter.drawPixmap(0, 0, def_pix)
+            else:
+                painter.fillRect(0, 0, size, size, QColor("#242933"))
         painter.end()
         
         self.icon_label.setPixmap(circular_pixmap)
 
+    def _get_rank_border_color(self):
+        if not self.rank:
+            return None
+        base_rank = self.rank.split()[0] if self.rank else "Unranked"
+        rank_hex_colors = {
+            "Iron": "#5a5959",
+            "Bronze": "#a5855c",
+            "Silver": "#bcc5cb",
+            "Gold": "#ecce6e",
+            "Platinum": "#3ab5c2",
+            "Diamond": "#b584e0",
+            "Ascendant": "#2e9e6b",
+            "Immortal": "#c44b5c",
+            "Radiant": "#fffaa8",
+            "Unranked": "#4f555a"
+        }
+        return rank_hex_colors.get(base_rank)
+
+    def _get_map_background_pixmap(self, map_name, target_size):
+        if not map_name:
+            return None
+        cache_key = (map_name.lower(), target_size.width(), target_size.height())
+        if hasattr(self, '_map_pixmap_cache') and cache_key in self._map_pixmap_cache:
+            return self._map_pixmap_cache[cache_key]
+
+        map_filename = map_name.lower().replace(" ", "").replace("'", "") + ".png"
+        map_path = None
+        if hasattr(self, 'switcher') and self.switcher:
+            possible_path = Path(self.switcher.base_dir) / "maps" / map_filename
+            if possible_path.exists():
+                map_path = possible_path
+
+        if not map_path:
+            local_maps_dir = Path(__file__).parent / "maps"
+            possible_path = local_maps_dir / map_filename
+            if possible_path.exists():
+                map_path = possible_path
+
+        if not map_path or not map_path.exists():
+            return None
+
+        src = QImage(str(map_path))
+        if src.isNull():
+            return None
+
+        scaled = src.scaled(target_size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+        rect = QRect((scaled.width() - target_size.width()) // 2, (scaled.height() - target_size.height()) // 2, target_size.width(), target_size.height())
+        cropped = scaled.copy(rect)
+
+        sharp_pixmap = QPixmap.fromImage(cropped)
+
+        # Generate a slightly blurred version (blur radius 4) for element shaped backdrops
+        scene = QGraphicsScene()
+        item = QGraphicsPixmapItem(sharp_pixmap)
+        blur = QGraphicsBlurEffect()
+        blur.setBlurRadius(4)
+        item.setGraphicsEffect(blur)
+        scene.addItem(item)
+
+        blurred_image = QImage(target_size, QImage.Format_ARGB32_Premultiplied)
+        blurred_image.fill(Qt.transparent)
+        ptr = QPainter(blurred_image)
+        scene.render(ptr)
+        ptr.end()
+
+        darkener = QPainter(blurred_image)
+        darkener.setCompositionMode(QPainter.CompositionMode_SourceAtop)
+        darkener.fillRect(blurred_image.rect(), QColor(0, 0, 0, 110))
+        darkener.end()
+
+        blurred_pixmap = QPixmap.fromImage(blurred_image)
+
+        if not hasattr(self, '_map_pixmap_cache'):
+            self._map_pixmap_cache = {}
+        self._map_pixmap_cache[cache_key] = (sharp_pixmap, blurred_pixmap)
+        return sharp_pixmap, blurred_pixmap
+
+    def _get_banner_background_pixmap(self, banner_url, target_size, zoom=1.0, offset_x=0.0, offset_y=0.0, blur_radius=4.0):
+        cache_key = f"banner_{banner_url}_{target_size.width()}x{target_size.height()}_z{zoom:.2f}_ox{offset_x:.1f}_oy{offset_y:.1f}_b{blur_radius:.1f}"
+        if hasattr(self, '_map_pixmap_cache') and cache_key in self._map_pixmap_cache:
+            return self._map_pixmap_cache[cache_key]
+
+        pixmap = QPixmap()
+        if os.path.exists(str(banner_url)):
+            pixmap.load(str(banner_url))
+        elif str(banner_url).startswith("http"):
+            cache_dir = Path(self.switcher.base_dir) / "Assets" / "cache"
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            cached_file = cache_dir / f"banner_{abs(hash(banner_url))}.png"
+            if cached_file.exists():
+                pixmap.load(str(cached_file))
+            else:
+                try:
+                    import urllib.request
+                    urllib.request.urlretrieve(banner_url, str(cached_file))
+                    pixmap.load(str(cached_file))
+                except Exception:
+                    pass
+
+        if pixmap.isNull():
+            return None
+
+        scaled_w = max(10, int(target_size.width() * zoom))
+        scaled_h = max(10, int(target_size.height() * zoom))
+        scaled_pixmap = pixmap.scaled(scaled_w, scaled_h, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+
+        base_x = (scaled_pixmap.width() - target_size.width()) // 2
+        base_y = (scaled_pixmap.height() - target_size.height()) // 2
+        crop_x = max(0, min(scaled_pixmap.width() - target_size.width(), int(base_x - offset_x)))
+        crop_y = max(0, min(scaled_pixmap.height() - target_size.height(), int(base_y - offset_y)))
+
+        sharp_pixmap = scaled_pixmap.copy(crop_x, crop_y, target_size.width(), target_size.height())
+
+        scene = QGraphicsScene()
+        item = QGraphicsPixmapItem(sharp_pixmap)
+        blur = QGraphicsBlurEffect()
+        blur.setBlurRadius(max(0.1, float(blur_radius)))
+        item.setGraphicsEffect(blur)
+        scene.addItem(item)
+
+        blurred_image = QImage(target_size, QImage.Format_ARGB32_Premultiplied)
+        blurred_image.fill(Qt.transparent)
+        ptr = QPainter(blurred_image)
+        scene.render(ptr)
+        ptr.end()
+
+        darkener = QPainter(blurred_image)
+        darkener.setCompositionMode(QPainter.CompositionMode_SourceAtop)
+        darkener.fillRect(blurred_image.rect(), QColor(0, 0, 0, 110))
+        darkener.end()
+
+        blurred_pixmap = QPixmap.fromImage(blurred_image)
+        if not hasattr(self, '_map_pixmap_cache'):
+            self._map_pixmap_cache = {}
+        self._map_pixmap_cache[cache_key] = (sharp_pixmap, blurred_pixmap)
+        return sharp_pixmap, blurred_pixmap
+
     def paintEvent(self, event):
         painter = QPainter(self)
-        opt = QStyleOption()
-        opt.initFrom(self)
-        self.style().drawPrimitive(QStyle.PE_Widget, opt, painter, self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        rect = self.rect()
+        border_radius = 20
+
+        if self.is_add_button:
+            opt = QStyleOption()
+            opt.initFrom(self)
+            self.style().drawPrimitive(QStyle.PE_Widget, opt, painter, self)
+            return
+
+        ui_settings = self.switcher.get_ima_config().get("ui_settings", {}) if (hasattr(self, 'switcher') and self.switcher) else {}
+        show_map_bg = ui_settings.get("show_map_background", False)
+        
+        cfg = self.switcher._load_game_config(self.account_name) if (hasattr(self, 'switcher') and self.switcher) else {}
+        use_banner_bg = cfg.get("use_banner_background", False)
+
+        map_data = None
+        if use_banner_bg and hasattr(self, 'switcher') and self.switcher:
+            banner_url = cfg.get("banner_card_url") or cfg.get("card_icon")
+            if not banner_url:
+                history = cfg.get("match_history", [])
+                if history and isinstance(history, list) and len(history) > 0:
+                    for p in history[0].get("players", []):
+                        if p.get("name", "").lower() == self.account_name.lower() or (self.in_game_name and p.get("name", "").lower() == self.in_game_name.lower()):
+                            banner_url = p.get("card_icon")
+                            break
+            if not banner_url and (self.in_game_name and self.in_game_tag):
+                if not getattr(self, '_banner_fetch_in_progress', False):
+                    self._banner_fetch_in_progress = True
+                    threading.Thread(target=self._auto_fetch_account_banner, daemon=True).start()
+
+            if banner_url:
+                b_zoom = float(cfg.get("banner_zoom", 1.0))
+                b_ox = float(cfg.get("banner_offset_x", 0.0))
+                b_oy = float(cfg.get("banner_offset_y", 0.0))
+                b_blur = float(cfg.get("banner_blur", 4.0))
+                map_data = self._get_banner_background_pixmap(
+                    banner_url, rect.size(), zoom=b_zoom, offset_x=b_ox, offset_y=b_oy, blur_radius=b_blur
+                )
+
+        if not map_data and show_map_bg and hasattr(self, 'switcher') and self.switcher:
+            last_map, _ = self.switcher.get_account_last_match_info(self.account_name)
+            if last_map:
+                map_data = self._get_map_background_pixmap(last_map, rect.size())
+
+        clip_path = QPainterPath()
+        clip_path.addRoundedRect(QRectF(rect), border_radius, border_radius)
+
+        painter.save()
+        painter.setClipPath(clip_path)
+
+        if map_data:
+            sharp_pixmap, blurred_pixmap = map_data
+            # If banner blur > 0 or map background, render blurred/darkened backdrop on entire card
+            if use_banner_bg:
+                b_blur = float(cfg.get("banner_blur", 4.0)) if cfg else 4.0
+                if b_blur > 0.1:
+                    painter.drawPixmap(rect, blurred_pixmap)
+                else:
+                    painter.drawPixmap(rect, sharp_pixmap)
+            else:
+                painter.drawPixmap(rect, sharp_pixmap)
+
+            # Build clip path matching text pill and circular avatar shapes for frosted contrast
+            element_clip_path = QPainterPath()
+
+            # 1. Circular avatar blur shape behind profile icon
+            if hasattr(self, 'icon_label') and self.icon_label.isVisible():
+                icon_rect = self.icon_label.geometry()
+                element_clip_path.addEllipse(QRectF(icon_rect).adjusted(-4, -4, 4, 4))
+
+            # 2. Rank icon circular shape if visible
+            if hasattr(self, 'rank_icon_label') and self.rank_icon_label.isVisible():
+                rank_rect = self.rank_icon_label.geometry()
+                element_clip_path.addEllipse(QRectF(rank_rect).adjusted(-3, -3, 3, 3))
+
+            # 3. Game icon circular shape if visible
+            if hasattr(self, 'game_icon_label') and self.game_icon_label.isVisible():
+                game_rect = self.game_icon_label.geometry()
+                element_clip_path.addEllipse(QRectF(game_rect).adjusted(-3, -3, 3, 3))
+
+            # 4. Text labels: Pill-shaped backdrops closely surrounding each visible text label
+            text_labels = [
+                getattr(self, 'current_rr_label', None),
+                getattr(self, 'name_label', None),
+                getattr(self, 'in_game_name_tag_label', None),
+                getattr(self, 'last_game_rr_label', None),
+                getattr(self, 'last_match_label', None)
+            ]
+            for label in text_labels:
+                if label and label.isVisible() and label.text().strip():
+                    lbl_rect = label.geometry()
+                    r_val = min(lbl_rect.width(), lbl_rect.height()) / 2.0
+                    element_clip_path.addRoundedRect(QRectF(lbl_rect).adjusted(-6, -2, 6, 2), r_val, r_val)
+
+            # Draw frosted element contrast backing
+            painter.save()
+            painter.setClipPath(element_clip_path, Qt.IntersectClip)
+            painter.fillRect(rect, QColor(0, 0, 0, 90))
+            painter.restore()
+
+        else:
+            opt = QStyleOption()
+            opt.initFrom(self)
+            self.style().drawPrimitive(QStyle.PE_Widget, opt, painter, self)
+
+        painter.restore()
+
+        # Border drawing: match rank color if present, fallback to theme accent
+        rank_color_hex = self._get_rank_border_color()
+        if not rank_color_hex:
+            theme_dict = get_theme()
+            rank_color_hex = theme_dict.get("accent", "#c89f68")
+
+        glow_color = QColor(rank_color_hex)
+        
+        # Draw outer soft multi-pass rank glow rings
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing)
+        for idx, (alpha, width_add) in enumerate([(40, 4.0), (25, 6.0), (12, 8.5)]):
+            glow_pen = QPen(QColor(glow_color.red(), glow_color.green(), glow_color.blue(), alpha), width_add)
+            painter.setPen(glow_pen)
+            painter.setBrush(Qt.NoBrush)
+            inset = width_add / 2.0
+            glow_rect = QRectF(rect).adjusted(inset, inset, -inset, -inset)
+            painter.drawRoundedRect(glow_rect, border_radius - inset, border_radius - inset)
+        painter.restore()
+
+        # Draw main crisp frame border
+        pen_width = 3.5 if self.is_selected else 2.0
+        border_pen = QPen(glow_color, pen_width)
+        painter.setPen(border_pen)
+        painter.setBrush(Qt.NoBrush)
+        inset = pen_width / 2.0
+        border_rect = QRectF(rect).adjusted(inset, inset, -inset, -inset)
+        painter.drawRoundedRect(border_rect, border_radius - inset, border_radius - inset)
 
     def set_selected(self, selected):
         self.is_selected = selected
         self.setProperty("selected", "true" if selected else "false")
         self.style().unpolish(self)
         self.style().polish(self)
+        self.update()
 
     def set_show_game_icon(self, show):
         if hasattr(self, 'game_icon_label'):
@@ -3163,6 +4286,9 @@ class AccountWidget(QWidget):
             self.setFixedSize(160, target_height)
             if self.parentWidget() and hasattr(self.parentWidget(), 'update_window_size'):
                 self.parentWidget().update_window_size()
+
+    def set_show_map_background(self, show):
+        self.update()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -3211,6 +4337,7 @@ class AccountWidget(QWidget):
             self.set_show_name_tag(ui_settings.get("show_name_tag", True))
             self.set_show_current_rr(ui_settings.get("show_current_rr", True))
             self.set_show_last_game_rr(ui_settings.get("show_last_game_rr", True))
+            self.set_show_map_background(ui_settings.get("show_map_background", False))
 
         if self.current_rr is not None:
             self.current_rr_label.setText(str(self.current_rr))
@@ -3233,6 +4360,521 @@ class AccountWidget(QWidget):
             self.rank_icon_label.clear() # Clear if no rank
 
         self.update()
+
+    def _auto_fetch_account_banner(self):
+        try:
+            if hasattr(self, 'switcher') and self.switcher:
+                self.switcher._get_or_fetch_account_puuid(self.account_name, self.in_game_name, self.in_game_tag)
+                if hasattr(self, '_map_pixmap_cache'):
+                    self._map_pixmap_cache.clear()
+                QTimer.singleShot(0, self.update)
+        except Exception:
+            pass
+        finally:
+            self._banner_fetch_in_progress = False
+
+
+class ProfileIconHoverWidget(QWidget):
+    iconRemoved = pyqtSignal()
+    iconClicked = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(70, 70)
+        self.icon_pixmap = None
+        self.setCursor(Qt.PointingHandCursor)
+
+        self.trash_btn = QPushButton("✕", self)
+        self.trash_btn.setFixedSize(22, 22)
+        self.trash_btn.move(44, 4)
+        self.trash_btn.setCursor(Qt.PointingHandCursor)
+        self.trash_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #ef4444;
+                color: #ffffff;
+                border-radius: 11px;
+                font-size: 11px;
+                font-weight: bold;
+                border: 1.5px solid #ffffff;
+            }
+            QPushButton:hover {
+                background-color: #dc2626;
+            }
+        """)
+        self.trash_btn.clicked.connect(self.iconRemoved.emit)
+        self.trash_btn.hide()
+
+    def set_pixmap(self, pixmap):
+        self.icon_pixmap = pixmap
+        self.update()
+
+    def enterEvent(self, event):
+        if self.icon_pixmap and not self.icon_pixmap.isNull():
+            self.trash_btn.show()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.trash_btn.hide()
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and not self.trash_btn.geometry().contains(event.pos()):
+            self.iconClicked.emit()
+        super().mousePressEvent(event)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        path = QPainterPath()
+        path.addEllipse(2, 2, 66, 66)
+        painter.setClipPath(path)
+
+        painter.fillRect(2, 2, 66, 66, QColor("#1a1e24"))
+        if self.icon_pixmap and not self.icon_pixmap.isNull():
+            painter.drawPixmap(2, 2, 66, 66, self.icon_pixmap)
+        else:
+            painter.setPen(QColor("#8fa7bb"))
+            painter.setFont(QFont("Segoe UI", 9, QFont.Bold))
+            painter.drawText(self.rect(), Qt.AlignCenter, "No Icon")
+
+        painter.setClipping(False)
+        painter.setPen(QPen(QColor("#3b4252"), 2))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawEllipse(2, 2, 66, 66)
+
+
+class BannerCustomizerDialog(PopupDialog):
+    def __init__(self, account_name, switcher_instance, config_data, parent=None):
+        super().__init__(f"Banner Customizer - {account_name}", parent)
+        self.account_name = account_name
+        self.switcher = switcher_instance
+        self.config_data = config_data
+        self.setFixedSize(480, 440)
+
+        self.zoom = float(self.config_data.get("banner_zoom", 1.0))
+        self.offset_x = float(self.config_data.get("banner_offset_x", 0.0))
+        self.offset_y = float(self.config_data.get("banner_offset_y", 0.0))
+        self.blur = float(self.config_data.get("banner_blur", 4.0))
+
+        self.last_mouse_pos = None
+        self.is_dragging = False
+
+        self.init_customizer_ui()
+
+    def init_customizer_ui(self):
+        self.content_layout.setSpacing(8)
+        self.content_layout.setContentsMargins(16, 4, 16, 12)
+
+        hint_lbl = QLabel("Drag on preview card to pan banner • Scroll mouse wheel to zoom in/out")
+        hint_lbl.setStyleSheet("color: #8fa7bb; font-size: 11px;")
+        hint_lbl.setAlignment(Qt.AlignCenter)
+        self.content_layout.addWidget(hint_lbl)
+
+        # Host the real AccountWidget in an interactive preview box
+        self.preview_box = QWidget()
+        self.preview_box.setFixedHeight(190)
+        self.preview_box.setCursor(Qt.SizeAllCursor)
+        box_layout = QHBoxLayout(self.preview_box)
+        box_layout.setContentsMargins(0, 0, 0, 0)
+        box_layout.setAlignment(Qt.AlignCenter)
+
+        icon_path, game, rank, in_game_name, in_game_tag, current_rr, last_game_rr = self.switcher.get_saved_accounts().get(
+            self.account_name, (None, None, None, None, None, None, None)
+        )
+        icon = self.switcher.get_qicon_from_path(icon_path) if icon_path else None
+
+        self.card_preview = AccountWidget(
+            self.account_name, icon, game, rank, in_game_name, in_game_tag, current_rr, last_game_rr,
+            parent=self.preview_box, switcher_instance=self.switcher
+        )
+        self.card_preview.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+        box_layout.addWidget(self.card_preview)
+        self.content_layout.addWidget(self.preview_box)
+
+        # Mouse and Wheel events on preview box & card
+        self.preview_box.mousePressEvent = self.on_mouse_press
+        self.preview_box.mouseMoveEvent = self.on_mouse_move
+        self.preview_box.mouseReleaseEvent = self.on_mouse_release
+        self.preview_box.wheelEvent = self.on_wheel
+
+        self.card_preview.mousePressEvent = self.on_mouse_press
+        self.card_preview.mouseMoveEvent = self.on_mouse_move
+        self.card_preview.mouseReleaseEvent = self.on_mouse_release
+        self.card_preview.wheelEvent = self.on_wheel
+
+        # Controls Section
+        ctrl_box = QGroupBox("Banner Adjustments")
+        ctrl_layout = QFormLayout(ctrl_box)
+        ctrl_layout.setSpacing(8)
+        ctrl_layout.setContentsMargins(12, 10, 12, 10)
+
+        self.blur_slider = ValueSlider(0, 20, step=0.5)
+        self.blur_slider.setValue(self.blur)
+        self.blur_slider.valueChanged.connect(self.on_blur_changed)
+        ctrl_layout.addRow(QLabel("Backdrop Blur:"), self.blur_slider)
+
+        self.zoom_lbl = QLabel(f"{self.zoom:.2f}x")
+        self.zoom_lbl.setStyleSheet("color: #20e693; font-weight: bold;")
+        zoom_row = QHBoxLayout()
+        zoom_row.addWidget(self.zoom_lbl)
+        zoom_row.addStretch()
+
+        reset_btn = QPushButton("Reset Position & Zoom")
+        reset_btn.clicked.connect(self.reset_adjustments)
+        zoom_row.addWidget(reset_btn)
+        ctrl_layout.addRow(QLabel("Zoom Scale:"), zoom_row)
+
+        self.content_layout.addWidget(ctrl_box)
+
+        # Actions
+        actions_layout = QHBoxLayout()
+        actions_layout.setSpacing(10)
+        actions_layout.addStretch()
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        actions_layout.addWidget(cancel_btn)
+
+        save_btn = QPushButton("Save & Apply")
+        save_btn.setObjectName("ApplyButton")
+        save_btn.clicked.connect(self.on_save)
+        actions_layout.addWidget(save_btn)
+
+        self.content_layout.addLayout(actions_layout)
+
+    def on_mouse_press(self, event):
+        if event.button() == Qt.LeftButton:
+            self.is_dragging = True
+            self.last_mouse_pos = event.pos()
+
+    def on_mouse_move(self, event):
+        if self.is_dragging and self.last_mouse_pos:
+            delta = event.pos() - self.last_mouse_pos
+            self.offset_x += delta.x()
+            self.offset_y += delta.y()
+            self.last_mouse_pos = event.pos()
+            self.refresh_preview()
+
+    def on_mouse_release(self, event):
+        self.is_dragging = False
+
+    def on_wheel(self, event):
+        delta = event.angleDelta().y()
+        zoom_factor = 1.08 if delta > 0 else 0.92
+        self.zoom = max(0.5, min(3.5, self.zoom * zoom_factor))
+        self.zoom_lbl.setText(f"{self.zoom:.2f}x")
+        self.refresh_preview()
+
+    def on_blur_changed(self, val):
+        self.blur = float(val)
+        self.refresh_preview()
+
+    def reset_adjustments(self):
+        self.zoom = 1.0
+        self.offset_x = 0.0
+        self.offset_y = 0.0
+        self.blur = 4.0
+        self.blur_slider.setValue(4.0)
+        self.zoom_lbl.setText("1.00x")
+        self.refresh_preview()
+
+    def refresh_preview(self):
+        self.config_data["banner_zoom"] = self.zoom
+        self.config_data["banner_offset_x"] = self.offset_x
+        self.config_data["banner_offset_y"] = self.offset_y
+        self.config_data["banner_blur"] = self.blur
+        if hasattr(self.card_preview, '_map_pixmap_cache'):
+            self.card_preview._map_pixmap_cache.clear()
+        self.card_preview.update()
+
+    def on_save(self):
+        self.refresh_preview()
+        self.accept()
+
+
+class CustomizeAccountDialog(PopupDialog):
+    def __init__(self, account_name, switcher_instance, parent=None):
+        super().__init__(f"Customize Account - {account_name}", parent)
+        self.account_name = account_name
+        self.switcher = switcher_instance
+        self.setFixedSize(740, 560)
+
+        current_icon_path, game, rank, ign, tag, current_rr, last_game_rr = self.switcher.get_saved_accounts().get(
+            account_name, (None, None, None, None, None, None, None)
+        )
+        self.selected_icon_path = current_icon_path
+        self.config_data = self.switcher._load_game_config(account_name)
+
+        self.content_layout.setSpacing(10)
+        self.content_layout.setContentsMargins(16, 8, 16, 14)
+
+        # Main 2-Column Container
+        columns_layout = QHBoxLayout()
+        columns_layout.setSpacing(14)
+
+        # ------------------ LEFT COLUMN (Details & Card Banner) ------------------
+        left_widget = QWidget()
+        left_widget.setFixedWidth(320)
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(10)
+
+        # 1. Identity Box
+        identity_box = QGroupBox("Account Details & Riot ID")
+        identity_layout = QFormLayout(identity_box)
+        identity_layout.setSpacing(8)
+        identity_layout.setLabelAlignment(Qt.AlignLeft)
+
+        self.name_edit = QLineEdit(account_name)
+        self.name_edit.setPlaceholderText("Profile Name")
+        identity_layout.addRow(QLabel("Profile Name:"), self.name_edit)
+
+        ign_row = QHBoxLayout()
+        ign_row.setSpacing(6)
+        self.ign_edit = QLineEdit(ign or "")
+        self.ign_edit.setPlaceholderText("In-Game Name")
+        self.tag_edit = QLineEdit(tag or "")
+        self.tag_edit.setPlaceholderText("Tag")
+        self.tag_edit.setFixedWidth(80)
+        ign_row.addWidget(self.ign_edit, 1)
+        ign_row.addWidget(QLabel("#"))
+        ign_row.addWidget(self.tag_edit)
+        identity_layout.addRow(QLabel("In-Game Name:"), ign_row)
+
+        self.puuid_edit = QLineEdit(str(self.config_data.get("puuid") or ""))
+        self.puuid_edit.setPlaceholderText("Auto-detected via API or enter PUUID")
+        identity_layout.addRow(QLabel("Riot PUUID:"), self.puuid_edit)
+
+        left_layout.addWidget(identity_box)
+
+        # 2. Card Appearance Box
+        appearance_box = QGroupBox("Card Background")
+        appearance_layout = QVBoxLayout(appearance_box)
+        appearance_layout.setSpacing(8)
+
+        toggle_row = QHBoxLayout()
+        toggle_row.addWidget(QLabel("Use Banner:"))
+        toggle_row.addStretch()
+
+        self.banner_toggle = RadioButtonGroup("On", "Off")
+        is_banner_on = self.config_data.get("use_banner_background", False)
+        self.banner_toggle.set_state(is_banner_on)
+        self.banner_toggle.stateChanged.connect(self.on_banner_toggle_changed)
+        toggle_row.addWidget(self.banner_toggle)
+        appearance_layout.addLayout(toggle_row)
+
+        # Centered Interactive Card Preview
+        card_preview_container = QWidget()
+        card_preview_layout = QHBoxLayout(card_preview_container)
+        card_preview_layout.setContentsMargins(0, 2, 0, 2)
+        card_preview_layout.setAlignment(Qt.AlignCenter)
+
+        icon = self.switcher.get_qicon_from_path(current_icon_path) if current_icon_path else None
+        self.card_preview = AccountWidget(
+            account_name, icon, game, rank, ign, tag, current_rr, last_game_rr,
+            parent=card_preview_container, switcher_instance=self.switcher
+        )
+        self.card_preview.setCursor(Qt.PointingHandCursor)
+        self.card_preview.setToolTip("Click card to customize banner zoom, pan & blur")
+        self.card_preview.mousePressEvent = lambda e: self.open_banner_customizer() if e.button() == Qt.LeftButton else None
+        card_preview_layout.addWidget(self.card_preview)
+        appearance_layout.addWidget(card_preview_container)
+
+        left_layout.addWidget(appearance_box)
+        columns_layout.addWidget(left_widget)
+
+        # ------------------ RIGHT COLUMN (Profile Icon Picker) ------------------
+        icon_box = QGroupBox("Profile Icon")
+        icon_layout = QVBoxLayout(icon_box)
+        icon_layout.setSpacing(8)
+
+        preview_row = QHBoxLayout()
+        preview_row.setSpacing(12)
+
+        self.icon_hover_widget = ProfileIconHoverWidget()
+        self.icon_hover_widget.iconRemoved.connect(self.remove_icon)
+        self.icon_hover_widget.iconClicked.connect(self.select_custom_icon)
+        preview_row.addWidget(self.icon_hover_widget)
+
+        icon_desc_box = QVBoxLayout()
+        icon_desc_box.setSpacing(4)
+        lbl_info = QLabel("<b>Profile Icon</b>")
+        lbl_sub = QLabel("Upload custom file or pick an icon below. Hover to remove.")
+        lbl_sub.setStyleSheet("color: #8fa7bb; font-size: 11px;")
+        lbl_sub.setWordWrap(True)
+        upload_btn = QPushButton("Upload Custom Image...")
+        upload_btn.clicked.connect(self.select_custom_icon)
+        icon_desc_box.addWidget(lbl_info)
+        icon_desc_box.addWidget(lbl_sub)
+        icon_desc_box.addWidget(upload_btn)
+        preview_row.addLayout(icon_desc_box)
+        preview_row.addStretch()
+
+        icon_layout.addLayout(preview_row)
+
+        self.icon_search = QLineEdit()
+        self.icon_search.setPlaceholderText("Search agent or icon...")
+        self.icon_search.textChanged.connect(self.filter_icons)
+        icon_layout.addWidget(self.icon_search)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        
+        self.grid_widget = QWidget()
+        self.grid_layout = QGridLayout(self.grid_widget)
+        self.grid_layout.setSpacing(6)
+        self.grid_layout.setContentsMargins(4, 4, 4, 4)
+        scroll.setWidget(self.grid_widget)
+        icon_layout.addWidget(scroll, 1)
+
+        columns_layout.addWidget(icon_box, 1)
+        self.content_layout.addLayout(columns_layout)
+
+        # ------------------ BOTTOM ACTIONS BAR ------------------
+        action_layout = QHBoxLayout()
+        action_layout.setSpacing(10)
+        action_layout.addStretch()
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        action_layout.addWidget(cancel_btn)
+
+        save_btn = QPushButton("Save Changes")
+        save_btn.setObjectName("ApplyButton")
+        save_btn.clicked.connect(self.on_save)
+        action_layout.addWidget(save_btn)
+
+        self.content_layout.addLayout(action_layout)
+
+        self.all_icon_buttons = []
+        self.update_preview()
+        QTimer.singleShot(20, self.populate_icons)
+
+    def on_banner_toggle_changed(self, is_on):
+        self.config_data["use_banner_background"] = is_on
+        if hasattr(self.card_preview, '_map_pixmap_cache'):
+            self.card_preview._map_pixmap_cache.clear()
+        self.card_preview.update()
+
+    def open_banner_customizer(self):
+        dlg = BannerCustomizerDialog(self.account_name, self.switcher, self.config_data, parent=self)
+        if dlg.exec_() == QDialog.Accepted:
+            if hasattr(self.card_preview, '_map_pixmap_cache'):
+                self.card_preview._map_pixmap_cache.clear()
+            self.card_preview.update()
+
+    def select_custom_icon(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Select Icon Image", "", "Images (*.png *.jpg *.jpeg *.ico *.webp *.bmp)"
+        )
+        if file_path:
+            self.selected_icon_path = file_path
+            self.update_preview()
+
+    def remove_icon(self):
+        self.selected_icon_path = None
+        self.update_preview()
+
+    def set_selected_icon(self, icon_path):
+        self.selected_icon_path = icon_path
+        self.update_preview()
+
+    def update_preview(self):
+        if self.selected_icon_path and os.path.exists(str(self.selected_icon_path)):
+            icon = self.switcher.get_qicon_from_path(self.selected_icon_path)
+            pixmap = icon.pixmap(64, 64)
+            self.icon_hover_widget.set_pixmap(pixmap)
+            self.card_preview.set_icon(icon, 70)
+        else:
+            self.icon_hover_widget.set_pixmap(None)
+            self.card_preview.set_icon(None, 70)
+
+    def populate_icons(self):
+        agents_path = Path(self.switcher.base_dir) / "Agents"
+        if not agents_path.exists():
+            agents_path = Path(self.switcher.base_dir) / "icons"
+        valorant_icons_path = Path(self.switcher.base_dir) / "Assets" / "valorant"
+
+        icon_files = []
+        if agents_path.exists():
+            icon_files.extend(get_icon_paths_from_folder(str(agents_path)))
+        if valorant_icons_path.exists():
+            icon_files.extend(get_icon_paths_from_folder(str(valorant_icons_path)))
+
+        self.all_icon_buttons = []
+        for i, icon_path in enumerate(icon_files):
+            name = Path(icon_path).stem
+            btn = QPushButton()
+            btn.setFixedSize(52, 52)
+            btn.setToolTip(name)
+            icon = self.switcher.get_qicon_from_path(icon_path)
+            pix = icon.pixmap(44, 44)
+            circ = QPixmap(44, 44)
+            circ.fill(Qt.transparent)
+            p = QPainter(circ)
+            p.setRenderHint(QPainter.Antialiasing)
+            path = QPainterPath()
+            path.addEllipse(0, 0, 44, 44)
+            p.setClipPath(path)
+            p.drawPixmap(0, 0, pix)
+            p.end()
+            btn.setIcon(QIcon(circ))
+            btn.setIconSize(QSize(44, 44))
+            btn.clicked.connect(lambda _, ip=icon_path: self.set_selected_icon(ip))
+            self.all_icon_buttons.append((name.lower(), btn, icon_path))
+            self.grid_layout.addWidget(btn, i // 5, i % 5)
+
+    def filter_icons(self, text):
+        query = text.strip().lower()
+        visible_idx = 0
+        for name, btn, ip in self.all_icon_buttons:
+            match = not query or query in name
+            btn.setVisible(match)
+            if match:
+                self.grid_layout.removeWidget(btn)
+                self.grid_layout.addWidget(btn, visible_idx // 5, visible_idx % 5)
+                visible_idx += 1
+
+    def on_save(self):
+        new_name = self.name_edit.text().strip()
+        new_ign = self.ign_edit.text().strip() or None
+        new_tag = self.tag_edit.text().strip() or None
+        new_puuid = self.puuid_edit.text().strip()
+        use_banner = self.banner_toggle.get_state()
+
+        if not new_name:
+            CustomMessageDialog.warning(self, "Invalid Name", "Account name cannot be empty.")
+            return
+
+        if new_name != self.account_name and new_name in self.switcher.get_saved_accounts():
+            CustomMessageDialog.warning(self, "Account Exists", f'An account named "{new_name}" already exists.')
+            return
+
+        final_name = self.account_name
+        if new_name != self.account_name:
+            if self.switcher.rename_account(self.account_name, new_name):
+                final_name = new_name
+            else:
+                CustomMessageDialog.critical(self, "Rename Error", "Failed to rename account directory.")
+                return
+
+        self.switcher.set_account_in_game_name_tag(final_name, new_ign, new_tag)
+
+        cfg = self.switcher._load_game_config(final_name)
+        if new_puuid:
+            cfg["puuid"] = new_puuid
+        cfg["use_banner_background"] = use_banner
+        self.switcher._save_game_config(final_name, cfg)
+
+        if self.selected_icon_path:
+            self.switcher.set_account_icon(final_name, Path(self.selected_icon_path))
+        else:
+            self.switcher.remove_account_icon(final_name)
+
+        self.accept()
+
 
 class HoverButton(QPushButton):
     def __init__(self, *args, **kwargs):
@@ -3733,8 +5375,8 @@ class AccountHistoryDialog(PopupDialog):
         self.in_game_name = in_game_name
         self.switcher = switcher_instance
         self.worker = None
-        self.sort_mode = "score"
-        self.setFixedSize(780, 600)
+        self.sort_mode = "acs"
+        self.setFixedSize(880, 620)
 
         # Inherit theme colors dynamically
         t = get_theme()
@@ -4210,11 +5852,8 @@ class AccountHistoryDialog(PopupDialog):
         match = self.current_detail_match
         players = list(match.get("players", []))
 
-        # Sort players based on selected column (Item 5)
-        if self.sort_mode == "acs":
+        if self.sort_mode == "acs" or self.sort_mode == "score":
             players.sort(key=lambda p: p.get("acs", p.get("score", 0)), reverse=True)
-        elif self.sort_mode == "kd":
-            players.sort(key=lambda p: float(p.get("kd", 0)), reverse=True)
         elif self.sort_mode == "kda":
             players.sort(key=lambda p: (p.get("kills", 0) + p.get("assists", 0)) / max(1, p.get("deaths", 0)), reverse=True)
         elif self.sort_mode == "econ":
@@ -4232,88 +5871,145 @@ class AccountHistoryDialog(PopupDialog):
         t = get_theme()
         box = QWidget()
         box.setObjectName("TeamScoreboardBox")
-        box.setStyleSheet(f"""
-            #TeamScoreboardBox {{
-                background-color: {t['bg_card']};
-                border-radius: 10px;
-                border: 1px solid {t['border']};
-            }}
-            #TeamScoreboardBox QLabel {{
+        box.setStyleSheet("""
+            #TeamScoreboardBox {
+                background-color: #0e1722;
+                border-radius: 8px;
+                border: 1px solid #1f3347;
+            }
+            #TeamScoreboardBox QLabel {
                 border: none;
                 background: transparent;
-            }}
+            }
         """)
         layout = QVBoxLayout(box)
-        layout.setContentsMargins(10, 8, 10, 8)
-        layout.setSpacing(6)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(4)
 
-        # Header Row with Interactive Clickable Sort Headers (Item 5)
+        # Header Row
         header_row = QWidget()
         header_row.setObjectName("TeamHeaderRow")
-        header_row.setStyleSheet(f"""
-            #TeamHeaderRow {{
-                background-color: {t['bg_tertiary']};
-                border-radius: 6px;
+        header_row.setStyleSheet("""
+            #TeamHeaderRow {
+                background-color: #162838;
+                border-radius: 4px;
                 border: none;
-            }}
-            #TeamHeaderRow QLabel {{
-                color: {t['text_muted']};
+            }
+            #TeamHeaderRow QLabel {
+                color: #8fa7bb;
                 font-size: 11px;
-                font-weight: bold;
+                font-weight: 800;
                 border: none;
                 background: transparent;
-            }}
-            #TeamHeaderRow QLabel:hover {{
-                color: {t['accent']};
-            }}
+                padding: 6px 4px;
+            }
+            #TeamHeaderRow QLabel:hover {
+                color: #ffffff;
+            }
         """)
         h_layout = QHBoxLayout(header_row)
-        h_layout.setContentsMargins(8, 6, 8, 6)
+        h_layout.setContentsMargins(8, 0, 8, 0)
+        h_layout.setSpacing(4)
 
-        lbl_player = QLabel("PLAYER")
+        lbl_player = QLabel("INDIVIDUALLY SORTED")
+        lbl_player.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+
         lbl_acs = QLabel("AVG COMBAT SCORE")
+        lbl_acs.setAlignment(Qt.AlignCenter)
+
         lbl_kda = QLabel("KDA")
-        lbl_kd = QLabel("K/D")
-        lbl_mvp = QLabel("AWARD / MVP")
+        lbl_kda.setAlignment(Qt.AlignCenter)
+
+        lbl_econ = QLabel("ECON RATING")
+        lbl_econ.setAlignment(Qt.AlignCenter)
+
+        lbl_fb = QLabel("FIRST BLOODS")
+        lbl_fb.setAlignment(Qt.AlignCenter)
+
+        lbl_plants = QLabel("PLANTS")
+        lbl_plants.setAlignment(Qt.AlignCenter)
+
+        lbl_defuses = QLabel("DEFUSES")
+        lbl_defuses.setAlignment(Qt.AlignCenter)
+
+        # Highlight currently active sort column
+        active_sort_style = "background-color: #244563; color: #ffffff; border-radius: 3px;"
+        if self.sort_mode in ("acs", "score"):
+            lbl_acs.setStyleSheet(active_sort_style)
+        elif self.sort_mode == "kda":
+            lbl_kda.setStyleSheet(active_sort_style)
+        elif self.sort_mode == "econ":
+            lbl_econ.setStyleSheet(active_sort_style)
+        elif self.sort_mode == "fb":
+            lbl_fb.setStyleSheet(active_sort_style)
+        elif self.sort_mode == "plants":
+            lbl_plants.setStyleSheet(active_sort_style)
+        elif self.sort_mode == "defuses":
+            lbl_defuses.setStyleSheet(active_sort_style)
 
         for lbl, mode in [
-            (lbl_acs, "acs"), (lbl_kda, "kda"), (lbl_kd, "kd")
+            (lbl_acs, "acs"), (lbl_kda, "kda"), (lbl_econ, "econ"),
+            (lbl_fb, "fb"), (lbl_plants, "plants"), (lbl_defuses, "defuses")
         ]:
             lbl.setCursor(Qt.PointingHandCursor)
             lbl.mousePressEvent = lambda _, m=mode: self._set_sort_mode(m)
 
-        h_layout.addWidget(lbl_player, 4)
+        h_layout.addWidget(lbl_player, 5)
         h_layout.addWidget(lbl_acs, 2)
         h_layout.addWidget(lbl_kda, 2)
-        h_layout.addWidget(lbl_kd, 2)
-        h_layout.addWidget(lbl_mvp, 2)
+        h_layout.addWidget(lbl_econ, 2)
+        h_layout.addWidget(lbl_fb, 2)
+        h_layout.addWidget(lbl_plants, 2)
+        h_layout.addWidget(lbl_defuses, 2)
 
         layout.addWidget(header_row)
 
-        # Identify my team color for team-color container coding
+        # Identify friendly team and party stacks
         my_team = "blue"
+        party_counts = {}
         for p in players_list:
             p_name = p.get("name", "")
             if self.in_game_name and p_name.lower() == self.in_game_name.lower():
                 my_team = p.get("team", "blue").lower()
-                break
+            pid = str(p.get("party_id") or "").strip()
+            if pid:
+                party_counts[pid] = party_counts.get(pid, 0) + 1
+
+        party_palette = ["#38bdf8", "#fbbf24", "#a855f7", "#ec4899", "#34d399", "#f97316"]
+        party_color_map = {}
+        party_badge_map = {}
+        party_idx = 0
+        for pid, cnt in party_counts.items():
+            if cnt >= 2:
+                party_color_map[pid] = party_palette[party_idx % len(party_palette)]
+                party_badge_map[pid] = f"P{party_idx + 1}"
+                party_idx += 1
 
         for p in players_list:
             p_name = p.get("name", "Player")
             p_tag = p.get("tag", "")
-            full_tag = f"{p_name}#{p_tag}" if p_tag else p_name
-            is_me = (self.in_game_name and p_name.lower() == self.in_game_name.lower())
+            full_tag = f"{p_name} <font color='#a0b2c2' size='2'>#{p_tag}</font>" if p_tag else p_name
+            
+            is_me = False
+            if self.in_game_name and p_name.lower() == self.in_game_name.lower():
+                is_me = True
+            elif p_name.lower() == self.account_name.lower():
+                is_me = True
+
             p_team = p.get("team", "red").lower()
+            is_match_mvp = p.get("is_match_mvp", False)
+            is_team_mvp = p.get("is_team_mvp", False)
+            p_party = str(p.get("party_id") or "").strip()
 
             if is_me:
-                row_bg = "rgba(200, 159, 104, 0.3)"
-                row_border = f"1.5px solid {t['accent']}"
+                row_bg = "rgba(140, 112, 54, 0.90)"
+                row_border = "1.5px solid #d4af37"
             elif p_team == my_team:
-                row_bg = "rgba(0, 150, 136, 0.3)"
-                row_border = "1px solid rgba(0, 150, 136, 0.6)"
+                row_bg = "rgba(14, 110, 98, 0.88)"
+                row_border = "1px solid rgba(0, 200, 160, 0.35)"
             else:
-                row_bg = "rgba(180, 40, 60, 0.3)"
-                row_border = "1px solid rgba(180, 40, 60, 0.6)"
+                row_bg = "rgba(128, 34, 48, 0.88)"
+                row_border = "1px solid rgba(220, 50, 70, 0.35)"
 
             row = QWidget()
             row.setObjectName("PlayerRow")
@@ -4324,19 +6020,26 @@ class AccountHistoryDialog(PopupDialog):
                     border-radius: 6px;
                 }}
                 #PlayerRow:hover {{
-                    border: 1.5px solid {t['accent']};
-                    background-color: rgba(255, 255, 255, 0.08);
+                    border: 1.5px solid #ffffff;
                 }}
             """)
 
             r_layout = QHBoxLayout(row)
-            r_layout.setContentsMargins(8, 6, 8, 6)
+            r_layout.setContentsMargins(6, 4, 8, 4)
+            r_layout.setSpacing(4)
 
-            # 1. Player column: Large Agent Icon (36x36) + Rank Tier Icon (20x20) + Name
+            # 1. Player column: Party Badge (if queued in stack) + Agent Icon + Name + MVP Badge
             player_cell = QWidget()
             pc_layout = QHBoxLayout(player_cell)
             pc_layout.setContentsMargins(0, 0, 0, 0)
             pc_layout.setSpacing(6)
+
+            if p_party in party_color_map:
+                p_color = party_color_map[p_party]
+                p_badge = QLabel(party_badge_map[p_party])
+                p_badge.setStyleSheet(f"font-size: 9px; font-weight: 900; color: #111111; background-color: {p_color}; border-radius: 3px; padding: 2px 4px;")
+                p_badge.setToolTip(f"Queued in Party Stack ({party_badge_map[p_party]})")
+                pc_layout.addWidget(p_badge)
 
             p_agent_name = p.get('character', 'Agent')
             agent_icon_path = get_asset_path(f"{p_agent_name}.png")
@@ -4345,67 +6048,87 @@ class AccountHistoryDialog(PopupDialog):
 
             agent_lbl = QLabel()
             agent_lbl.setFixedSize(36, 36)
+            agent_lbl.setStyleSheet("border-radius: 3px; background: transparent;")
             if os.path.exists(agent_icon_path):
                 agent_lbl.setPixmap(QPixmap(agent_icon_path).scaled(36, 36, Qt.KeepAspectRatio, Qt.SmoothTransformation))
             else:
                 agent_lbl.setText("⚔️")
             pc_layout.addWidget(agent_lbl)
 
-            rank_text = p.get("rank", "Unranked")
-            rank_icon_path = get_asset_path(f"{rank_text.lower().replace(' ', '_')}.png")
-            if os.path.exists(rank_icon_path):
-                rank_lbl = QLabel()
-                rank_lbl.setPixmap(QPixmap(rank_icon_path).scaled(20, 20, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-                pc_layout.addWidget(rank_lbl)
+            name_box = QWidget()
+            name_box_layout = QHBoxLayout(name_box)
+            name_box_layout.setContentsMargins(0, 0, 0, 0)
+            name_box_layout.setSpacing(6)
 
             name_lbl = QLabel(f"<b>{full_tag}</b>")
-            name_lbl.setStyleSheet(f"font-size: 13px; color: {t['text_primary']};")
-            pc_layout.addWidget(name_lbl)
-            pc_layout.addStretch()
+            name_lbl.setStyleSheet("font-size: 13px; color: #ffffff;")
+            name_box_layout.addWidget(name_lbl)
 
-            r_layout.addWidget(player_cell, 4)
+            if is_match_mvp:
+                mvp_lbl = QLabel("MATCH MVP")
+                mvp_lbl.setStyleSheet("font-size: 11px; font-weight: 900; color: #ffd700; background: transparent; letter-spacing: 0.5px;")
+                shadow = QGraphicsDropShadowEffect(mvp_lbl)
+                shadow.setBlurRadius(8)
+                shadow.setColor(QColor(0, 0, 0, 220))
+                shadow.setOffset(0, 1)
+                mvp_lbl.setGraphicsEffect(shadow)
+                name_box_layout.addWidget(mvp_lbl)
+            elif is_team_mvp:
+                mvp_lbl = QLabel("TEAM MVP")
+                mvp_lbl.setStyleSheet("font-size: 11px; font-weight: 900; color: #ffffff; background: transparent; letter-spacing: 0.5px;")
+                shadow = QGraphicsDropShadowEffect(mvp_lbl)
+                shadow.setBlurRadius(8)
+                shadow.setColor(QColor(0, 0, 0, 220))
+                shadow.setOffset(0, 1)
+                mvp_lbl.setGraphicsEffect(shadow)
+                name_box_layout.addWidget(mvp_lbl)
+
+            name_box_layout.addStretch()
+            pc_layout.addWidget(name_box)
+
+            r_layout.addWidget(player_cell, 5)
 
             # 2. AVG COMBAT SCORE
             acs_val = p.get("acs", 0)
             r_acs = QLabel(str(acs_val))
+            r_acs.setAlignment(Qt.AlignCenter)
             r_acs.setStyleSheet("font-size: 13px; font-weight: bold; color: #ffffff;")
             r_layout.addWidget(r_acs, 2)
 
             # 3. KDA
             k, d, a = p.get("kills", 0), p.get("deaths", 0), p.get("assists", 0)
-            r_kda = QLabel(f"{k} / {d} / {a}")
-            r_kda.setStyleSheet("font-size: 12px; color: #e0d6d1;")
+            r_kda = QLabel(f"{k} <font color='#888888'>/</font> {d} <font color='#888888'>/</font> {a}")
+            r_kda.setAlignment(Qt.AlignCenter)
+            r_kda.setStyleSheet("font-size: 12px; font-weight: 600; color: #e0d6d1;")
             r_layout.addWidget(r_kda, 2)
 
-            # 4. K/D Ratio
-            kd_val = float(p.get("kd", 0))
-            kd_color = t['accent'] if kd_val >= 1.0 else t['danger']
-            r_kd = QLabel(str(p.get("kd", "0.00")))
-            r_kd.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {kd_color};")
-            r_layout.addWidget(r_kd, 2)
+            # 4. ECON RATING
+            econ_val = p.get("econ_rating", 0)
+            r_econ = QLabel(str(econ_val))
+            r_econ.setAlignment(Qt.AlignCenter)
+            r_econ.setStyleSheet("font-size: 12px; font-weight: 600; color: #e0d6d1;")
+            r_layout.addWidget(r_econ, 2)
 
-            # 5. Dedicated AWARD / MVP Column (Clean text-only with shadow, matching history list view)
-            r_mvp = QLabel("")
-            if p.get("is_match_mvp"):
-                r_mvp.setText("MATCH MVP")
-                r_mvp.setStyleSheet("font-size: 11px; font-weight: 900; color: #ffd700; background: transparent; letter-spacing: 0.5px;")
-                shadow = QGraphicsDropShadowEffect(r_mvp)
-                shadow.setBlurRadius(8)
-                shadow.setColor(QColor(0, 0, 0, 220))
-                shadow.setOffset(0, 1)
-                r_mvp.setGraphicsEffect(shadow)
-            elif p.get("is_team_mvp"):
-                r_mvp.setText("TEAM MVP")
-                r_mvp.setStyleSheet("font-size: 11px; font-weight: 900; color: #ffffff; background: transparent; letter-spacing: 0.5px;")
-                shadow = QGraphicsDropShadowEffect(r_mvp)
-                shadow.setBlurRadius(8)
-                shadow.setColor(QColor(0, 0, 0, 220))
-                shadow.setOffset(0, 1)
-                r_mvp.setGraphicsEffect(shadow)
-            else:
-                r_mvp.setStyleSheet("font-size: 11px; color: transparent; background: transparent;")
-            
-            r_layout.addWidget(r_mvp, 2)
+            # 5. FIRST BLOODS
+            fb_val = p.get("first_bloods", 0)
+            r_fb = QLabel(str(fb_val))
+            r_fb.setAlignment(Qt.AlignCenter)
+            r_fb.setStyleSheet("font-size: 12px; font-weight: 600; color: #e0d6d1;")
+            r_layout.addWidget(r_fb, 2)
+
+            # 6. PLANTS
+            plants_val = p.get("plants", 0)
+            r_plants = QLabel(str(plants_val))
+            r_plants.setAlignment(Qt.AlignCenter)
+            r_plants.setStyleSheet("font-size: 12px; font-weight: 600; color: #e0d6d1;")
+            r_layout.addWidget(r_plants, 2)
+
+            # 7. DEFUSES
+            defuses_val = p.get("defuses", 0)
+            r_defuses = QLabel(str(defuses_val))
+            r_defuses.setAlignment(Qt.AlignCenter)
+            r_defuses.setStyleSheet("font-size: 12px; font-weight: 600; color: #e0d6d1;")
+            r_layout.addWidget(r_defuses, 2)
 
             layout.addWidget(row)
 

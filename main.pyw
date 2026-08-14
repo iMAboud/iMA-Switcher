@@ -386,6 +386,7 @@ class ModernValorantSwitcher(QMainWindow):
             widget.set_show_current_rr(ui_settings.get("show_current_rr", True))
             widget.set_show_last_game_rr(ui_settings.get("show_last_game_rr", True))
             widget.set_show_last_match_info(ui_settings.get("show_last_match_info", True))
+            widget.set_show_map_background(ui_settings.get("show_map_background", False))
             self.account_widgets[name] = widget
 
         self.rearrange_grid()
@@ -487,17 +488,20 @@ class ModernValorantSwitcher(QMainWindow):
             self.move(screen.availableGeometry().center() - self.frameGeometry().center())
 
     def closeEvent(self, event):
-        # Ensure the iMA menu script is updated with current settings on close
         ima_config = self.switcher.get_ima_config()
-        if ima_config.get("output_dir"):
+        ima_menu_path = self.switcher.find_ima_menu_path(saved_path=ima_config.get("ima_menu_path"))
+        if ima_menu_path:
+            output_dir = ima_menu_path / "imports"
+            output_dir.mkdir(parents=True, exist_ok=True)
             try:
                 self.switcher.generate_ima_menu_script(
-                    output_dir=ima_config["output_dir"],
-                    title=ima_config["title"],
-                    ordered_accounts=ima_config["ordered_accounts"],
+                    output_dir=str(output_dir),
+                    title=ima_config.get("title", "Valorant"),
+                    ordered_accounts=ima_config.get("ordered_accounts", []),
                     menu_icon_path=ima_config.get("menu_icon_path", ""),
-                    save_config=False  # Already saved by OptionsDialog or other actions
+                    save_config=False
                 )
+                self.switcher.update_ima_shell_script(ima_menu_path)
                 logging.info("iMA menu script updated on application close.")
             except Exception as e:
                 logging.error(f"Error updating iMA menu script on close: {e}")
@@ -609,12 +613,10 @@ class ModernValorantSwitcher(QMainWindow):
         menu = self._create_styled_menu()
         actions = {
             "Switch Account": (self.switch_to_selected_account, "Switch.png"),
+            "Customize": (self.context_handler.customize_account, "Settings.png"),
             "History": (self.context_handler.show_history, "history.png"),
-            "Rename": (self.context_handler.rename, "Rename.png"),
-            "Change Icon": (self.context_handler.change_icon, "Change.png"),
+            "Create Desktop Shortcut": (self.context_handler.create_shortcut, "Create.png"),
         }
-
-        actions["Create Desktop Shortcut"] = (self.context_handler.create_shortcut, "Create.png")
         
         set_rank_menu = self._create_styled_menu("Set Rank")
         set_rank_menu.setIcon(self.switcher.get_qicon_from_path(str(Path(__file__).parent / "Assets" / "radiant.png")))
@@ -793,6 +795,9 @@ def main():
     
     if "--update" in sys.argv or (len(sys.argv) > 1 and sys.argv[1] == "--update"):
         run_update_installer()
+    elif "--map-planner" in sys.argv or (len(sys.argv) > 1 and sys.argv[1] == "--map-planner"):
+        from map_planner import launch_standalone_map_planner
+        launch_standalone_map_planner()
     elif "Installer" in current_exe_name: 
         run_installer()
     elif len(sys.argv) > 2 and sys.argv[1] == "--switch":

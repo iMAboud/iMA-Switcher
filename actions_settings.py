@@ -9,6 +9,7 @@ from ui_components import (
     BackupRestoreSelectionDialog, IMAMenuPathDialog, UpdateDialog
 )
 import tempfile
+import copy
 import importlib
 from pathlib import Path
 
@@ -76,7 +77,7 @@ class SettingsActions:
                 return
             if name in self.switcher.get_saved_accounts():
                 logging.warning(f"Attempted to save account '{name}', but an account with that name already exists.")
-                QMessageBox.warning(self.parent, "Account Exists", f'An account named "{name}" already exists. Please choose a different name.')
+                CustomMessageDialog.warning(self.parent, "Account Exists", f'An account named "{name}" already exists. Please choose a different name.')
                 return
             self.switcher.save_account(name, game, in_game_name=in_game_name, in_game_tag=in_game_tag, puuid=puuid)
             self.parent.status_label.setText(f"Account '{name}' saved for {game.capitalize()}. ")
@@ -136,7 +137,7 @@ class SettingsActions:
         else:
             self.parent.status_label.setText("Google Drive backup failed.")
             logging.error(f"Google Drive backup failed: {result}")
-            QMessageBox.critical(self.parent, "Google Drive Error", f"Error: {result}")
+            CustomMessageDialog.critical(self.parent, "Google Drive Error", f"Error: {result}")
         
         if hasattr(self, 'backup_worker') and self.backup_worker.temp_file_path:
             if Path(self.backup_worker.temp_file_path).exists():
@@ -179,11 +180,11 @@ class SettingsActions:
                 self.parent.status_label.setText("Ready.")
             else:
                 self.parent.status_label.setText("Ready.")
-                QMessageBox.warning(self.parent, "No Backup Found", "No backup file found on your Google Drive.")
+                CustomMessageDialog.warning(self.parent, "No Backup Found", "No backup file found on your Google Drive.")
         else:
             self.parent.status_label.setText("Google Drive restore failed.")
             logging.error(f"Google Drive restore failed: {error_msg_or_path}")
-            QMessageBox.critical(self.parent, "Google Drive Error", f"Error: {error_msg_or_path}")
+            CustomMessageDialog.critical(self.parent, "Google Drive Error", f"Error: {error_msg_or_path}")
 
     def _confirm_and_restore(self, path, modified_time=None):
         message = "Are you sure you want to overwrite\ncurrent settings?"
@@ -211,9 +212,6 @@ class SettingsActions:
 
     def export_ima_menu(self):
         accounts_data = self.switcher.get_saved_accounts()
-        if not accounts_data:
-            QMessageBox.warning(self.parent, "No Accounts", "You must save at least one account before exporting.")
-            return
 
         ima_config = self.switcher.get_ima_config()
         saved_path = ima_config.get("ima_menu_path")
@@ -228,67 +226,76 @@ class SettingsActions:
             if default_icon_path.exists():
                 ima_config["menu_icon_path"] = str(default_icon_path)
 
-        dialog = ExportIMAMenuDialog(accounts_data, self.parent, default_settings=ima_config)
+        dialog_settings = copy.deepcopy(ima_config)
+        dialog_settings["ima_menu_path"] = str(ima_menu_path) if ima_menu_path else ""
+
+        dialog = ExportIMAMenuDialog(accounts_data, self.parent, default_settings=dialog_settings)
         if dialog.exec_() != QDialog.Accepted:
             return
 
         settings = dialog.get_settings()
+        selected_path_str = settings.get("ima_menu_path", "").strip()
 
-        if not ima_menu_path:
+        if selected_path_str:
+            ima_menu_path = self.switcher.resolve_ima_menu_folder(selected_path_str)
+        elif not ima_menu_path:
             default_prompt_path = saved_path or r"C:\Program Files\iMA Menu"
             path_dialog = IMAMenuPathDialog(self.parent, default_path=default_prompt_path)
             if path_dialog.exec_() == QDialog.Accepted:
                 new_path_str = path_dialog.get_path()
-                if not new_path_str or not (Path(new_path_str) / "shell.nss").exists():
-                    QMessageBox.critical(self.parent, "Path Error", "The selected path is invalid or does not contain shell.nss.")
-                    return
-                ima_menu_path = Path(new_path_str)
+                ima_menu_path = self.switcher.resolve_ima_menu_folder(new_path_str)
             else:
                 return
+
+        if not ima_menu_path:
+            CustomMessageDialog.critical(self.parent, "Path Error", "Could not locate a valid iMA Menu folder.")
+            return
+
+        output_dir = ima_menu_path / "imports"
+        output_dir.mkdir(parents=True, exist_ok=True)
 
         ui_settings = ima_config.get("ui_settings", {})
         ui_settings["show_rank_tips"] = settings.get("show_rank_tips", False)
         ui_settings["show_rr_in_tip"] = settings.get("show_rr_in_tip", False)
         ui_settings["tip_delay"] = settings.get("tip_delay", 1.0)
+        if "include_app_shortcut" in settings:
+            ui_settings["include_app_shortcut"] = settings["include_app_shortcut"]
+        if "show_map_planner_in_menu" in settings:
+            ui_settings["show_map_planner_in_menu"] = settings["show_map_planner_in_menu"]
 
-        # All checks passed, now save all settings together
         self.switcher.set_ima_config({
             "title": settings["title"],
             "menu_icon_path": settings["menu_icon_path"],
             "ordered_accounts": settings["ordered_accounts"],
-            "ima_menu_path": str(ima_menu_path), # Save the validated path
+            "ima_menu_path": str(ima_menu_path),
+            "output_dir": str(output_dir),
             "ui_settings": ui_settings
         })
 
-        output_dir = ima_menu_path / "imports"
-        output_dir.mkdir(exist_ok=True)
-
         try:
-            # Generate the valo.nss script
             self.switcher.generate_ima_menu_script(
                 output_dir=str(output_dir), 
                 title=settings["title"], 
                 ordered_accounts=settings["ordered_accounts"], 
                 menu_icon_path=settings["menu_icon_path"], 
-                save_config=False # Config is already saved
+                save_config=False
             )
             
-            # Update the shell.nss script
             success, message = self.switcher.update_ima_shell_script(ima_menu_path)
             if not success:
-                QMessageBox.warning(self.parent, "Shell Script Warning", message)
+                CustomMessageDialog.warning(self.parent, "Shell Script Warning", message)
 
-            self.parent.load_accounts() # Refresh accounts in UI after export
+            self.parent.load_accounts()
             self.parent.status_label.setText("Accounts added to iMA Menu.")
             QTimer.singleShot(3000, lambda: self.parent.status_label.setText("Ready."))
             logging.info(f"Successfully exported iMA Menu script to {output_dir}")
 
         except (IOError, OSError) as e:
             logging.error(f"An error occurred during iMA Menu export: {e}")
-            QMessageBox.critical(self.parent, "Export Failed", f"An error occurred during export: {e}")
+            CustomMessageDialog.critical(self.parent, "Export Failed", f"An error occurred during export: {e}")
         except Exception as e:
             logging.error(f"An unexpected error occurred during iMA Menu export: {e}")
-            QMessageBox.critical(self.parent, "Export Failed", f"An unexpected error occurred: {e}")
+            CustomMessageDialog.critical(self.parent, "Export Failed", f"An unexpected error occurred: {e}")
 
     def open_options_dialog(self):
         self.options_dialog = OptionsDialog(self.switcher, self.parent)

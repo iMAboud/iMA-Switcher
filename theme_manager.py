@@ -127,15 +127,15 @@ THEMES = {
     "teal_gradient": {
         "name": "Teal Gradient",
         "bg_main": "qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #162F36, stop:0.5 #182039, stop:1 #115A5E)",
-        "bg_secondary": "rgba(22, 47, 54, 0.70)",
-        "bg_tertiary": "rgba(24, 32, 57, 0.85)",
-        "bg_input": "rgba(17, 90, 94, 0.40)",
-        "bg_card": "rgba(22, 47, 54, 0.65)",
-        "bg_card_hover": "rgba(17, 90, 94, 0.55)",
+        "bg_secondary": "rgba(22, 47, 54, 0.96)",
+        "bg_tertiary": "rgba(24, 32, 57, 0.95)",
+        "bg_input": "rgba(17, 90, 94, 0.60)",
+        "bg_card": "rgba(22, 47, 54, 0.92)",
+        "bg_card_hover": "rgba(17, 90, 94, 0.85)",
         "accent": "#20e693",
         "accent_hover": "#34d399",
         "accent_pressed": "#059669",
-        "border": "rgba(17, 90, 94, 0.60)",
+        "border": "rgba(17, 90, 94, 0.80)",
         "border_focus": "#20e693",
         "text_primary": "#FFFFFF",
         "text_secondary": "#e2e8f0",
@@ -262,10 +262,9 @@ def generate_global_qss(theme_key=None):
             color: {t['text_secondary']};
             font-size: 11px;
             font-weight: bold;
-            background-color: {t['bg_tertiary']};
-            border-radius: 12px;
-            padding: 4px 10px;
-            border: 1px solid {t['border']};
+            background: transparent;
+            border: none;
+            padding: 0px;
         }}
 
         /* General Labels */
@@ -515,19 +514,24 @@ def generate_global_qss(theme_key=None):
             border: 1px solid {t['border']}; 
             border-radius: 14px; 
             padding: 6px; 
+            font-size: 13px;
+            font-weight: 600;
         }} 
         QMenu::item {{ 
-            padding: 8px 24px 8px 12px; 
+            padding: 7px 18px 7px 8px; 
             border-radius: 8px; 
             margin: 2px 4px; 
             color: {t['text_secondary']};
+            font-size: 13px;
+            font-weight: 600;
         }} 
         QMenu::item:selected {{ 
             background-color: {t['accent']}; 
             color: {t['text_on_accent']}; 
+            font-weight: bold;
         }}
         QMenu::icon {{ 
-            padding-left: 14px; 
+            padding-left: 10px; 
         }}
 
         /* Match History Dialog Components */
