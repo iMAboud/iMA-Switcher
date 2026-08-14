@@ -2346,11 +2346,16 @@ class GameSwitcher:
             if saved:
                 _, _, _, in_game_name, in_game_tag, _, _ = saved
 
-        if not in_game_name or not in_game_tag:
+        if not in_game_name and not in_game_tag and not puuid:
             return puuid
 
         try:
-            url = f"https://api.henrikdev.xyz/valorant/v1/account/{in_game_name}/{in_game_tag}"
+            if in_game_name and in_game_tag:
+                url = f"https://api.henrikdev.xyz/valorant/v1/account/{in_game_name}/{in_game_tag}"
+            elif puuid:
+                url = f"https://api.henrikdev.xyz/valorant/v1/by-puuid/account/{puuid}"
+            else:
+                return puuid
             res_json = self._call_henrik_api(url)
             data_obj = res_json.get("data") if isinstance(res_json, dict) else {}
             if isinstance(data_obj, dict):
@@ -2369,7 +2374,7 @@ class GameSwitcher:
                     account_config["level"] = data_obj.get("account_level")
 
                 self._save_game_config(account_name, account_config)
-                if current_name != in_game_name or current_tag != in_game_tag:
+                if current_name and current_tag and (current_name != in_game_name or current_tag != in_game_tag):
                     self.set_account_in_game_name_tag(account_name, current_name, current_tag)
                 return fetched_puuid or puuid
         except Exception as e:
@@ -2727,7 +2732,7 @@ class GameSwitcher:
 
                     t_assets = target_player.get("assets") or {}
                     t_card = t_assets.get("card", {}).get("wide") or t_assets.get("card", {}).get("small")
-                    if t_card and not account_config.get("banner_card_url"):
+                    if t_card:
                         account_config["banner_card_url"] = t_card
                         account_config["card_icon"] = t_card
 

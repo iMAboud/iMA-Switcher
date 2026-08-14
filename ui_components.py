@@ -4060,7 +4060,9 @@ class AccountWidget(QWidget):
         elif str(banner_url).startswith("http"):
             cache_dir = Path(self.switcher.base_dir) / "Assets" / "cache"
             cache_dir.mkdir(parents=True, exist_ok=True)
-            cached_file = cache_dir / f"banner_{abs(hash(banner_url))}.png"
+            import hashlib
+            url_hash = hashlib.md5(str(banner_url).encode('utf-8')).hexdigest()
+            cached_file = cache_dir / f"banner_{url_hash}.png"
             if cached_file.exists() and cached_file.stat().st_size > 0:
                 pixmap.load(str(cached_file))
             else:
@@ -4073,7 +4075,10 @@ class AccountWidget(QWidget):
                             urllib.request.urlretrieve(url, str(tmp_path))
                             if tmp_path.exists() and tmp_path.stat().st_size > 0:
                                 if dest_path.exists():
-                                    dest_path.unlink()
+                                    try:
+                                        dest_path.unlink()
+                                    except OSError:
+                                        pass
                                 tmp_path.rename(dest_path)
                                 QTimer.singleShot(0, self.update)
                         except Exception:
@@ -4179,39 +4184,6 @@ class AccountWidget(QWidget):
                     painter.drawPixmap(rect, sharp_pixmap)
             else:
                 painter.drawPixmap(rect, sharp_pixmap)
-
-            element_clip_path = QPainterPath()
-
-            if hasattr(self, 'icon_label') and self.icon_label.isVisible():
-                icon_rect = self.icon_label.geometry()
-                element_clip_path.addEllipse(QRectF(icon_rect).adjusted(-4, -4, 4, 4))
-
-            if hasattr(self, 'rank_icon_label') and self.rank_icon_label.isVisible():
-                rank_rect = self.rank_icon_label.geometry()
-                element_clip_path.addEllipse(QRectF(rank_rect).adjusted(-3, -3, 3, 3))
-
-            if hasattr(self, 'game_icon_label') and self.game_icon_label.isVisible():
-                game_rect = self.game_icon_label.geometry()
-                element_clip_path.addEllipse(QRectF(game_rect).adjusted(-3, -3, 3, 3))
-
-            text_labels = [
-                getattr(self, 'current_rr_label', None),
-                getattr(self, 'name_label', None),
-                getattr(self, 'in_game_name_tag_label', None),
-                getattr(self, 'last_game_rr_label', None),
-                getattr(self, 'last_match_label', None)
-            ]
-            for label in text_labels:
-                if label and label.isVisible() and label.text().strip():
-                    lbl_rect = label.geometry()
-                    r_val = min(lbl_rect.width(), lbl_rect.height()) / 2.0
-                    element_clip_path.addRoundedRect(QRectF(lbl_rect).adjusted(-6, -2, 6, 2), r_val, r_val)
-
-            painter.save()
-            painter.setClipPath(element_clip_path, Qt.IntersectClip)
-            painter.fillRect(rect, QColor(0, 0, 0, 90))
-            painter.restore()
-
         else:
             opt = QStyleOption()
             opt.initFrom(self)
