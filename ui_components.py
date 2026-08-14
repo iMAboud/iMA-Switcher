@@ -70,6 +70,7 @@ from PyQt5.QtCore import (
     QThread,
     QEvent,
     QObject,
+    QMetaObject,
 )
 
 
@@ -3788,6 +3789,7 @@ class AccountWidget(QWidget):
         self.is_add_button = is_add_button
         self.icon = icon  # Store the icon
         self.init_ui(icon)
+        self._preload_banner()
 
         shadow = QGraphicsDropShadowEffect(self)
         shadow.setBlurRadius(15)
@@ -3798,6 +3800,56 @@ class AccountWidget(QWidget):
         self.icon_anim = QPropertyAnimation(self, b"iconSize")
         self.icon_anim.setDuration(150)
         self.icon_anim.setEasingCurve(QEasingCurve.OutQuad)
+
+    def _preload_banner(self):
+        if self.is_add_button or not hasattr(self, 'switcher') or not self.switcher:
+            return
+        ui_settings = self.switcher.get_ima_config().get("ui_settings", {})
+        cfg = self.switcher._load_game_config(self.account_name)
+        use_banner_bg = ui_settings.get("use_banner_background", cfg.get("use_banner_background", False))
+        if not use_banner_bg:
+            return
+
+        banner_url = cfg.get("banner_card_url") or cfg.get("card_icon")
+        if not banner_url:
+            history = cfg.get("match_history", [])
+            if history and isinstance(history, list) and len(history) > 0:
+                for p in history[0].get("players", []):
+                    if p.get("name", "").lower() == self.account_name.lower() or (self.in_game_name and p.get("name", "").lower() == self.in_game_name.lower()):
+                        banner_url = p.get("card_icon")
+                        break
+
+        if banner_url and str(banner_url).startswith("http"):
+            cache_dir = Path(self.switcher.base_dir) / "Assets" / "cache"
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            import hashlib
+            url_hash = hashlib.md5(str(banner_url).encode('utf-8')).hexdigest()
+            cached_file = cache_dir / f"banner_{url_hash}.png"
+            if not cached_file.exists() or cached_file.stat().st_size == 0:
+                def _download_bg():
+                    tmp_path = cached_file.with_suffix(".tmp")
+                    try:
+                        import urllib.request
+                        urllib.request.urlretrieve(banner_url, str(tmp_path))
+                        if tmp_path.exists() and tmp_path.stat().st_size > 0:
+                            if cached_file.exists():
+                                try:
+                                    cached_file.unlink()
+                                except OSError:
+                                    pass
+                            tmp_path.rename(cached_file)
+                            QMetaObject.invokeMethod(self, "update", Qt.QueuedConnection)
+                    except Exception:
+                        if tmp_path.exists():
+                            try:
+                                tmp_path.unlink()
+                            except OSError:
+                                pass
+                threading.Thread(target=_download_bg, daemon=True).start()
+        elif not banner_url and (self.in_game_name and self.in_game_tag):
+            if not getattr(self, '_banner_fetch_in_progress', False):
+                self._banner_fetch_in_progress = True
+                threading.Thread(target=self._auto_fetch_account_banner, daemon=True).start()
 
     def _get_icon_size(self):
         return self.icon_label.size()
@@ -4080,7 +4132,7 @@ class AccountWidget(QWidget):
                                     except OSError:
                                         pass
                                 tmp_path.rename(dest_path)
-                                QTimer.singleShot(0, self.update)
+                                QMetaObject.invokeMethod(self, "update", Qt.QueuedConnection)
                         except Exception:
                             if tmp_path.exists():
                                 try:
@@ -4321,18 +4373,44 @@ class AccountWidget(QWidget):
                 self.rank_icon_label.setPixmap(pixmap)
             else:
                 self.rank_icon_label.clear()
-        else:
-            self.rank_icon_label.clear()
-
+        if hasattr(AccountWidget, '_map_pixmap_cache'):
+            AccountWidget._map_pixmap_cache.clear()
+        self._preload_banner()
         self.update()
 
     def _auto_fetch_account_banner(self):
         try:
             if hasattr(self, 'switcher') and self.switcher:
                 self.switcher._get_or_fetch_account_puuid(self.account_name, self.in_game_name, self.in_game_tag)
+                cfg = self.switcher._load_game_config(self.account_name)
+                banner_url = cfg.get("banner_card_url") or cfg.get("card_icon")
+                if banner_url and str(banner_url).startswith("http"):
+                    cache_dir = Path(self.switcher.base_dir) / "Assets" / "cache"
+                    cache_dir.mkdir(parents=True, exist_ok=True)
+                    import hashlib
+                    url_hash = hashlib.md5(str(banner_url).encode('utf-8')).hexdigest()
+                    cached_file = cache_dir / f"banner_{url_hash}.png"
+                    if not cached_file.exists() or cached_file.stat().st_size == 0:
+                        tmp_path = cached_file.with_suffix(".tmp")
+                        try:
+                            import urllib.request
+                            urllib.request.urlretrieve(banner_url, str(tmp_path))
+                            if tmp_path.exists() and tmp_path.stat().st_size > 0:
+                                if cached_file.exists():
+                                    try:
+                                        cached_file.unlink()
+                                    except OSError:
+                                        pass
+                                tmp_path.rename(cached_file)
+                        except Exception:
+                            if tmp_path.exists():
+                                try:
+                                    tmp_path.unlink()
+                                except OSError:
+                                    pass
                 if hasattr(AccountWidget, '_map_pixmap_cache'):
                     AccountWidget._map_pixmap_cache.clear()
-                QTimer.singleShot(0, self.update)
+                QMetaObject.invokeMethod(self, "update", Qt.QueuedConnection)
         except Exception:
             pass
         finally:
