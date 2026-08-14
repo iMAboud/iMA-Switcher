@@ -3990,12 +3990,25 @@ class AccountWidget(QWidget):
         }
         return rank_hex_colors.get(base_rank)
 
+    def _fast_blur_image(self, src_image, radius):
+        if radius <= 0.1:
+            return src_image
+        r = int(round(radius))
+        steps = 3
+        current = src_image
+        for _ in range(steps):
+            down_w = max(4, current.width() // 2)
+            down_h = max(4, current.height() // 2)
+            down = current.scaled(down_w, down_h, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+            current = down.scaled(src_image.width(), src_image.height(), Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+        return current
+
     def _get_map_background_pixmap(self, map_name, target_size):
         if not map_name:
             return None
         cache_key = (map_name.lower(), target_size.width(), target_size.height())
-        if hasattr(self, '_map_pixmap_cache') and cache_key in self._map_pixmap_cache:
-            return self._map_pixmap_cache[cache_key]
+        if hasattr(AccountWidget, '_map_pixmap_cache') and cache_key in AccountWidget._map_pixmap_cache:
+            return AccountWidget._map_pixmap_cache[cache_key]
 
         map_filename = map_name.lower().replace(" ", "").replace("'", "") + ".png"
         map_path = None
@@ -4023,20 +4036,7 @@ class AccountWidget(QWidget):
 
         sharp_pixmap = QPixmap.fromImage(cropped)
 
-        # Generate a slightly blurred version (blur radius 4) for element shaped backdrops
-        scene = QGraphicsScene()
-        item = QGraphicsPixmapItem(sharp_pixmap)
-        blur = QGraphicsBlurEffect()
-        blur.setBlurRadius(4)
-        item.setGraphicsEffect(blur)
-        scene.addItem(item)
-
-        blurred_image = QImage(target_size, QImage.Format_ARGB32_Premultiplied)
-        blurred_image.fill(Qt.transparent)
-        ptr = QPainter(blurred_image)
-        scene.render(ptr)
-        ptr.end()
-
+        blurred_image = self._fast_blur_image(cropped.convertToFormat(QImage.Format_ARGB32_Premultiplied), 4.0)
         darkener = QPainter(blurred_image)
         darkener.setCompositionMode(QPainter.CompositionMode_SourceAtop)
         darkener.fillRect(blurred_image.rect(), QColor(0, 0, 0, 110))
@@ -4044,15 +4044,15 @@ class AccountWidget(QWidget):
 
         blurred_pixmap = QPixmap.fromImage(blurred_image)
 
-        if not hasattr(self, '_map_pixmap_cache'):
-            self._map_pixmap_cache = {}
-        self._map_pixmap_cache[cache_key] = (sharp_pixmap, blurred_pixmap)
+        if not hasattr(AccountWidget, '_map_pixmap_cache'):
+            AccountWidget._map_pixmap_cache = {}
+        AccountWidget._map_pixmap_cache[cache_key] = (sharp_pixmap, blurred_pixmap)
         return sharp_pixmap, blurred_pixmap
 
     def _get_banner_background_pixmap(self, banner_url, target_size, zoom=1.0, offset_x=0.0, offset_y=0.0, blur_radius=4.0):
         cache_key = f"banner_{banner_url}_{target_size.width()}x{target_size.height()}_z{zoom:.2f}_ox{offset_x:.1f}_oy{offset_y:.1f}_b{blur_radius:.1f}"
-        if hasattr(self, '_map_pixmap_cache') and cache_key in self._map_pixmap_cache:
-            return self._map_pixmap_cache[cache_key]
+        if hasattr(AccountWidget, '_map_pixmap_cache') and cache_key in AccountWidget._map_pixmap_cache:
+            return AccountWidget._map_pixmap_cache[cache_key]
 
         pixmap = QPixmap()
         if os.path.exists(str(banner_url)):
@@ -4061,15 +4061,30 @@ class AccountWidget(QWidget):
             cache_dir = Path(self.switcher.base_dir) / "Assets" / "cache"
             cache_dir.mkdir(parents=True, exist_ok=True)
             cached_file = cache_dir / f"banner_{abs(hash(banner_url))}.png"
-            if cached_file.exists():
+            if cached_file.exists() and cached_file.stat().st_size > 0:
                 pixmap.load(str(cached_file))
             else:
-                try:
-                    import urllib.request
-                    urllib.request.urlretrieve(banner_url, str(cached_file))
-                    pixmap.load(str(cached_file))
-                except Exception:
-                    pass
+                if not getattr(self, '_banner_download_in_progress', False):
+                    self._banner_download_in_progress = True
+                    def _download_banner_async(url, dest_path):
+                        tmp_path = dest_path.with_suffix(".tmp")
+                        try:
+                            import urllib.request
+                            urllib.request.urlretrieve(url, str(tmp_path))
+                            if tmp_path.exists() and tmp_path.stat().st_size > 0:
+                                if dest_path.exists():
+                                    dest_path.unlink()
+                                tmp_path.rename(dest_path)
+                                QTimer.singleShot(0, self.update)
+                        except Exception:
+                            if tmp_path.exists():
+                                try:
+                                    tmp_path.unlink()
+                                except OSError:
+                                    pass
+                        finally:
+                            self._banner_download_in_progress = False
+                    threading.Thread(target=_download_banner_async, args=(banner_url, cached_file), daemon=True).start()
 
         if pixmap.isNull():
             return None
@@ -4085,18 +4100,8 @@ class AccountWidget(QWidget):
 
         sharp_pixmap = scaled_pixmap.copy(crop_x, crop_y, target_size.width(), target_size.height())
 
-        scene = QGraphicsScene()
-        item = QGraphicsPixmapItem(sharp_pixmap)
-        blur = QGraphicsBlurEffect()
-        blur.setBlurRadius(max(0.1, float(blur_radius)))
-        item.setGraphicsEffect(blur)
-        scene.addItem(item)
-
-        blurred_image = QImage(target_size, QImage.Format_ARGB32_Premultiplied)
-        blurred_image.fill(Qt.transparent)
-        ptr = QPainter(blurred_image)
-        scene.render(ptr)
-        ptr.end()
+        sharp_image = sharp_pixmap.toImage().convertToFormat(QImage.Format_ARGB32_Premultiplied)
+        blurred_image = self._fast_blur_image(sharp_image, blur_radius)
 
         darkener = QPainter(blurred_image)
         darkener.setCompositionMode(QPainter.CompositionMode_SourceAtop)
@@ -4104,9 +4109,9 @@ class AccountWidget(QWidget):
         darkener.end()
 
         blurred_pixmap = QPixmap.fromImage(blurred_image)
-        if not hasattr(self, '_map_pixmap_cache'):
-            self._map_pixmap_cache = {}
-        self._map_pixmap_cache[cache_key] = (sharp_pixmap, blurred_pixmap)
+        if not hasattr(AccountWidget, '_map_pixmap_cache'):
+            AccountWidget._map_pixmap_cache = {}
+        AccountWidget._map_pixmap_cache[cache_key] = (sharp_pixmap, blurred_pixmap)
         return sharp_pixmap, blurred_pixmap
 
     def paintEvent(self, event):
@@ -4126,7 +4131,8 @@ class AccountWidget(QWidget):
         show_map_bg = ui_settings.get("show_map_background", False)
         
         cfg = self.switcher._load_game_config(self.account_name) if (hasattr(self, 'switcher') and self.switcher) else {}
-        use_banner_bg = cfg.get("use_banner_background", False)
+        use_banner_bg = ui_settings.get("use_banner_background", cfg.get("use_banner_background", False))
+        global_blur = float(ui_settings.get("banner_blur", cfg.get("banner_blur", 4.0)))
 
         map_data = None
         if use_banner_bg and hasattr(self, 'switcher') and self.switcher:
@@ -4147,7 +4153,7 @@ class AccountWidget(QWidget):
                 b_zoom = float(cfg.get("banner_zoom", 1.0))
                 b_ox = float(cfg.get("banner_offset_x", 0.0))
                 b_oy = float(cfg.get("banner_offset_y", 0.0))
-                b_blur = float(cfg.get("banner_blur", 4.0))
+                b_blur = global_blur
                 map_data = self._get_banner_background_pixmap(
                     banner_url, rect.size(), zoom=b_zoom, offset_x=b_ox, offset_y=b_oy, blur_radius=b_blur
                 )
@@ -4165,9 +4171,8 @@ class AccountWidget(QWidget):
 
         if map_data:
             sharp_pixmap, blurred_pixmap = map_data
-            # If banner blur > 0 or map background, render blurred/darkened backdrop on entire card
             if use_banner_bg:
-                b_blur = float(cfg.get("banner_blur", 4.0)) if cfg else 4.0
+                b_blur = global_blur
                 if b_blur > 0.1:
                     painter.drawPixmap(rect, blurred_pixmap)
                 else:
@@ -4175,25 +4180,20 @@ class AccountWidget(QWidget):
             else:
                 painter.drawPixmap(rect, sharp_pixmap)
 
-            # Build clip path matching text pill and circular avatar shapes for frosted contrast
             element_clip_path = QPainterPath()
 
-            # 1. Circular avatar blur shape behind profile icon
             if hasattr(self, 'icon_label') and self.icon_label.isVisible():
                 icon_rect = self.icon_label.geometry()
                 element_clip_path.addEllipse(QRectF(icon_rect).adjusted(-4, -4, 4, 4))
 
-            # 2. Rank icon circular shape if visible
             if hasattr(self, 'rank_icon_label') and self.rank_icon_label.isVisible():
                 rank_rect = self.rank_icon_label.geometry()
                 element_clip_path.addEllipse(QRectF(rank_rect).adjusted(-3, -3, 3, 3))
 
-            # 3. Game icon circular shape if visible
             if hasattr(self, 'game_icon_label') and self.game_icon_label.isVisible():
                 game_rect = self.game_icon_label.geometry()
                 element_clip_path.addEllipse(QRectF(game_rect).adjusted(-3, -3, 3, 3))
 
-            # 4. Text labels: Pill-shaped backdrops closely surrounding each visible text label
             text_labels = [
                 getattr(self, 'current_rr_label', None),
                 getattr(self, 'name_label', None),
@@ -4207,7 +4207,6 @@ class AccountWidget(QWidget):
                     r_val = min(lbl_rect.width(), lbl_rect.height()) / 2.0
                     element_clip_path.addRoundedRect(QRectF(lbl_rect).adjusted(-6, -2, 6, 2), r_val, r_val)
 
-            # Draw frosted element contrast backing
             painter.save()
             painter.setClipPath(element_clip_path, Qt.IntersectClip)
             painter.fillRect(rect, QColor(0, 0, 0, 90))
@@ -4220,7 +4219,6 @@ class AccountWidget(QWidget):
 
         painter.restore()
 
-        # Border drawing: match rank color if present, fallback to theme accent
         rank_color_hex = self._get_rank_border_color()
         if not rank_color_hex:
             theme_dict = get_theme()
@@ -4228,7 +4226,6 @@ class AccountWidget(QWidget):
 
         glow_color = QColor(rank_color_hex)
         
-        # Draw outer soft multi-pass rank glow rings
         painter.save()
         painter.setRenderHint(QPainter.Antialiasing)
         for idx, (alpha, width_add) in enumerate([(40, 4.0), (25, 6.0), (12, 8.5)]):
@@ -4240,7 +4237,6 @@ class AccountWidget(QWidget):
             painter.drawRoundedRect(glow_rect, border_radius - inset, border_radius - inset)
         painter.restore()
 
-        # Draw main crisp frame border
         pen_width = 3.5 if self.is_selected else 2.0
         border_pen = QPen(glow_color, pen_width)
         painter.setPen(border_pen)
@@ -4317,7 +4313,7 @@ class AccountWidget(QWidget):
         if self.is_add_button: return
         self.context_menu_requested.emit(self.account_name, self.mapToGlobal(event.pos()))
 
-    def update_data(self, account_name, icon, game, rank, in_game_name, in_game_tag, current_rr, last_game_rr, ui_settings): # Added ui_settings parameter
+    def update_data(self, account_name, icon, game, rank, in_game_name, in_game_tag, current_rr, last_game_rr, ui_settings):
         self.account_name = account_name
         self.game = game
         self.rank = rank
@@ -4326,11 +4322,9 @@ class AccountWidget(QWidget):
         self.current_rr = current_rr
         self.last_game_rr = last_game_rr
 
-        # Redraw the entire widget with new data
         self.set_icon(icon, 70)
         self.name_label.setText(self.account_name)
 
-        # Update visibility based on ui_settings
         if ui_settings:
             self.set_show_game_icon(ui_settings.get("show_game_icons", True))
             self.set_show_rank_icon(ui_settings.get("show_rank_icon_left", False))
@@ -4343,21 +4337,20 @@ class AccountWidget(QWidget):
             self.current_rr_label.setText(str(self.current_rr))
         if self.last_game_rr is not None:
             rr_text = f"+{self.last_game_rr}" if self.last_game_rr > 0 else str(self.last_game_rr)
-            rr_color = "#a6e3a1" if self.last_game_rr > 0 else ("#f38ba8" if self.last_game_rr < 0 else "#e0d6d1") # White for 0
+            rr_color = "#a6e3a1" if self.last_game_rr > 0 else ("#f38ba8" if self.last_game_rr < 0 else "#e0d6d1")
             self.last_game_rr_label.setText(f"({rr_text})")
             self.last_game_rr_label.setStyleSheet(f"color: {rr_color}; font-size: 11px;")
         
-        # Update rank icon based on new rank data
-        game_icon_size = 24 # Assuming this is consistent
+        game_icon_size = 24
         if self.rank:
             rank_icon_path = Path(get_asset_path(f"{self.rank.lower().replace(' ', '_')}.png"))
             if rank_icon_path.exists():
                 pixmap = QPixmap(str(rank_icon_path)).scaled(game_icon_size, game_icon_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 self.rank_icon_label.setPixmap(pixmap)
             else:
-                self.rank_icon_label.clear() # Clear if path doesn't exist
+                self.rank_icon_label.clear()
         else:
-            self.rank_icon_label.clear() # Clear if no rank
+            self.rank_icon_label.clear()
 
         self.update()
 
@@ -4365,8 +4358,8 @@ class AccountWidget(QWidget):
         try:
             if hasattr(self, 'switcher') and self.switcher:
                 self.switcher._get_or_fetch_account_puuid(self.account_name, self.in_game_name, self.in_game_tag)
-                if hasattr(self, '_map_pixmap_cache'):
-                    self._map_pixmap_cache.clear()
+                if hasattr(AccountWidget, '_map_pixmap_cache'):
+                    AccountWidget._map_pixmap_cache.clear()
                 QTimer.singleShot(0, self.update)
         except Exception:
             pass
@@ -4452,10 +4445,11 @@ class BannerCustomizerDialog(PopupDialog):
         self.config_data = config_data
         self.setFixedSize(480, 440)
 
+        ui_settings = self.switcher.get_ima_config().get("ui_settings", {}) if self.switcher else {}
         self.zoom = float(self.config_data.get("banner_zoom", 1.0))
         self.offset_x = float(self.config_data.get("banner_offset_x", 0.0))
         self.offset_y = float(self.config_data.get("banner_offset_y", 0.0))
-        self.blur = float(self.config_data.get("banner_blur", 4.0))
+        self.blur = float(ui_settings.get("banner_blur", self.config_data.get("banner_blur", 4.0)))
 
         self.last_mouse_pos = None
         self.is_dragging = False
@@ -4471,7 +4465,6 @@ class BannerCustomizerDialog(PopupDialog):
         hint_lbl.setAlignment(Qt.AlignCenter)
         self.content_layout.addWidget(hint_lbl)
 
-        # Host the real AccountWidget in an interactive preview box
         self.preview_box = QWidget()
         self.preview_box.setFixedHeight(190)
         self.preview_box.setCursor(Qt.SizeAllCursor)
@@ -4492,7 +4485,6 @@ class BannerCustomizerDialog(PopupDialog):
         box_layout.addWidget(self.card_preview)
         self.content_layout.addWidget(self.preview_box)
 
-        # Mouse and Wheel events on preview box & card
         self.preview_box.mousePressEvent = self.on_mouse_press
         self.preview_box.mouseMoveEvent = self.on_mouse_move
         self.preview_box.mouseReleaseEvent = self.on_mouse_release
@@ -4503,8 +4495,7 @@ class BannerCustomizerDialog(PopupDialog):
         self.card_preview.mouseReleaseEvent = self.on_mouse_release
         self.card_preview.wheelEvent = self.on_wheel
 
-        # Controls Section
-        ctrl_box = QGroupBox("Banner Adjustments")
+        ctrl_box = QGroupBox("Banner Adjustments (Blur applies to all accounts)")
         ctrl_layout = QFormLayout(ctrl_box)
         ctrl_layout.setSpacing(8)
         ctrl_layout.setContentsMargins(12, 10, 12, 10)
@@ -4527,7 +4518,6 @@ class BannerCustomizerDialog(PopupDialog):
 
         self.content_layout.addWidget(ctrl_box)
 
-        # Actions
         actions_layout = QHBoxLayout()
         actions_layout.setSpacing(10)
         actions_layout.addStretch()
@@ -4584,12 +4574,25 @@ class BannerCustomizerDialog(PopupDialog):
         self.config_data["banner_offset_x"] = self.offset_x
         self.config_data["banner_offset_y"] = self.offset_y
         self.config_data["banner_blur"] = self.blur
-        if hasattr(self.card_preview, '_map_pixmap_cache'):
-            self.card_preview._map_pixmap_cache.clear()
+        if self.switcher:
+            cfg = self.switcher.get_ima_config()
+            cfg_ui = cfg.setdefault("ui_settings", {})
+            cfg_ui["banner_blur"] = self.blur
+        if hasattr(AccountWidget, '_map_pixmap_cache'):
+            AccountWidget._map_pixmap_cache.clear()
         self.card_preview.update()
 
     def on_save(self):
         self.refresh_preview()
+        if self.switcher:
+            cfg = self.switcher.get_ima_config()
+            cfg_ui = cfg.setdefault("ui_settings", {})
+            cfg_ui["banner_blur"] = self.blur
+            self.switcher.set_ima_config({"ui_settings": cfg_ui})
+            for acc in self.switcher.get_saved_accounts():
+                acc_cfg = self.switcher._load_game_config(acc)
+                acc_cfg["banner_blur"] = self.blur
+                self.switcher._save_game_config(acc, acc_cfg)
         self.accept()
 
 
@@ -4609,18 +4612,15 @@ class CustomizeAccountDialog(PopupDialog):
         self.content_layout.setSpacing(10)
         self.content_layout.setContentsMargins(16, 8, 16, 14)
 
-        # Main 2-Column Container
         columns_layout = QHBoxLayout()
         columns_layout.setSpacing(14)
 
-        # ------------------ LEFT COLUMN (Details & Card Banner) ------------------
         left_widget = QWidget()
         left_widget.setFixedWidth(320)
         left_layout = QVBoxLayout(left_widget)
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(10)
 
-        # 1. Identity Box
         identity_box = QGroupBox("Account Details & Riot ID")
         identity_layout = QFormLayout(identity_box)
         identity_layout.setSpacing(8)
@@ -4648,8 +4648,7 @@ class CustomizeAccountDialog(PopupDialog):
 
         left_layout.addWidget(identity_box)
 
-        # 2. Card Appearance Box
-        appearance_box = QGroupBox("Card Background")
+        appearance_box = QGroupBox("Card Background (Applies to all accounts)")
         appearance_layout = QVBoxLayout(appearance_box)
         appearance_layout.setSpacing(8)
 
@@ -4658,13 +4657,13 @@ class CustomizeAccountDialog(PopupDialog):
         toggle_row.addStretch()
 
         self.banner_toggle = RadioButtonGroup("On", "Off")
-        is_banner_on = self.config_data.get("use_banner_background", False)
+        ui_settings = self.switcher.get_ima_config().get("ui_settings", {}) if self.switcher else {}
+        is_banner_on = ui_settings.get("use_banner_background", self.config_data.get("use_banner_background", False))
         self.banner_toggle.set_state(is_banner_on)
         self.banner_toggle.stateChanged.connect(self.on_banner_toggle_changed)
         toggle_row.addWidget(self.banner_toggle)
         appearance_layout.addLayout(toggle_row)
 
-        # Centered Interactive Card Preview
         card_preview_container = QWidget()
         card_preview_layout = QHBoxLayout(card_preview_container)
         card_preview_layout.setContentsMargins(0, 2, 0, 2)
@@ -4684,7 +4683,6 @@ class CustomizeAccountDialog(PopupDialog):
         left_layout.addWidget(appearance_box)
         columns_layout.addWidget(left_widget)
 
-        # ------------------ RIGHT COLUMN (Profile Icon Picker) ------------------
         icon_box = QGroupBox("Profile Icon")
         icon_layout = QVBoxLayout(icon_box)
         icon_layout.setSpacing(8)
@@ -4732,7 +4730,6 @@ class CustomizeAccountDialog(PopupDialog):
         columns_layout.addWidget(icon_box, 1)
         self.content_layout.addLayout(columns_layout)
 
-        # ------------------ BOTTOM ACTIONS BAR ------------------
         action_layout = QHBoxLayout()
         action_layout.setSpacing(10)
         action_layout.addStretch()
@@ -4754,15 +4751,19 @@ class CustomizeAccountDialog(PopupDialog):
 
     def on_banner_toggle_changed(self, is_on):
         self.config_data["use_banner_background"] = is_on
-        if hasattr(self.card_preview, '_map_pixmap_cache'):
-            self.card_preview._map_pixmap_cache.clear()
+        if self.switcher:
+            cfg = self.switcher.get_ima_config()
+            cfg_ui = cfg.setdefault("ui_settings", {})
+            cfg_ui["use_banner_background"] = is_on
+        if hasattr(AccountWidget, '_map_pixmap_cache'):
+            AccountWidget._map_pixmap_cache.clear()
         self.card_preview.update()
 
     def open_banner_customizer(self):
         dlg = BannerCustomizerDialog(self.account_name, self.switcher, self.config_data, parent=self)
         if dlg.exec_() == QDialog.Accepted:
-            if hasattr(self.card_preview, '_map_pixmap_cache'):
-                self.card_preview._map_pixmap_cache.clear()
+            if hasattr(AccountWidget, '_map_pixmap_cache'):
+                AccountWidget._map_pixmap_cache.clear()
             self.card_preview.update()
 
     def select_custom_icon(self):
@@ -4866,12 +4867,30 @@ class CustomizeAccountDialog(PopupDialog):
         if new_puuid:
             cfg["puuid"] = new_puuid
         cfg["use_banner_background"] = use_banner
+        cfg["banner_zoom"] = self.config_data.get("banner_zoom", 1.0)
+        cfg["banner_offset_x"] = self.config_data.get("banner_offset_x", 0.0)
+        cfg["banner_offset_y"] = self.config_data.get("banner_offset_y", 0.0)
+        cfg["banner_blur"] = self.config_data.get("banner_blur", 4.0)
         self.switcher._save_game_config(final_name, cfg)
+
+        ui_cfg = self.switcher.get_ima_config().get("ui_settings", {})
+        ui_cfg["use_banner_background"] = use_banner
+        ui_cfg["banner_blur"] = cfg["banner_blur"]
+        self.switcher.set_ima_config({"ui_settings": ui_cfg})
+
+        for acc in self.switcher.get_saved_accounts():
+            acc_cfg = self.switcher._load_game_config(acc)
+            acc_cfg["use_banner_background"] = use_banner
+            acc_cfg["banner_blur"] = cfg["banner_blur"]
+            self.switcher._save_game_config(acc, acc_cfg)
 
         if self.selected_icon_path:
             self.switcher.set_account_icon(final_name, Path(self.selected_icon_path))
         else:
             self.switcher.remove_account_icon(final_name)
+
+        if hasattr(AccountWidget, '_map_pixmap_cache'):
+            AccountWidget._map_pixmap_cache.clear()
 
         self.accept()
 

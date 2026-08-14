@@ -577,11 +577,10 @@ def apply_theme_to_app(app_or_window, theme_key=None):
     if app:
         app.setStyleSheet(qss)
         for widget in app.topLevelWidgets():
-            widget.setStyleSheet(qss)
             if hasattr(widget, 'title_bar') and widget.title_bar:
                 if hasattr(widget, 'create_gear_icon') and hasattr(widget.title_bar, 'settings_button'):
                     widget.title_bar.settings_button.setIcon(widget.create_gear_icon())
                 if hasattr(widget, 'create_add_icon') and hasattr(widget.title_bar, 'add_account_button'):
                     widget.title_bar.add_account_button.setIcon(widget.create_add_icon())
-    if hasattr(app_or_window, 'setStyleSheet') and not isinstance(app_or_window, QApplication):
+    elif hasattr(app_or_window, 'setStyleSheet'):
         app_or_window.setStyleSheet(qss)

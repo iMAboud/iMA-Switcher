@@ -190,7 +190,7 @@ class GameSwitcher:
         self.riot_games_config = {}
         self.initialize_riot_client_paths()
         os.makedirs(self.profiles_dir, exist_ok=True)
-        self._cleanup_valorant_temp_files()
+        threading.Thread(target=self._cleanup_valorant_temp_files, daemon=True).start()
 
     def _cleanup_valorant_temp_files(self):
         crash_report_path = Path(self.app_data_path) / "VALORANT" / "Saved" / "Config" / "CrashReportClient"

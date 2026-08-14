@@ -280,19 +280,18 @@ class ModernValorantSwitcher(QMainWindow):
         self.switch_account_finished.connect(self.on_switch_account_finished)
         self.add_account_finished.connect(self.on_add_account_finished)
 
-        import updater
-        updater.cleanup_old_exe()
-        updater.start_background_auto_updater(
-            on_update_found_callback=lambda current_sha, remote_sha, url, notes: self.status_message_requested.emit(f"Update available: {remote_sha[:7]}")
-        )
-        
-        
-        
-        
-        ui_settings = self.switcher.get_ima_config().get("ui_settings", {})
-        if ui_settings.get("auto_rank_update", True):
-            self.switcher.start_rank_update_scheduler(on_update_callback=self.account_updated.emit)
-            QTimer.singleShot(100, self.initial_rank_fetch)
+        def _deferred_background_tasks():
+            import updater
+            updater.cleanup_old_exe()
+            updater.start_background_auto_updater(
+                on_update_found_callback=lambda current_sha, remote_sha, url, notes: self.status_message_requested.emit(f"Update available: {remote_sha[:7]}")
+            )
+            ui_settings = self.switcher.get_ima_config().get("ui_settings", {})
+            if ui_settings.get("auto_rank_update", True):
+                self.switcher.start_rank_update_scheduler(on_update_callback=self.account_updated.emit)
+                self.initial_rank_fetch()
+
+        QTimer.singleShot(250, _deferred_background_tasks)
 
         
 
@@ -302,8 +301,6 @@ class ModernValorantSwitcher(QMainWindow):
     def init_ui(self):
         self.setWindowTitle("iMA Switcher")
         self.setWindowIcon(self.switcher.get_qicon_from_path(str(self.switcher.base_dir / "logo.png")))
-        ui_settings = self.switcher.get_ima_config().get("ui_settings", {})
-        apply_theme_to_app(self, ui_settings.get("theme", "dark_gold"))
 
         self.main_widget = QWidget(objectName="main_widget")
         self.setCentralWidget(self.main_widget)
@@ -841,8 +838,6 @@ def main():
                 sys.exit(1)
         
     else:
-        import updater
-        updater.cleanup_old_exe()
         app = QApplication(sys.argv)
         ex = ModernValorantSwitcher()
         ex.show()
