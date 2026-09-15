@@ -2,6 +2,7 @@ import sys
 import os
 from pathlib import Path
 import math
+import time
 import ctypes
 import shutil 
 import subprocess 
@@ -70,10 +71,8 @@ def wait_for_pid(pid, timeout=15):
     """Wait for parent process to exit cleanly before replacing files."""
     try:
         pid = int(pid)
-        import time
         start_time = time.time()
         if os.name == 'nt':
-            import ctypes
             SYNCHRONIZE = 0x00100000
             handle = ctypes.windll.kernel32.OpenProcess(SYNCHRONIZE, False, pid)
             if handle:
@@ -119,7 +118,6 @@ def run_update_installer():
     destination_exe_path = target_dir_p / "iMA Switcher.exe"
 
     try:
-        import time
         time.sleep(0.5)
         shutil.copy2(current_exe, destination_exe_path)
 

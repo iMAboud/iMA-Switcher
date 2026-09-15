@@ -176,12 +176,12 @@ class GameSwitcher:
         self.GAMES = {
             "valorant": {
                 "launch_args": "--launch-product=valorant --launch-patchline=live",
-                "processes_to_kill": ["VALORANT.exe", "RiotClientServices.exe", "VALORANT-Win64-Shipping.exe"],
+                "processes_to_kill": ["VALORANT.exe", "RiotClientServices.exe", "Riot Client.exe", "RiotClientCrashHandler.exe", "VALORANT-Win64-Shipping.exe"],
                 "executable_name": "RiotClientServices.exe"
             },
             "lol": {
                 "launch_args": "--launch-product=league_of_legends --launch-patchline=live",
-                "processes_to_kill": ["LeagueClient.exe", "RiotClientServices.exe", "LeagueClientUx.exe"],
+                "processes_to_kill": ["LeagueClient.exe", "RiotClientServices.exe", "Riot Client.exe", "RiotClientCrashHandler.exe", "LeagueClientUx.exe"],
                 "executable_name": "LeagueClientUx.exe"
             }
         }
@@ -1052,15 +1052,61 @@ class GameSwitcher:
         return False
 
     def delete_account(self, account_name):
-        account_path = self._get_account_path(account_name)
-        if account_path.exists():
-            shutil.rmtree(account_path)
+        try:
+            account_path = self._get_account_path(account_name)
+
+            if self.config.get("last_switched_account") == account_name:
+                logging.info(f"Account '{account_name}' is active. Terminating processes and cleaning up junctions.")
+                self._terminate_processes()
+                for item_name in self.riot_games_config.get("LoginData", {}).keys():
+                    riot_item_path = self.riot_client_data_path / item_name
+                    if riot_item_path.exists() or os.path.islink(riot_item_path):
+                        self._remove_junction_or_dir(riot_item_path)
+                self.config["last_switched_account"] = None
+
+            ordered_accounts = self.config.get("ordered_accounts", [])
+            if account_name in ordered_accounts:
+                ordered_accounts.remove(account_name)
+                self.config["ordered_accounts"] = ordered_accounts
+            self._save_config()
+
             if account_name in self._account_game_configs_cache:
                 del self._account_game_configs_cache[account_name]
             self._saved_accounts_cache = None
-            self.update_ima_menu_if_enabled('delete', account_name)
+
+            if account_path.exists():
+                icon_path = account_path / "icon.png"
+                if icon_path.exists():
+                    resolved_icon = str(icon_path.resolve())
+                    if resolved_icon in self._icon_cache:
+                        del self._icon_cache[resolved_icon]
+
+                def _handle_remove_readonly(func, path, exc_info):
+                    try:
+                        import stat
+                        os.chmod(path, stat.S_IWRITE)
+                        func(path)
+                    except Exception as err:
+                        logging.debug(f"Failed to clear read-only flag on {path}: {err}")
+
+                try:
+                    shutil.rmtree(account_path, onerror=_handle_remove_readonly)
+                except Exception as e:
+                    logging.warning(f"Initial removal of {account_path} failed: {e}. Terminating processes and retrying...")
+                    self._terminate_processes()
+                    import time
+                    time.sleep(0.3)
+                    shutil.rmtree(account_path, onerror=_handle_remove_readonly)
+
+            try:
+                self.update_ima_menu_if_enabled('delete', account_name)
+            except Exception as e:
+                logging.error(f"Error updating iMA menu on delete: {e}")
+
             return True
-        return False
+        except Exception as e:
+            logging.error(f"Failed to delete account '{account_name}': {e}")
+            return False
 
     def set_account_icon(self, account_name, source_icon_path):
         account_path = self._get_account_path(account_name)

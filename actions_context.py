@@ -1,4 +1,5 @@
 from PyQt5.QtWidgets import QDialog
+from PyQt5.QtCore import QTimer
 from ui_components import InputDialog, ConfirmDeleteDialog, IconPickerDialog, AccountHistoryDialog, CustomMessageDialog, CustomizeAccountDialog
 import logging
 from pathlib import Path
@@ -68,9 +69,24 @@ class ContextActions:
         
         dialog = ConfirmDeleteDialog(name, self.parent)
         if dialog.exec_() == QDialog.Accepted:
-            if self.switcher.delete_account(name):
+            try:
+                success = self.switcher.delete_account(name)
+            except Exception as e:
+                logging.error(f"Error deleting account '{name}': {e}")
+                success = False
+
+            if success:
                 self.parent.status_label.setText(f"Account '{name}' deleted.")
-                self.parent.load_accounts()
+                if getattr(self.parent, "selected_account_name", None) == name:
+                    self.parent.selected_account_name = None
+                QTimer.singleShot(50, self.parent.load_accounts)
+            else:
+                self.parent.status_label.setText(f"Failed to delete '{name}'.")
+                CustomMessageDialog.warning(
+                    self.parent,
+                    "Delete Failed",
+                    f"Could not delete account '{name}'.\nPlease ensure Riot Client or VALORANT is closed and try again."
+                )
 
     def change_icon(self):
         name = self.parent.get_selected_account_name()

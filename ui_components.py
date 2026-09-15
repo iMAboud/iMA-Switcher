@@ -6,6 +6,8 @@ import threading
 import time
 import ctypes
 import webbrowser
+import hashlib
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 from PyQt5.QtWidgets import (
@@ -119,6 +121,50 @@ def get_icon_paths_from_folder(folder_path):
             if file_path.is_file() and file_path.suffix.lower() in ('.png', '.jpg', '.jpeg', '.ico'):
                 icon_paths.append(str(file_path))
     return icon_paths
+
+
+def ensure_banner_cached(banner_url, switcher_base_dir, on_ready_callback=None):
+    """
+    Unified banner caching utility.
+    Returns the cached absolute file path if ready, or kicks off an asynchronous background download.
+    """
+    if not banner_url:
+        return None
+    if os.path.exists(str(banner_url)):
+        return str(banner_url)
+    if not str(banner_url).startswith("http"):
+        return None
+
+    cache_dir = Path(switcher_base_dir) / "Assets" / "cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    url_hash = hashlib.md5(str(banner_url).encode('utf-8')).hexdigest()
+    cached_file = cache_dir / f"banner_{url_hash}.png"
+
+    if cached_file.exists() and cached_file.stat().st_size > 0:
+        return str(cached_file)
+
+    def _async_download():
+        tmp_path = cached_file.with_suffix(".tmp")
+        try:
+            urllib.request.urlretrieve(banner_url, str(tmp_path))
+            if tmp_path.exists() and tmp_path.stat().st_size > 0:
+                if cached_file.exists():
+                    try:
+                        cached_file.unlink()
+                    except OSError:
+                        pass
+                tmp_path.rename(cached_file)
+                if on_ready_callback:
+                    on_ready_callback()
+        except Exception:
+            if tmp_path.exists():
+                try:
+                    tmp_path.unlink()
+                except OSError:
+                    pass
+
+    threading.Thread(target=_async_download, daemon=True).start()
+    return None
 
 
 VALORANT_CROSSHAIR_PRESETS = {
@@ -3819,34 +3865,13 @@ class AccountWidget(QWidget):
                         banner_url = p.get("card_icon")
                         break
 
-        if banner_url and str(banner_url).startswith("http"):
-            cache_dir = Path(self.switcher.base_dir) / "Assets" / "cache"
-            cache_dir.mkdir(parents=True, exist_ok=True)
-            import hashlib
-            url_hash = hashlib.md5(str(banner_url).encode('utf-8')).hexdigest()
-            cached_file = cache_dir / f"banner_{url_hash}.png"
-            if not cached_file.exists() or cached_file.stat().st_size == 0:
-                def _download_bg():
-                    tmp_path = cached_file.with_suffix(".tmp")
-                    try:
-                        import urllib.request
-                        urllib.request.urlretrieve(banner_url, str(tmp_path))
-                        if tmp_path.exists() and tmp_path.stat().st_size > 0:
-                            if cached_file.exists():
-                                try:
-                                    cached_file.unlink()
-                                except OSError:
-                                    pass
-                            tmp_path.rename(cached_file)
-                            QMetaObject.invokeMethod(self, "update", Qt.QueuedConnection)
-                    except Exception:
-                        if tmp_path.exists():
-                            try:
-                                tmp_path.unlink()
-                            except OSError:
-                                pass
-                threading.Thread(target=_download_bg, daemon=True).start()
-        elif not banner_url and (self.in_game_name and self.in_game_tag):
+        if banner_url:
+            ensure_banner_cached(
+                banner_url,
+                self.switcher.base_dir,
+                on_ready_callback=lambda: QMetaObject.invokeMethod(self, "update", Qt.QueuedConnection)
+            )
+        elif self.in_game_name and self.in_game_tag:
             if not getattr(self, '_banner_fetch_in_progress', False):
                 self._banner_fetch_in_progress = True
                 threading.Thread(target=self._auto_fetch_account_banner, daemon=True).start()
@@ -4106,43 +4131,15 @@ class AccountWidget(QWidget):
         if hasattr(AccountWidget, '_map_pixmap_cache') and cache_key in AccountWidget._map_pixmap_cache:
             return AccountWidget._map_pixmap_cache[cache_key]
 
-        pixmap = QPixmap()
-        if os.path.exists(str(banner_url)):
-            pixmap.load(str(banner_url))
-        elif str(banner_url).startswith("http"):
-            cache_dir = Path(self.switcher.base_dir) / "Assets" / "cache"
-            cache_dir.mkdir(parents=True, exist_ok=True)
-            import hashlib
-            url_hash = hashlib.md5(str(banner_url).encode('utf-8')).hexdigest()
-            cached_file = cache_dir / f"banner_{url_hash}.png"
-            if cached_file.exists() and cached_file.stat().st_size > 0:
-                pixmap.load(str(cached_file))
-            else:
-                if not getattr(self, '_banner_download_in_progress', False):
-                    self._banner_download_in_progress = True
-                    def _download_banner_async(url, dest_path):
-                        tmp_path = dest_path.with_suffix(".tmp")
-                        try:
-                            import urllib.request
-                            urllib.request.urlretrieve(url, str(tmp_path))
-                            if tmp_path.exists() and tmp_path.stat().st_size > 0:
-                                if dest_path.exists():
-                                    try:
-                                        dest_path.unlink()
-                                    except OSError:
-                                        pass
-                                tmp_path.rename(dest_path)
-                                QMetaObject.invokeMethod(self, "update", Qt.QueuedConnection)
-                        except Exception:
-                            if tmp_path.exists():
-                                try:
-                                    tmp_path.unlink()
-                                except OSError:
-                                    pass
-                        finally:
-                            self._banner_download_in_progress = False
-                    threading.Thread(target=_download_banner_async, args=(banner_url, cached_file), daemon=True).start()
+        cached_path = ensure_banner_cached(
+            banner_url,
+            self.switcher.base_dir if hasattr(self, 'switcher') and self.switcher else "",
+            on_ready_callback=lambda: QMetaObject.invokeMethod(self, "update", Qt.QueuedConnection)
+        )
+        if not cached_path or not os.path.exists(cached_path):
+            return None
 
+        pixmap = QPixmap(cached_path)
         if pixmap.isNull():
             return None
 
@@ -4384,30 +4381,12 @@ class AccountWidget(QWidget):
                 self.switcher._get_or_fetch_account_puuid(self.account_name, self.in_game_name, self.in_game_tag)
                 cfg = self.switcher._load_game_config(self.account_name)
                 banner_url = cfg.get("banner_card_url") or cfg.get("card_icon")
-                if banner_url and str(banner_url).startswith("http"):
-                    cache_dir = Path(self.switcher.base_dir) / "Assets" / "cache"
-                    cache_dir.mkdir(parents=True, exist_ok=True)
-                    import hashlib
-                    url_hash = hashlib.md5(str(banner_url).encode('utf-8')).hexdigest()
-                    cached_file = cache_dir / f"banner_{url_hash}.png"
-                    if not cached_file.exists() or cached_file.stat().st_size == 0:
-                        tmp_path = cached_file.with_suffix(".tmp")
-                        try:
-                            import urllib.request
-                            urllib.request.urlretrieve(banner_url, str(tmp_path))
-                            if tmp_path.exists() and tmp_path.stat().st_size > 0:
-                                if cached_file.exists():
-                                    try:
-                                        cached_file.unlink()
-                                    except OSError:
-                                        pass
-                                tmp_path.rename(cached_file)
-                        except Exception:
-                            if tmp_path.exists():
-                                try:
-                                    tmp_path.unlink()
-                                except OSError:
-                                    pass
+                if banner_url:
+                    ensure_banner_cached(
+                        banner_url,
+                        self.switcher.base_dir,
+                        on_ready_callback=lambda: QMetaObject.invokeMethod(self, "update", Qt.QueuedConnection)
+                    )
                 if hasattr(AccountWidget, '_map_pixmap_cache'):
                     AccountWidget._map_pixmap_cache.clear()
                 QMetaObject.invokeMethod(self, "update", Qt.QueuedConnection)
