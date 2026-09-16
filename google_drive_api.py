@@ -36,8 +36,8 @@ class GoogleDriveAPI:
                 if creds and creds.expired and creds.refresh_token:
                     try:
                         creds.refresh(Request())
-                    except Exception as re:
-                        logging.warning(f"Could not refresh Google token: {re}. Re-authenticating...")
+                    except Exception as refresh_err:
+                        logging.warning(f"Could not refresh Google token: {refresh_err}. Re-authenticating...")
                         creds = None
 
                 if not creds or not creds.valid:

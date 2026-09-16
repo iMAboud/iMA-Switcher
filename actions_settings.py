@@ -1,7 +1,7 @@
 import os
 import threading
 import logging
-from PyQt5.QtWidgets import QMessageBox, QFileDialog, QDialog
+from PyQt5.QtWidgets import QFileDialog, QDialog
 from PyQt5.QtCore import QThread, pyqtSignal, QTimer
 from ui_components import (
     SaveAccountDialog, ExportIMAMenuDialog, OptionsDialog, 
@@ -10,7 +10,6 @@ from ui_components import (
 )
 import tempfile
 import copy
-import importlib
 from pathlib import Path
 
 class GoogleDriveBackupWorker(QThread):
@@ -222,7 +221,9 @@ class SettingsActions:
             valo_nss_exists = True
 
         if not valo_nss_exists or not ima_config.get("menu_icon_path"):
-            default_icon_path = Path(self.switcher.base_dir) / "Assets" / "valorant" / "5.png"
+            default_icon_path = Path(self.switcher.base_dir) / "Assets" / "accounts" / "5.png"
+            if not default_icon_path.exists():
+                default_icon_path = Path(self.switcher.base_dir) / "Assets" / "valorant" / "5.png"
             if default_icon_path.exists():
                 ima_config["menu_icon_path"] = str(default_icon_path)
 

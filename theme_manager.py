@@ -1,11 +1,28 @@
-import os
-import json
-import logging
 from PyQt5.QtWidgets import QApplication
 
 THEMES = {
+    "midnight_gold": {
+        "name": "Midnight Gold (Default)",
+        "bg_main": "#12111d",
+        "bg_secondary": "#181728",
+        "bg_tertiary": "#141322",
+        "bg_input": "#12111d",
+        "bg_card": "#181728",
+        "bg_card_hover": "#221f38",
+        "accent": "#8c52ff",
+        "accent_hover": "#9d65ff",
+        "accent_pressed": "#6f30e6",
+        "border": "#28233f",
+        "border_focus": "#8c52ff",
+        "text_primary": "#FFFFFF",
+        "text_secondary": "#dcdbe8",
+        "text_muted": "#8f8ba8",
+        "text_on_accent": "#ffffff",
+        "danger": "#f38ba8",
+        "danger_hover": "#e67e80",
+    },
     "dark_gold": {
-        "name": "Dark Gold (Default)",
+        "name": "Dark Gold (Classic)",
         "bg_main": "#2c2a2b",
         "bg_secondary": "#3a3637",
         "bg_tertiary": "#232122",
@@ -46,12 +63,12 @@ THEMES = {
     },
     "dark_slate": {
         "name": "Dark Grey / Slate",
-        "bg_main": "#181a1f",
-        "bg_secondary": "#21252b",
-        "bg_tertiary": "#15181e",
-        "bg_input": "#2c313a",
-        "bg_card": "#21252b",
-        "bg_card_hover": "#2c313a",
+        "bg_main": "#0d0c17",
+        "bg_secondary": "#0d0c17",
+        "bg_tertiary": "#0d0c17",
+        "bg_input": "#0d0c17",
+        "bg_card": "#0d0c17",
+        "bg_card_hover": "#0d0c17",
         "accent": "#61afef",
         "accent_hover": "#7ec7ff",
         "accent_pressed": "#4b8fcc",
@@ -60,7 +77,7 @@ THEMES = {
         "text_primary": "#abb2bf",
         "text_secondary": "#c8ccd4",
         "text_muted": "#5c6370",
-        "text_on_accent": "#181a1f",
+        "text_on_accent": "#0d0c17",
         "danger": "#e06c75",
         "danger_hover": "#f0808a",
     },
@@ -146,7 +163,7 @@ THEMES = {
     }
 }
 
-DEFAULT_THEME = "dark_gold"
+DEFAULT_THEME = "midnight_gold"
 _CURRENT_THEME_KEY = DEFAULT_THEME
 
 def get_available_themes():
@@ -203,39 +220,47 @@ def generate_global_qss(theme_key=None):
 
         /* Title Bar Header Action Buttons */
         QPushButton#HeaderButton {{ 
-            background-color: {t['bg_input']}; 
-            color: {t['text_primary']};
-            font-size: 16px;
-            font-weight: 900;
-            padding: 0px;
-            border: none; 
-            border-radius: 15px; 
-        }} 
-        QPushButton#HeaderButton:hover {{ 
-            background-color: {t['accent']}; 
-            color: {t['text_on_accent']};
-        }} 
-        QPushButton#CloseButton {{ 
-            background-color: {t['danger']}; 
-            color: {t['text_on_accent']};
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #352a5c, stop:1 #20193b); 
+            color: #dcdbe8;
             font-size: 14px;
             font-weight: bold;
             padding: 0px;
-            border: none; 
-            border-radius: 15px; 
+            border: 1px solid rgba(157, 101, 255, 0.35); 
+            border-radius: 10px; 
+        }} 
+        QPushButton#HeaderButton:hover {{ 
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #4d3a82, stop:1 #2d2250); 
+            border-color: #8c52ff;
+            color: #ffffff;
+        }} 
+        QPushButton#CloseButton {{ 
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #352a5c, stop:1 #20193b); 
+            color: #dcdbe8;
+            font-size: 13px;
+            font-weight: bold;
+            padding: 0px;
+            border: 1px solid rgba(157, 101, 255, 0.35); 
+            border-radius: 10px; 
         }} 
         QPushButton#CloseButton:hover {{ 
-            background-color: {t['danger_hover']}; 
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #4d3a82, stop:1 #2d2250); 
+            border-color: #8c5cdb;
+            color: #ffffff;
         }}
 
         /* Account Card Container */
         QWidget#AccountWidget {{ 
             background-color: {t['bg_card']}; 
-            border-radius: 20px; 
-            border: 3px solid transparent; 
+            border-radius: 16px; 
+            border: 1px solid {t['border']}; 
         }} 
+        QWidget#AccountWidget:hover {{
+            background-color: {t['bg_card_hover']};
+            border-color: {t['border_focus']};
+        }}
         QWidget#AccountWidget[selected="true"] {{ 
-            border-color: {t['accent']}; 
+            border: 2px solid {t['accent']}; 
+            background-color: {t['bg_card_hover']};
         }} 
         QLabel#NameLabel {{ 
             color: {t['text_primary']}; 
@@ -247,11 +272,12 @@ def generate_global_qss(theme_key=None):
         }} 
         QWidget#AccountWidget[is_add_button="true"] {{ 
             background-color: {t['bg_tertiary']}; 
-            border: 3px dashed {t['accent']}; 
-            border-radius: 20px; 
+            border: 2px dashed {t['accent']}; 
+            border-radius: 16px; 
         }} 
         QWidget#AccountWidget[is_add_button="true"]:hover {{ 
             background-color: {t['bg_card_hover']}; 
+            border-color: {t['accent_hover']};
         }} 
         QWidget#AccountWidget[is_add_button="true"] QLabel#NameLabel {{ 
             color: {t['accent']}; 
@@ -350,7 +376,7 @@ def generate_global_qss(theme_key=None):
         }}
 
         /* Inputs & Combos */
-        QLineEdit, QTextEdit, QSpinBox, QDoubleSpinBox {{ 
+        QLineEdit, QTextEdit {{ 
             background-color: {t['bg_input']}; 
             border: 1px solid {t['border']}; 
             border-radius: 10px; 
@@ -358,8 +384,54 @@ def generate_global_qss(theme_key=None):
             color: {t['text_primary']}; 
             font-weight: bold;
         }}
-        QLineEdit:focus, QTextEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {{ 
+        QLineEdit:focus, QTextEdit:focus {{ 
             border: 1px solid {t['border_focus']}; 
+        }}
+
+        /* Modern Spinboxes with Themed Micro-Arrows */
+        QSpinBox, QDoubleSpinBox {{ 
+            background-color: {t['bg_input']}; 
+            border: 1px solid {t['border']}; 
+            border-radius: 8px; 
+            padding: 2px 20px 2px 6px; 
+            color: {t['text_primary']}; 
+            font-size: 12px;
+            font-weight: bold;
+        }}
+        QSpinBox:focus, QDoubleSpinBox:focus {{ 
+            border: 1px solid {t['border_focus']}; 
+        }}
+        QSpinBox::up-button, QDoubleSpinBox::up-button {{
+            subcontrol-origin: border;
+            subcontrol-position: top right;
+            width: 18px;
+            border-left: 1px solid {t['border']};
+            border-top-right-radius: 7px;
+            background: {t['bg_card']};
+        }}
+        QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover {{
+            background: {t['bg_card_hover']};
+        }}
+        QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{
+            image: url("Assets/ui/arrow_up.png");
+            width: 7px;
+            height: 7px;
+        }}
+        QSpinBox::down-button, QDoubleSpinBox::down-button {{
+            subcontrol-origin: border;
+            subcontrol-position: bottom right;
+            width: 18px;
+            border-left: 1px solid {t['border']};
+            border-bottom-right-radius: 7px;
+            background: {t['bg_card']};
+        }}
+        QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {{
+            background: {t['bg_card_hover']};
+        }}
+        QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{
+            image: url("Assets/ui/arrow_down.png");
+            width: 7px;
+            height: 7px;
         }}
         
         /* Modern QComboBox styling without legacy Windows square drop button */
@@ -384,15 +456,13 @@ def generate_global_qss(theme_key=None):
             background: transparent;
         }}
         QComboBox::down-arrow {{
-            width: 0;
-            height: 0;
-            border-left: 5px solid transparent;
-            border-right: 5px solid transparent;
-            border-top: 6px solid {t['text_secondary']};
+            image: url("Assets/ui/arrow_down.png");
+            width: 14px;
+            height: 14px;
             margin-right: 8px;
         }}
         QComboBox::down-arrow:hover {{
-            border-top-color: {t['accent']};
+            image: url("Assets/ui/arrow_down.png");
         }}
         QComboBox QAbstractItemView {{ 
             background-color: {t['bg_secondary']}; 
@@ -429,62 +499,168 @@ def generate_global_qss(theme_key=None):
             border-radius: 4px;
         }}
 
-        /* General Buttons */
+        /* General Buttons (Pill-shaped, 3D gradient, outline-less) */
         QPushButton {{ 
-            background-color: {t['bg_input']}; 
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #322d4a, stop:1 #201a33); 
             color: {t['text_secondary']}; 
             font-weight: bold; 
-            border-radius: 10px; 
-            padding: 8px 16px; 
-            border: 1px solid {t['border']}; 
+            border-radius: 17px; 
+            padding: 8px 18px; 
+            border: 1px solid #363050; 
         }}
         QPushButton:hover {{ 
-            background-color: {t['bg_card_hover']}; 
-            border-color: {t['accent']}; 
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #423b61, stop:1 #292143); 
             color: {t['text_primary']};
+            border-color: #4e4470;
         }}
         QPushButton:pressed {{ 
-            background-color: {t['bg_tertiary']}; 
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #201a33, stop:1 #171326); 
+            border-color: #2a223e;
         }}
         QPushButton:checked {{ 
-            background-color: {t['accent']}; 
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f6cc97, stop:0.5 {t['accent']}, stop:1 #d69853); 
             color: {t['text_on_accent']}; 
-            border: 1px solid {t['accent_hover']}; 
+            border: 1px solid {t['accent']}; 
         }}
 
         /* Toggle Option Buttons (On/Off switches in RadioButtonGroup) */
         QPushButton#ToggleOptionButton {{ 
-            background-color: {t['bg_input']}; 
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #322d4a, stop:1 #201a33); 
             color: {t['text_secondary']}; 
             font-weight: bold; 
-            border-radius: 12px; 
-            padding: 8px; 
+            border-radius: 17px; 
+            padding: 8px 16px; 
             min-width: 90px; 
-            border: 1px solid {t['border']};
+            border: 1px solid #363050;
         }}
         QPushButton#ToggleOptionButton:hover {{ 
-            border: 1px solid {t['accent_hover']}; 
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #423b61, stop:1 #292143); 
+            border-color: #4e4470;
         }}
         QPushButton#ToggleOptionButton:checked {{ 
-            background-color: {t['accent']}; 
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f6cc97, stop:0.5 {t['accent']}, stop:1 #d69853); 
             color: {t['text_on_accent']}; 
-            border: 1px solid {t['accent_hover']}; 
+            border: 1px solid {t['accent']}; 
         }}
 
-        /* Accent Action Buttons */
-        QPushButton[accent="true"], QPushButton#ApplyButton, QPushButton#PrimaryButton {{ 
-            background-color: {t['accent']}; 
-            color: {t['text_on_accent']}; 
+        /* Installer Buttons (3D gold pill) */
+        QPushButton#InstallButton, QPushButton#BrowsePillButton {{ 
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f6cc97, stop:0.5 #e6b87d, stop:1 #d69853); 
+            color: #24180a; 
             font-weight: bold; 
-            border-radius: 10px; 
-            padding: 10px 20px; 
-            border: none;
+            border-radius: 18px; 
+            padding: 9px 22px; 
+            border: 1px solid #d69853;
+        }}
+        QPushButton#InstallButton:hover, QPushButton#BrowsePillButton:hover {{ 
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #fae0c2, stop:0.5 #f0c694, stop:1 #e0a362); 
+            color: #1a1005;
+            border-color: #e0a362;
+        }}
+        QPushButton#InstallButton:pressed, QPushButton#BrowsePillButton:pressed {{ 
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #d69853, stop:1 #b87a38); 
+            border-color: #b87a38;
+        }}
+
+        /* App & Dialog Primary Action Buttons (Glowing purple pill) */
+        QPushButton[accent="true"], QPushButton#ApplyButton, QPushButton#PrimaryButton {{ 
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #753aeb, stop:1 #9b51f5); 
+            color: #ffffff; 
+            font-size: 13px;
+            font-weight: bold; 
+            border-radius: 18px; 
+            padding: 10px 24px; 
+            min-height: 18px;
+            border: 1px solid #753aeb;
         }}
         QPushButton[accent="true"]:hover, QPushButton#ApplyButton:hover, QPushButton#PrimaryButton:hover {{ 
-            background-color: {t['accent_hover']}; 
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #864df2, stop:1 #ab69ff); 
+            color: #ffffff;
+            border-color: #864df2;
         }}
         QPushButton[accent="true"]:pressed, QPushButton#ApplyButton:pressed, QPushButton#PrimaryButton:pressed {{ 
-            background-color: {t['accent_pressed']}; 
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #5c24ce, stop:1 #7f3dd6); 
+            border-color: #5c24ce;
+        }}
+
+        /* Dialog Secondary / Close Action Buttons (Dark violet pill) */
+        QPushButton#SecondaryButton, QPushButton#CloseActionButton, QPushButton[secondary="true"] {{ 
+            background: #1e1b33; 
+            color: #dcdbe8; 
+            font-size: 13px;
+            font-weight: bold; 
+            border-radius: 18px; 
+            padding: 10px 22px; 
+            min-height: 18px;
+            border: 1px solid #3c345d;
+        }}
+        QPushButton#SecondaryButton:hover, QPushButton#CloseActionButton:hover, QPushButton[secondary="true"]:hover {{ 
+            background: #282444; 
+            color: #ffffff;
+            border-color: #584b80;
+        }}
+
+        /* Settings Dropdown Buttons (Gradient violet pill) */
+        QWidget#settings_dropdown_widget QPushButton {{
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #25203d, stop:1 #19152b);
+            color: #dcdbe8;
+            font-size: 13px;
+            font-weight: bold;
+            border-radius: 14px;
+            padding: 9px 16px;
+            border: 1px solid #322b4d;
+            text-align: center;
+        }}
+        QWidget#settings_dropdown_widget QPushButton:hover {{
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3c3361, stop:1 #261f42);
+            color: #ffffff;
+            border-color: #8c52ff;
+        }}
+        QWidget#settings_dropdown_widget QPushButton:pressed {{
+            background: #141124;
+        }}
+
+        /* Icon Grid Tile Buttons (Card squircles) */
+        QPushButton#IconGridButton {{
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #251f3d, stop:1 #19142b);
+            border: 1px solid #32284f;
+            border-radius: 14px;
+            padding: 3px;
+        }}
+        QPushButton#IconGridButton:hover {{
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3d2f66, stop:1 #271c47);
+            border-color: #8c52ff;
+        }}
+        QPushButton#IconGridButton:pressed {{
+            background: #141026;
+        }}
+
+        /* Checkboxes */
+        QCheckBox {{
+            color: {t['text_secondary']};
+            font-size: 13px;
+            font-weight: 500;
+            spacing: 8px;
+        }}
+        QCheckBox::indicator {{
+            width: 18px;
+            height: 18px;
+            border-radius: 5px;
+            border: 1.5px solid #3d3562;
+            background-color: #161427;
+        }}
+        QCheckBox::indicator:hover {{
+            border-color: #7b52c4;
+        }}
+        QCheckBox::indicator:checked {{
+            background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #753aeb, stop:1 #9b51f5);
+            border: none;
+            image: url("Assets/ui/check.png");
+        }}
+        QCheckBox#InstallerShortcutCheckbox::indicator:checked {{
+            background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f6cc97, stop:1 #d69853);
+            border: none;
+            image: url("Assets/ui/check_dark.png");
         }}
 
         /* Tab Widgets (Pill shaped modern tabs) */

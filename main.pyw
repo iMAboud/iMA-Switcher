@@ -17,36 +17,31 @@ from PyQt5.QtWidgets import (
     QMainWindow,
     QWidget,
     QVBoxLayout,
-    QHBoxLayout,
-    QLabel,
     QMessageBox,
     QScrollArea,
     QGridLayout,
-    QDesktopWidget,
     QMenu,
     QAction,
     QDialog,
-    QGraphicsDropShadowEffect,
 )
-from PyQt5.QtGui import QIcon, QPixmap, QPainter, QFont, QColor, QImage
-from PyQt5.QtCore import Qt, QSize, QPoint, pyqtSignal, QTimer, QObject, QRunnable, QThreadPool
+from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor
+from PyQt5.QtCore import Qt, QSize, pyqtSignal, QTimer, QObject, QRunnable, QThreadPool
 
 from game_switcher import GameSwitcher
 from ui_components import (
     CustomTitleBar,
     AccountWidget,
-    HoverButton,
-    SettingsDialog,
     SettingsDropdownMenu,
     LaunchNotificationWidget,
     InstallerDialog, 
     GameSelectionDialog,
-    RiotClientNotFoundDialog
+    RiotClientNotFoundDialog,
+    get_asset_path
 )
 from game_switcher import CustomUpdateEvent
 from actions_settings import SettingsActions
 from actions_context import ContextActions
-from theme_manager import apply_theme_to_app, set_active_theme
+from theme_manager import apply_theme_to_app
 
 class IconLoaderSignals(QObject):
     finished = pyqtSignal(str, QIcon)
@@ -125,16 +120,11 @@ def run_update_installer():
         destination_assets_path = target_dir_p / "Assets"
         if source_assets_path.exists():
             shutil.copytree(source_assets_path, destination_assets_path, dirs_exist_ok=True)
-
-        source_maps_path = Path(sys._MEIPASS if getattr(sys, 'frozen', False) else Path(__file__).parent) / "maps"
-        destination_maps_path = target_dir_p / "maps"
-        if source_maps_path.exists():
-            shutil.copytree(source_maps_path, destination_maps_path, dirs_exist_ok=True)
     except Exception as err:
         logging.error(f"Failed to update files in target directory: {err}")
 
     try:
-        creationflags = 0x00000008 | 0x00000200 if os.name == 'nt' else 0  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+        creationflags = (0x00000008 | 0x00000200) if os.name == 'nt' else 0  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
         subprocess.Popen(
             [str(destination_exe_path)],
             cwd=str(target_dir_p),
@@ -146,8 +136,20 @@ def run_update_installer():
     sys.exit(0)
 
 def run_installer():
+    if sys.platform == "win32":
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("iMAboud.iMASwitcher.Installer")
+        except Exception:
+            pass
     app = QApplication(sys.argv)
     apply_theme_to_app(app)
+
+    logo_path = get_asset_path("app_icon.png")
+    if not os.path.exists(logo_path):
+        logo_path = get_asset_path("logo.png")
+    if os.path.exists(logo_path):
+        app.setWindowIcon(QIcon(logo_path))
+
     dialog = InstallerDialog()
     if dialog.exec_() == QDialog.Accepted:
         install_path = dialog.get_install_path()
@@ -165,11 +167,6 @@ def run_installer():
                 destination_assets_path = install_path_p / "Assets"
                 if source_assets_path.exists():
                     shutil.copytree(source_assets_path, destination_assets_path, dirs_exist_ok=True)
-
-                source_maps_path = Path(sys._MEIPASS if getattr(sys, 'frozen', False) else Path(__file__).parent) / "maps"
-                destination_maps_path = install_path_p / "maps"
-                if source_maps_path.exists():
-                    shutil.copytree(source_maps_path, destination_maps_path, dirs_exist_ok=True)
 
                 riot_games_exe_path = dialog.get_riot_games_path()
                 switcher_instance = GameSwitcher(base_directory=install_path)
@@ -247,7 +244,7 @@ class ModernValorantSwitcher(QMainWindow):
 
         self.switcher = GameSwitcher()
         ui_settings = self.switcher.get_ima_config().get("ui_settings", {})
-        saved_theme = ui_settings.get("theme", "dark_gold")
+        saved_theme = ui_settings.get("theme", "midnight_gold")
         apply_theme_to_app(self, saved_theme)
 
         if not self.switcher.is_admin():
@@ -298,9 +295,10 @@ class ModernValorantSwitcher(QMainWindow):
 
     def init_ui(self):
         self.setWindowTitle("iMA Switcher")
-        self.setWindowIcon(self.switcher.get_qicon_from_path(str(self.switcher.base_dir / "logo.png")))
+        self.setWindowIcon(self.switcher.get_qicon_from_path(str(self.switcher.base_dir / "Assets" / "logo.png")))
 
         self.main_widget = QWidget(objectName="main_widget")
+        self.main_widget.setAttribute(Qt.WA_StyledBackground, True)
         self.setCentralWidget(self.main_widget)
 
         main_layout = QVBoxLayout(self.main_widget)
@@ -614,56 +612,59 @@ class ModernValorantSwitcher(QMainWindow):
         }
         
         set_rank_menu = self._create_styled_menu("Set Rank")
-        set_rank_menu.setIcon(self.switcher.get_qicon_from_path(str(Path(__file__).parent / "Assets" / "radiant.png")))
+        radiant_path = get_asset_path("radiant.png")
+        if radiant_path and os.path.exists(radiant_path):
+            set_rank_menu.setIcon(self.switcher.get_qicon_from_path(radiant_path))
 
-        unranked_icon_path = Path(__file__).parent / "Assets" / "unranked.png"
+        unranked_icon_path = get_asset_path("unranked.png")
         unranked_action = QAction("Unranked", self)
-        if unranked_icon_path.exists():
-            unranked_action.setIcon(self.switcher.get_qicon_from_path(str(unranked_icon_path)))
+        if unranked_icon_path and os.path.exists(unranked_icon_path):
+            unranked_action.setIcon(self.switcher.get_qicon_from_path(unranked_icon_path))
         unranked_action.triggered.connect(lambda checked, r="Unranked": self.context_handler.set_rank(r))
         set_rank_menu.addAction(unranked_action)
 
         ranks_with_tiers = ["Iron", "Bronze", "Silver", "Gold", "Platinum", "Diamond", "Ascendant", "Immortal"]
         for rank_name in ranks_with_tiers:
             rank_tier_menu = self._create_styled_menu(rank_name)
-            first_tier_icon_path = Path(__file__).parent / "Assets" / f"{rank_name.lower()}_1.png"
-            if first_tier_icon_path.exists():
-                rank_tier_menu.setIcon(self.switcher.get_qicon_from_path(str(first_tier_icon_path)))
+            first_tier_icon_path = get_asset_path(f"{rank_name.lower()}_1.png")
+            if first_tier_icon_path and os.path.exists(first_tier_icon_path):
+                rank_tier_menu.setIcon(self.switcher.get_qicon_from_path(first_tier_icon_path))
             
             for i in range(1, 4):
                 full_rank_name = f"{rank_name} {i}"
-                rank_icon_path = Path(__file__).parent / "Assets" / f"{rank_name.lower()}_{i}.png"
+                rank_icon_path = get_asset_path(f"{rank_name.lower()}_{i}.png")
                 
                 action = QAction(full_rank_name, self)
-                if rank_icon_path.exists():
-                    action.setIcon(self.switcher.get_qicon_from_path(str(rank_icon_path)))
+                if rank_icon_path and os.path.exists(rank_icon_path):
+                    action.setIcon(self.switcher.get_qicon_from_path(rank_icon_path))
                 action.triggered.connect(lambda checked, r=full_rank_name: self.context_handler.set_rank(r))
                 rank_tier_menu.addAction(action)
             set_rank_menu.addMenu(rank_tier_menu)
 
-        radiant_icon_path = Path(__file__).parent / "Assets" / "radiant.png"
+        radiant_icon_path = get_asset_path("radiant.png")
         radiant_action = QAction("Radiant", self)
-        if radiant_icon_path.exists():
-            radiant_action.setIcon(self.switcher.get_qicon_from_path(str(radiant_icon_path)))
+        if radiant_icon_path and os.path.exists(radiant_icon_path):
+            radiant_action.setIcon(self.switcher.get_qicon_from_path(radiant_icon_path))
         radiant_action.triggered.connect(lambda checked, r="Radiant": self.context_handler.set_rank(r))
         set_rank_menu.addAction(radiant_action)
 
         menu.addMenu(set_rank_menu)
         
         change_game_menu = self._create_styled_menu("Change Game")
-        change_game_menu.setIcon(self.switcher.get_qicon_from_path(str(Path(__file__).parent / "Assets" / "Riot.png")))
-        valorant_icon_path = Path(__file__).parent / "Assets" / "valorant.png"
-        lol_icon_path = Path(__file__).parent / "Assets" / "lol.png"
+        riot_icon_path = get_asset_path("Riot.png")
+        if riot_icon_path and os.path.exists(riot_icon_path):
+            change_game_menu.setIcon(self.switcher.get_qicon_from_path(riot_icon_path))
+        valorant_icon_path = get_asset_path("valorant.png")
+        lol_icon_path = get_asset_path("lol.png")
         
-        if valorant_icon_path.exists():
-            change_game_menu.addAction(QAction(self.switcher.get_qicon_from_path(str(valorant_icon_path)), "Valorant", self, triggered=lambda: self.context_handler.change_game('valorant')))
+        if valorant_icon_path and os.path.exists(valorant_icon_path):
+            change_game_menu.addAction(QAction(self.switcher.get_qicon_from_path(valorant_icon_path), "Valorant", self, triggered=lambda: self.context_handler.change_game('valorant')))
 
-        if lol_icon_path.exists():
-            change_game_menu.addAction(QAction(self.switcher.get_qicon_from_path(str(lol_icon_path)), "League of Legends", self, triggered=lambda: self.context_handler.change_game('lol')))
+        if lol_icon_path and os.path.exists(lol_icon_path):
+            change_game_menu.addAction(QAction(self.switcher.get_qicon_from_path(lol_icon_path), "League of Legends", self, triggered=lambda: self.context_handler.change_game('lol')))
 
-        riot_icon_path = Path(__file__).parent / "Assets" / "Riot.png"
-        if riot_icon_path.exists():
-            change_game_menu.addAction(QAction(self.switcher.get_qicon_from_path(str(riot_icon_path)), "Both", self, triggered=lambda: self.context_handler.change_game('both')))
+        if riot_icon_path and os.path.exists(riot_icon_path):
+            change_game_menu.addAction(QAction(self.switcher.get_qicon_from_path(riot_icon_path), "Both", self, triggered=lambda: self.context_handler.change_game('both')))
 
         menu.addMenu(change_game_menu)
         menu.addSeparator()
@@ -672,9 +673,9 @@ class ModernValorantSwitcher(QMainWindow):
         for text, data in actions.items():
             if text:
                 func, icon_name = data
-                icon_path = Path(__file__).parent / "Assets" / icon_name
-                if icon_path.exists():
-                    menu.addAction(QAction(self.switcher.get_qicon_from_path(str(icon_path)), text, self, triggered=func))
+                icon_path = get_asset_path(icon_name)
+                if icon_path and os.path.exists(icon_path):
+                    menu.addAction(QAction(self.switcher.get_qicon_from_path(icon_path), text, self, triggered=func))
                 else:
                     menu.addAction(QAction(text, self, triggered=func))
         menu.exec_(pos)
@@ -783,6 +784,11 @@ def _handle_game_selection_standalone(switcher, account_name, game, pixmap):
 
 
 def main():
+    if sys.platform == "win32":
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("iMAboud.iMASwitcher.App")
+        except Exception:
+            pass
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
     

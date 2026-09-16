@@ -1,5 +1,4 @@
 import sys
-import os
 import math
 from pathlib import Path
 from PyQt5.QtWidgets import (
@@ -17,19 +16,10 @@ from PyQt5.QtWidgets import (
     QGraphicsView,
     QGraphicsScene,
     QGraphicsItem,
-    QGraphicsPixmapItem,
-    QGraphicsEllipseItem,
-    QGraphicsLineItem,
-    QGraphicsPathItem,
     QGraphicsTextItem,
-    QGraphicsDropShadowEffect,
     QMenu,
-    QAction,
-    QSlider,
     QLineEdit,
     QButtonGroup,
-    QDialog,
-    QMessageBox
 )
 from PyQt5.QtGui import (
     QIcon,
@@ -41,8 +31,6 @@ from PyQt5.QtGui import (
     QBrush,
     QPainterPath,
     QPolygonF,
-    QCursor,
-    QTransform,
     QImage
 )
 from PyQt5.QtCore import (
@@ -51,12 +39,16 @@ from PyQt5.QtCore import (
     QPoint,
     QPointF,
     QRectF,
-    pyqtSignal,
     QTimer
 )
 
 from ui_components import PopupDialog
-from theme_manager import get_theme, generate_global_qss, apply_theme_to_app
+from theme_manager import apply_theme_to_app
+
+def _get_base_dir():
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        return Path(sys._MEIPASS).resolve()
+    return Path(__file__).parent.resolve()
 
 class AgentTokenItem(QGraphicsItem):
     def __init__(self, agent_name, pixmap, team="attacker", radius=22):
@@ -150,9 +142,9 @@ class AgentTokenItem(QGraphicsItem):
     def contextMenuEvent(self, event):
         menu = QMenu()
         menu.setStyleSheet("""
-            QMenu { background-color: #2c2a2b; color: #e0d6d1; border: 1px solid #c89f68; border-radius: 8px; padding: 4px; }
-            QMenu::item { padding: 6px 20px 6px 10px; border-radius: 6px; }
-            QMenu::item:selected { background-color: #c89f68; color: #2c2a2b; font-weight: bold; }
+            QMenu { background-color: #161427; color: #dcdbe8; border: 1px solid #28243e; border-radius: 12px; padding: 4px; }
+            QMenu::item { padding: 6px 20px 6px 10px; border-radius: 8px; }
+            QMenu::item:selected { background-color: #8c52ff; color: #ffffff; font-weight: bold; }
         """)
 
         switch_team_act = menu.addAction("Switch to Defender" if self.team == "attacker" else "Switch to Attacker")
@@ -438,14 +430,12 @@ class MapGraphicsView(QGraphicsView):
 class MapPlannerWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.base_dir = Path(__file__).parent.resolve()
-        self.maps_dir = self.base_dir / "maps" / "maps planner"
+        self.base_dir = _get_base_dir()
+        self.maps_dir = self.base_dir / "Assets" / "maps" / "maps planner"
         if not self.maps_dir.exists():
-            self.maps_dir = self.base_dir / "maps"
+            self.maps_dir = self.base_dir / "Assets" / "maps"
 
-        self.agents_dir = self.base_dir / "Agents"
-        if not self.agents_dir.exists():
-            self.agents_dir = self.base_dir / "icons"
+        self.agents_dir = self.base_dir / "Assets" / "agents"
 
         self.scene = QGraphicsScene(self)
         self.map_pixmap_item = None
@@ -469,19 +459,19 @@ class MapPlannerWidget(QWidget):
 
         # Map Selector Group
         map_card = QWidget()
-        map_card.setStyleSheet("background-color: #242122; border: 1px solid #4a4647; border-radius: 12px; padding: 6px;")
+        map_card.setStyleSheet("background-color: #161427; border: 1px solid #28243e; border-radius: 14px; padding: 6px;")
         map_card_layout = QVBoxLayout(map_card)
         map_card_layout.setSpacing(6)
         
         map_header = QLabel("SELECT MAP")
-        map_header.setStyleSheet("color: #c89f68; font-size: 11px; font-weight: bold; border: none; padding: 0;")
+        map_header.setStyleSheet("color: #8c52ff; font-size: 11px; font-weight: bold; border: none; padding: 0;")
         map_card_layout.addWidget(map_header)
 
         self.map_combo = QComboBox()
         self.map_combo.setStyleSheet("""
-            QComboBox { background-color: #353233; color: #ffffff; border: 1px solid #4a4647; border-radius: 8px; padding: 6px 12px; font-weight: bold; }
+            QComboBox { background-color: #1a162e; color: #ffffff; border: 1px solid #28243e; border-radius: 10px; padding: 6px 12px; font-weight: bold; }
             QComboBox::drop-down { border: none; width: 24px; }
-            QComboBox QAbstractItemView { background-color: #2c2a2b; color: #e0d6d1; selection-background-color: #c89f68; selection-color: #2c2a2b; border: 1px solid #4a4647; }
+            QComboBox QAbstractItemView { background-color: #161427; color: #dcdbe8; selection-background-color: #8c52ff; selection-color: #ffffff; border: 1px solid #28243e; }
         """)
         self.map_combo.currentIndexChanged.connect(self.on_map_changed)
         map_card_layout.addWidget(self.map_combo)
@@ -489,12 +479,12 @@ class MapPlannerWidget(QWidget):
 
         # Tools Palette Group
         tools_card = QWidget()
-        tools_card.setStyleSheet("background-color: #242122; border: 1px solid #4a4647; border-radius: 12px; padding: 6px;")
+        tools_card.setStyleSheet("background-color: #161427; border: 1px solid #28243e; border-radius: 14px; padding: 6px;")
         tools_card_layout = QVBoxLayout(tools_card)
         tools_card_layout.setSpacing(6)
 
         tools_header = QLabel("TACTICAL TOOLS")
-        tools_header.setStyleSheet("color: #c89f68; font-size: 11px; font-weight: bold; border: none; padding: 0;")
+        tools_header.setStyleSheet("color: #8c52ff; font-size: 11px; font-weight: bold; border: none; padding: 0;")
         tools_card_layout.addWidget(tools_header)
 
         tools_grid = QGridLayout()
@@ -513,9 +503,9 @@ class MapPlannerWidget(QWidget):
         ]
 
         button_style = """
-            QPushButton { background-color: #353233; color: #e0d6d1; border: 1px solid #4a4647; border-radius: 8px; padding: 6px; font-size: 11px; font-weight: bold; }
-            QPushButton:hover { background-color: #4a4647; border-color: #c89f68; }
-            QPushButton:checked { background-color: #c89f68; color: #2c2a2b; border-color: #d9b68b; }
+            QPushButton { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #25203d, stop:1 #19152b); color: #dcdbe8; border: 1px solid #322b4d; border-radius: 12px; padding: 6px; font-size: 11px; font-weight: bold; }
+            QPushButton:hover { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3c3361, stop:1 #261f42); border-color: #8c52ff; color: #ffffff; }
+            QPushButton:checked { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #753aeb, stop:1 #9b51f5); color: #ffffff; border: 1px solid #753aeb; }
         """
 
         self.tools_btn_group = QButtonGroup(self)
@@ -563,13 +553,13 @@ class MapPlannerWidget(QWidget):
 
         # Agent Palette Group
         agents_card = QWidget()
-        agents_card.setStyleSheet("background-color: #242122; border: 1px solid #4a4647; border-radius: 12px; padding: 6px;")
+        agents_card.setStyleSheet("background-color: #161427; border: 1px solid #28243e; border-radius: 14px; padding: 6px;")
         agents_card_layout = QVBoxLayout(agents_card)
         agents_card_layout.setSpacing(6)
 
         agent_header_layout = QHBoxLayout()
         agent_header = QLabel("AGENT ROSTER")
-        agent_header.setStyleSheet("color: #c89f68; font-size: 11px; font-weight: bold; border: none;")
+        agent_header.setStyleSheet("color: #8c52ff; font-size: 11px; font-weight: bold; border: none;")
         agent_header_layout.addWidget(agent_header)
         agent_header_layout.addStretch()
 
@@ -604,14 +594,14 @@ class MapPlannerWidget(QWidget):
 
         self.agent_search = QLineEdit()
         self.agent_search.setPlaceholderText("Search agent...")
-        self.agent_search.setStyleSheet("background-color: #353233; color: #ffffff; border: 1px solid #4a4647; border-radius: 6px; padding: 4px 8px; font-size: 11px;")
+        self.agent_search.setStyleSheet("background-color: #1a162e; color: #ffffff; border: 1px solid #28243e; border-radius: 8px; padding: 5px 8px; font-size: 11px;")
         self.agent_search.textChanged.connect(self.filter_agents)
         agents_card_layout.addWidget(self.agent_search)
 
         # Scrollable Agents Grid
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; } QScrollBar { width: 4px; background: transparent; } QScrollBar::handle { background: #4a4647; border-radius: 2px; }")
+        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; } QScrollBar { width: 4px; background: transparent; } QScrollBar::handle { background: #322b4d; border-radius: 2px; }")
         
         self.agents_grid_widget = QWidget()
         self.agents_grid = QGridLayout(self.agents_grid_widget)
@@ -628,17 +618,16 @@ class MapPlannerWidget(QWidget):
 
         clear_btn = QPushButton("Clear All")
         clear_btn.setStyleSheet("""
-            QPushButton { background-color: #ef4444; color: #ffffff; font-weight: bold; font-size: 11px; border-radius: 8px; padding: 8px; border: none; }
-            QPushButton:hover { background-color: #f87171; }
+            QPushButton { background-color: #ef4444; color: #ffffff; font-weight: bold; font-size: 11px; border-radius: 18px; padding: 8px 16px; border: 1px solid #ef4444; }
+            QPushButton:hover { background-color: #f87171; border-color: #f87171; }
         """)
+        clear_btn.setFixedHeight(36)
         clear_btn.clicked.connect(self.clear_drawings)
         actions_layout.addWidget(clear_btn)
 
         export_btn = QPushButton("Export PNG")
-        export_btn.setStyleSheet("""
-            QPushButton { background-color: #c89f68; color: #2c2a2b; font-weight: bold; font-size: 11px; border-radius: 8px; padding: 8px; border: none; }
-            QPushButton:hover { background-color: #d9b68b; }
-        """)
+        export_btn.setObjectName("ApplyButton")
+        export_btn.setFixedHeight(36)
         export_btn.clicked.connect(self.export_map_image)
         actions_layout.addWidget(export_btn)
 
@@ -795,7 +784,7 @@ class MapPlannerTitleBar(QWidget):
         layout.setContentsMargins(12, 0, 12, 0)
         layout.setSpacing(10)
 
-        base_dir = Path(__file__).parent.resolve()
+        base_dir = _get_base_dir()
         logo_path = base_dir / "Assets" / "app_icon.png"
         if not logo_path.exists():
             logo_path = base_dir / "app_icon.png"
@@ -807,44 +796,28 @@ class MapPlannerTitleBar(QWidget):
         layout.addWidget(self.logo_label)
 
         title_label = QLabel(title)
-        title_label.setStyleSheet("color: #c89f68; font-size: 14px; font-weight: bold; letter-spacing: 0.5px;")
+        title_label.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: bold; letter-spacing: 0.5px;")
         layout.addWidget(title_label)
 
         layout.addStretch()
 
-        self.minimize_button = QPushButton()
+        self.minimize_button = QPushButton("—")
+        self.minimize_button.setObjectName("HeaderButton")
         self.minimize_button.setFixedSize(30, 30)
-        minimize_icon_path = base_dir / "Assets" / "minimize.png"
-        if minimize_icon_path.exists():
-            self.minimize_button.setIcon(QIcon(str(minimize_icon_path)))
-            self.minimize_button.setIconSize(QSize(16, 16))
-        else:
-            self.minimize_button.setText("—")
-        self.minimize_button.setStyleSheet("""
-            QPushButton {
-                background-color: #353233; color: #e0d6d1; border: 1px solid #4a4647;
-                border-radius: 15px; font-size: 14px; font-weight: bold;
-            }
-            QPushButton:hover { background-color: #4a4647; border-color: #c89f68; }
-        """)
         self.minimize_button.clicked.connect(self.parent_window.showMinimized)
         layout.addWidget(self.minimize_button)
 
         self.close_button = QPushButton()
+        self.close_button.setObjectName("CloseButton")
         self.close_button.setFixedSize(30, 30)
-        x_icon_path = base_dir / "Assets" / "x.png"
+        x_icon_path = base_dir / "Assets" / "ui" / "x.png"
+        if not x_icon_path.exists():
+            x_icon_path = base_dir / "Assets" / "x.png"
         if x_icon_path.exists():
             self.close_button.setIcon(QIcon(str(x_icon_path)))
             self.close_button.setIconSize(QSize(14, 14))
         else:
             self.close_button.setText("✕")
-        self.close_button.setStyleSheet("""
-            QPushButton {
-                background-color: #353233; color: #e0d6d1; border: 1px solid #4a4647;
-                border-radius: 15px; font-size: 13px; font-weight: bold;
-            }
-            QPushButton:hover { background-color: #e84057; color: #ffffff; border-color: #e84057; }
-        """)
         self.close_button.clicked.connect(self.parent_window.close)
         layout.addWidget(self.close_button)
 
@@ -868,13 +841,7 @@ class MapPlannerWindow(QMainWindow):
 
         container = QWidget()
         container.setObjectName("container")
-        container.setStyleSheet("""
-            QWidget#container {
-                background-color: #1c1a1b;
-                border: 1px solid #c89f68;
-                border-radius: 16px;
-            }
-        """)
+        container.setAttribute(Qt.WA_StyledBackground, True)
 
         layout = QVBoxLayout(container)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -897,13 +864,8 @@ class MapPlannerDialog(PopupDialog):
         self.content_layout.addWidget(self.planner_widget)
 
         close_btn = QPushButton("Close")
-        close_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #4a4647; color: #e0d6d1; font-weight: bold; font-size: 12px;
-                border-radius: 8px; padding: 8px 22px; border: 1px solid #6b6365;
-            }
-            QPushButton:hover { background-color: #5a5556; border-color: #c89f68; }
-        """)
+        close_btn.setObjectName("SecondaryButton")
+        close_btn.setFixedHeight(38)
         close_btn.clicked.connect(self.close)
 
         btn_layout = QHBoxLayout()

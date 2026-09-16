@@ -7,10 +7,12 @@ from pathlib import Path
 
 import re
 
-try:
-    import requests
-except ImportError:
-    requests = None
+import urllib.request
+import urllib.error
+import ssl
+import json
+
+from game_switcher import _SimpleHTTPResponse as _SimpleResponse
 
 GITHUB_REPO = "iMAboud/iMA-Switcher"
 COMMIT_URL = f"https://api.github.com/repos/{GITHUB_REPO}/commits/main"
@@ -45,12 +47,10 @@ def cleanup_old_exe():
 RELEASES_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 
 def resolve_download_url():
-    if requests is None:
-        return EXE_DOWNLOAD_URL, 0
     try:
         headers = {"User-Agent": "iMA-Switcher-App"}
-        res = requests.get(RELEASES_URL, headers=headers, timeout=5)
-        if res.status_code == 200:
+        res = _safe_get(RELEASES_URL, headers=headers, timeout=5)
+        if res and res.status_code == 200:
             data = res.json()
             for asset in data.get("assets", []):
                 if asset.get("name", "").endswith(".exe"):
@@ -75,21 +75,19 @@ def is_newer_version(remote_ver, local_ver):
     return parse(remote_ver) > parse(local_ver)
 
 def _safe_get(url, headers=None, timeout=6):
-    if requests is None:
-        return None
+    req = urllib.request.Request(url, headers=headers or {})
     try:
-        res = requests.get(url, headers=headers, timeout=timeout)
-        if res.status_code == 200:
-            return res
+        resp = urllib.request.urlopen(req, timeout=timeout)
+        return _SimpleResponse(resp)
     except Exception as error:
         logging.warning(f"Primary request failed for {url}: {error}")
 
     try:
-        import urllib3
-        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        res = requests.get(url, headers=headers, timeout=timeout, verify=False)
-        if res.status_code == 200:
-            return res
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        resp = urllib.request.urlopen(req, timeout=timeout, context=ctx)
+        return _SimpleResponse(resp)
     except Exception as error:
         logging.warning(f"Fallback SSL request failed for {url}: {error}")
     
@@ -102,15 +100,12 @@ def check_for_app_update(local_version=None):
     """
     res_dict = {
         "has_update": False,
-        "version": str(local_version or "1.0.26"),
+        "version": str(local_version or "1.0.38"),
         "url": EXE_DOWNLOAD_URL,
         "notes": "No release notes available.",
         "size": 0,
         "error": None
     }
-    if requests is None:
-        res_dict["error"] = "Requests library unavailable"
-        return res_dict
 
     headers = {"User-Agent": "iMA-Switcher-App", "Accept": "application/vnd.github.v3+json"}
     
@@ -148,9 +143,6 @@ def check_for_commit_update(local_version=None):
     return res["has_update"], get_current_commit(), res["version"], res["url"], res["notes"], res["size"]
 
 def download_and_apply_update(download_url=EXE_DOWNLOAD_URL, progress_callback=None):
-    if requests is None:
-        return False, "Requests library unavailable"
-
     current_exe = Path(sys.executable) if getattr(sys, 'frozen', False) else Path(__file__).parent / "iMA Switcher.exe"
     temp_installer = current_exe.parent / "iMA_Switcher_Update.exe"
 
@@ -162,14 +154,18 @@ def download_and_apply_update(download_url=EXE_DOWNLOAD_URL, progress_callback=N
                 pass
 
         res = None
+        req = urllib.request.Request(download_url, headers={"User-Agent": "iMA-Switcher-App"})
         try:
-            res = requests.get(download_url, stream=True, timeout=30)
+            raw_resp = urllib.request.urlopen(req, timeout=30)
+            res = _SimpleResponse(raw_resp)
             res.raise_for_status()
         except Exception as ssl_err:
             logging.warning(f"Standard download failed, trying SSL fallback: {ssl_err}")
-            import urllib3
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-            res = requests.get(download_url, stream=True, timeout=30, verify=False)
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            raw_resp = urllib.request.urlopen(req, timeout=30, context=ctx)
+            res = _SimpleResponse(raw_resp)
             res.raise_for_status()
 
         total_bytes = int(res.headers.get('content-length', 0))
@@ -187,7 +183,7 @@ def download_and_apply_update(download_url=EXE_DOWNLOAD_URL, progress_callback=N
             install_dir = str(current_exe.parent)
             main_pid = str(os.getpid())
 
-            creationflags = 0x00000008 | 0x00000200 if os.name == 'nt' else 0  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+            creationflags = (0x00000008 | 0x00000200) if os.name == 'nt' else 0  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
             subprocess.Popen(
                 [str(temp_installer), "--update", "--pid", main_pid, "--target-dir", install_dir],
                 cwd=install_dir,

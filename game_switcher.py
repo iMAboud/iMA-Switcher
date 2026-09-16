@@ -3,9 +3,9 @@ import shutil
 import subprocess
 import json
 import ctypes
+from ctypes import wintypes
 import sys
 import threading
-import psutil
 import copy
 import logging
 from zipfile import ZipFile, BadZipFile
@@ -16,12 +16,16 @@ import time
 import tempfile
 import hashlib
 import winreg
-import pywintypes # For COM errors
+import urllib.request
+import urllib.error
+import ssl
+import struct
 from pathlib import Path
 from PyQt5.QtWidgets import QApplication
-from PyQt5.QtCore import QEvent
+from PyQt5.QtCore import QEvent, QBuffer, QIODevice
+from PyQt5.QtGui import QImage
 
-APP_VERSION = "1.0.35"
+APP_VERSION = "1.0.38"
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -32,19 +36,259 @@ class CustomUpdateEvent(QEvent):
         super().__init__(CustomUpdateEvent.EVENT_TYPE)
         self.account_name = account_name
 
-try:
-    import requests
-except ImportError:
-    requests = None
-    logging.warning("'requests' library not installed. Rank fetching will not work. Please install it with 'pip install requests'")
-try:
-    from PIL import Image, UnidentifiedImageError
-except ImportError:
-    Image = None
-    UnidentifiedImageError = None # Define it as None if PIL is not available
-    logging.warning("Pillow not installed. Image conversion for icons will not work. Please install it with 'pip install Pillow'")
+class ConfigValidationError(Exception):
+    def __init__(self, message):
+        super().__init__(message)
+        self.message = message
 
-from jsonschema import validate, ValidationError
+def _validate_config(instance, schema):
+    def _check_type(val, expected):
+        if isinstance(expected, list):
+            return any(_check_type(val, t) for t in expected)
+        if expected == "string":
+            return isinstance(val, str)
+        if expected == "boolean":
+            return isinstance(val, bool)
+        if expected == "integer":
+            return isinstance(val, int) and not isinstance(val, bool)
+        if expected == "number":
+            return isinstance(val, (int, float)) and not isinstance(val, bool)
+        if expected == "array":
+            return isinstance(val, list)
+        if expected == "object":
+            return isinstance(val, dict)
+        if expected == "null":
+            return val is None
+        return True
+
+    def _validate_node(val, sub_schema, path=""):
+        expected_type = sub_schema.get("type")
+        if expected_type and not _check_type(val, expected_type):
+            raise ConfigValidationError(f"Invalid type at '{path}': expected {expected_type}, got {type(val).__name__}")
+        
+        if isinstance(val, dict):
+            required = sub_schema.get("required", [])
+            for r in required:
+                if r not in val:
+                    raise ConfigValidationError(f"Missing required property '{r}' at '{path}'")
+            props = sub_schema.get("properties", {})
+            for k, v in val.items():
+                if k in props:
+                    _validate_node(v, props[k], f"{path}.{k}" if path else k)
+        elif isinstance(val, list):
+            items_schema = sub_schema.get("items")
+            if items_schema:
+                for i, item in enumerate(val):
+                    _validate_node(item, items_schema, f"{path}[{i}]")
+
+    _validate_node(instance, schema)
+
+class _SimpleHTTPResponse:
+    def __init__(self, raw_resp):
+        self._raw = raw_resp
+        self.status_code = getattr(raw_resp, 'status', getattr(raw_resp, 'code', 200))
+        self.headers = getattr(raw_resp, 'headers', {})
+        self._content = None
+
+    @property
+    def content(self):
+        if self._content is None:
+            self._content = self._raw.read()
+        return self._content
+
+    @property
+    def text(self):
+        return self.content.decode('utf-8', errors='replace')
+
+    def json(self):
+        return json.loads(self.text)
+
+    def raise_for_status(self):
+        if 400 <= self.status_code < 600:
+            raise urllib.error.HTTPError(getattr(self._raw, 'url', ''), self.status_code, "HTTP Error", self.headers, None)
+
+    def iter_content(self, chunk_size=65536):
+        while True:
+            chunk = self._raw.read(chunk_size)
+            if not chunk:
+                break
+            yield chunk
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        try:
+            self._raw.close()
+        except Exception:
+            pass
+
+def _simple_http_get(url, headers=None, timeout=10):
+    req = urllib.request.Request(url, headers=headers or {})
+    try:
+        resp = urllib.request.urlopen(req, timeout=timeout)
+        return _SimpleHTTPResponse(resp)
+    except urllib.error.HTTPError as e:
+        r = _SimpleHTTPResponse(e)
+        r.status_code = e.code
+        return r
+
+if sys.platform == "win32":
+    class PROCESSENTRY32(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD),
+            ("cntUsage", wintypes.DWORD),
+            ("th32ProcessID", wintypes.DWORD),
+            ("th32DefaultHeapID", ctypes.c_void_p),
+            ("th32ModuleID", wintypes.DWORD),
+            ("cntThreads", wintypes.DWORD),
+            ("th32ParentProcessID", wintypes.DWORD),
+            ("pcPriClassBase", ctypes.c_long),
+            ("dwFlags", wintypes.DWORD),
+            ("szExeFile", ctypes.c_char * 260),
+        ]
+else:
+    PROCESSENTRY32 = None
+
+def _get_running_process_names():
+    if not PROCESSENTRY32 or sys.platform != "win32":
+        return set()
+    TH32CS_SNAPPROCESS = 0x00000002
+
+    kernel32 = ctypes.windll.kernel32
+    h_snap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    names = set()
+    pe = PROCESSENTRY32()
+    pe.dwSize = ctypes.sizeof(PROCESSENTRY32)
+    if kernel32.Process32First(h_snap, ctypes.byref(pe)):
+        while True:
+            names.add(pe.szExeFile.decode('utf-8', errors='ignore'))
+            if not kernel32.Process32Next(h_snap, ctypes.byref(pe)):
+                break
+    kernel32.CloseHandle(h_snap)
+    return names
+
+def _terminate_processes_by_names(target_names):
+    """Terminates processes matching any target_names using Win32 API directly."""
+    if not target_names or not PROCESSENTRY32 or sys.platform != "win32":
+        return
+    TH32CS_SNAPPROCESS = 0x00000002
+    PROCESS_TERMINATE = 0x0001
+
+    kernel32 = ctypes.windll.kernel32
+    target_names_lower = {name.lower() for name in target_names}
+    h_snap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    if not h_snap or h_snap == -1:
+        return
+
+    pe = PROCESSENTRY32()
+    pe.dwSize = ctypes.sizeof(PROCESSENTRY32)
+    pids_to_kill = []
+    if kernel32.Process32First(h_snap, ctypes.byref(pe)):
+        while True:
+            exe_name = pe.szExeFile.decode('utf-8', errors='ignore')
+            if exe_name.lower() in target_names_lower:
+                pids_to_kill.append((pe.th32ProcessID, exe_name))
+            if not kernel32.Process32Next(h_snap, ctypes.byref(pe)):
+                break
+    kernel32.CloseHandle(h_snap)
+
+    for pid, exe in pids_to_kill:
+        h_proc = kernel32.OpenProcess(PROCESS_TERMINATE, False, pid)
+        if h_proc:
+            kernel32.TerminateProcess(h_proc, 1)
+            kernel32.CloseHandle(h_proc)
+        else:
+            try:
+                subprocess.run(["taskkill", "/f", "/pid", str(pid)], check=False, capture_output=True,
+                               creationflags=0x08000000)
+            except Exception:
+                pass
+
+def _create_shortcut_winapi(shortcut_path, target_path, arguments="", working_dir="", icon_location="", description=""):
+    """Creates a Windows shortcut (.lnk) using Win32 IShellLinkW COM interface directly."""
+    if sys.platform != "win32":
+        return False
+    class GUID(ctypes.Structure):
+        _fields_ = [
+            ("Data1", wintypes.DWORD),
+            ("Data2", wintypes.WORD),
+            ("Data3", wintypes.WORD),
+            ("Data4", wintypes.BYTE * 8)
+        ]
+        def __init__(self, l, w1, w2, b1, b2, b3, b4, b5, b6, b7, b8):
+            super().__init__(l, w1, w2, (wintypes.BYTE * 8)(b1, b2, b3, b4, b5, b6, b7, b8))
+
+    CLSID_ShellLink = GUID(0x00021401, 0, 0, 0xC0, 0, 0, 0, 0, 0, 0, 0x46)
+    IID_IShellLinkW = GUID(0x000214F9, 0, 0, 0xC0, 0, 0, 0, 0, 0, 0, 0x46)
+    IID_IPersistFile = GUID(0x0000010b, 0, 0, 0xC0, 0, 0, 0, 0, 0, 0, 0x46)
+    HRESULT = ctypes.c_long
+
+    ole32 = ctypes.windll.ole32
+    ole32.CoInitialize(None)
+    try:
+        p_sl = ctypes.c_void_p()
+        hr = ole32.CoCreateInstance(
+            ctypes.byref(CLSID_ShellLink),
+            None,
+            1,
+            ctypes.byref(IID_IShellLinkW),
+            ctypes.byref(p_sl)
+        )
+        if hr != 0:
+            return False
+
+        vtbl = ctypes.cast(p_sl.value, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+
+        QI_proto = ctypes.WINFUNCTYPE(HRESULT, ctypes.c_void_p, ctypes.POINTER(GUID), ctypes.POINTER(ctypes.c_void_p))
+        QueryInterface = QI_proto(vtbl[0])
+
+        Release_proto = ctypes.WINFUNCTYPE(wintypes.ULONG, ctypes.c_void_p)
+        Release_sl = Release_proto(vtbl[2])
+
+        SetDescription_proto = ctypes.WINFUNCTYPE(HRESULT, ctypes.c_void_p, wintypes.LPCWSTR)
+        SetDescription = SetDescription_proto(vtbl[7])
+
+        SetWorkingDirectory_proto = ctypes.WINFUNCTYPE(HRESULT, ctypes.c_void_p, wintypes.LPCWSTR)
+        SetWorkingDirectory = SetWorkingDirectory_proto(vtbl[9])
+
+        SetArguments_proto = ctypes.WINFUNCTYPE(HRESULT, ctypes.c_void_p, wintypes.LPCWSTR)
+        SetArguments = SetArguments_proto(vtbl[11])
+
+        SetIconLocation_proto = ctypes.WINFUNCTYPE(HRESULT, ctypes.c_void_p, wintypes.LPCWSTR, ctypes.c_int)
+        SetIconLocation = SetIconLocation_proto(vtbl[17])
+
+        SetPath_proto = ctypes.WINFUNCTYPE(HRESULT, ctypes.c_void_p, wintypes.LPCWSTR)
+        SetPath = SetPath_proto(vtbl[20])
+
+        SetPath(p_sl, str(target_path))
+        if arguments:
+            SetArguments(p_sl, str(arguments))
+        if working_dir:
+            SetWorkingDirectory(p_sl, str(working_dir))
+        if description:
+            SetDescription(p_sl, str(description))
+        if icon_location:
+            SetIconLocation(p_sl, str(icon_location), 0)
+
+        p_pf = ctypes.c_void_p()
+        hr = QueryInterface(p_sl, ctypes.byref(IID_IPersistFile), ctypes.byref(p_pf))
+        if hr == 0:
+            pf_vtbl = ctypes.cast(p_pf.value, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+            Save_proto = ctypes.WINFUNCTYPE(HRESULT, ctypes.c_void_p, wintypes.LPCWSTR, wintypes.BOOL)
+            Save = Save_proto(pf_vtbl[6])
+            hr_save = Save(p_pf, str(shortcut_path), True)
+            Release_pf = Release_proto(pf_vtbl[2])
+            Release_pf(p_pf)
+            Release_sl(p_sl)
+            return hr_save == 0
+        Release_sl(p_sl)
+        return False
+    except Exception as e:
+        logging.debug(f"WinAPI IShellLinkW failed: {e}")
+        return False
+    finally:
+        ole32.CoUninitialize()
 
 class GameSwitcher:
     CONFIG_SCHEMA = {
@@ -138,7 +382,7 @@ class GameSwitcher:
             "show_last_game_rr": True,
             "show_splash_notification": True,
             "show_riot_client": False,
-            "theme": "dark_gold"
+            "theme": "midnight_gold"
         },
         "graphics_settings": {
             "display_mode": "Default",
@@ -212,8 +456,8 @@ class GameSwitcher:
                         logging.error(f"Failed to delete log file {filename}: {e}")
 
     def is_admin(self):
-        try: return ctypes.windll.shell32.IsUserAnAdmin()
-        except pywintypes.error as e:
+        try: return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        except OSError as e:
             logging.error(f"Error checking admin privileges: {e}")
             return False
         except Exception as e:
@@ -237,13 +481,13 @@ class GameSwitcher:
                     
                 config = deep_update(config, loaded_config)
 
-                validate(instance=config, schema=self.CONFIG_SCHEMA)
+                _validate_config(config, self.CONFIG_SCHEMA)
 
             except FileNotFoundError:
                 logging.warning(f"config.json not found at {self.config_path}. Using defaults.")
             except (json.JSONDecodeError, UnicodeDecodeError) as e:
                 logging.warning(f"config.json is corrupted or has encoding issues. Using defaults. Error: {e}")
-            except ValidationError as e:
+            except ConfigValidationError as e:
                 logging.warning(f"config.json validation failed. Using defaults. Error: {e.message}")
             except Exception as e:
                 logging.error(f"An unexpected error occurred while loading config: {e}")
@@ -345,21 +589,16 @@ class GameSwitcher:
 
     def _terminate_processes(self):
         all_processes = self.GAMES['valorant']["processes_to_kill"] + self.GAMES['lol']["processes_to_kill"]
-        creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-        startupinfo = None
-        if sys.platform == "win32":
-            startupinfo = subprocess.STARTUPINFO()
-            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            startupinfo.wShowWindow = subprocess.SW_HIDE
-        for exe in set(all_processes):
-            try:
-                subprocess.run(["taskkill", "/f", "/im", exe], check=True, capture_output=True, text=True, creationflags=creationflags, startupinfo=startupinfo)
-            except subprocess.CalledProcessError as e:
-                logging.debug(f"Process {exe} not running or could not be terminated: {e.stderr.strip()}")
-            except Exception as e:
-                logging.error(f"Error terminating process {exe}: {e}")
+        _terminate_processes_by_names(set(all_processes))
 
     def _create_junction(self, source, link_name):
+        try:
+            import _winapi
+            _winapi.CreateJunction(str(source), str(link_name))
+            return
+        except Exception as winapi_err:
+            logging.debug(f"_winapi.CreateJunction fallback to cmd: {winapi_err}")
+
         creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
         startupinfo = None
         if sys.platform == "win32":
@@ -367,7 +606,7 @@ class GameSwitcher:
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             startupinfo.wShowWindow = subprocess.SW_HIDE
         try:
-            subprocess.run(['cmd', '/c', 'mklink', '/J', link_name, source], check=True, startupinfo=startupinfo, creationflags=creationflags, capture_output=True, text=True)
+            subprocess.run(['cmd', '/c', 'mklink', '/J', str(link_name), str(source)], check=True, startupinfo=startupinfo, creationflags=creationflags, capture_output=True, text=True)
         except subprocess.CalledProcessError as e:
             logging.error(f"Failed to create junction from {source} to {link_name}: {e.stderr.strip()}")
             raise
@@ -526,6 +765,23 @@ class GameSwitcher:
                 self.set_account_in_game_name_tag_puuid(account_name, in_game_name, in_game_tag, puuid=extracted_puuid)
 
         self.update_ima_menu_if_enabled('add', account_name)
+
+        # Convert riot client data items to junctions pointing to new profile
+        for item_name in self.riot_games_config["LoginData"].keys():
+            riot_item_path = self.riot_client_data_path / item_name
+            profile_item_path = account_path / item_name
+            if profile_item_path.exists():
+                try:
+                    self._remove_junction_or_dir(riot_item_path)
+                    self._create_junction(str(profile_item_path), str(riot_item_path))
+                except Exception as e:
+                    logging.warning(f"Could not establish junction for {item_name}: {e}")
+
+        if self.config is not None:
+            self.config["last_active_account"] = account_name
+            self.config["last_switched_account"] = account_name
+            self._save_config()
+
         return True
 
     def _perform_post_switch_tasks(self, account_name, game, on_update_callback):
@@ -874,21 +1130,35 @@ class GameSwitcher:
         last_active = self.config.get("last_active_account") if self.config else None
         is_same_account = (last_active == account_name)
 
+        if is_same_account:
+            # Validate that junctions exist on disk and point to target account
+            for item_name in self.riot_games_config["LoginData"].keys():
+                riot_item_path = self.riot_client_data_path / item_name
+                profile_item_path = account_path / item_name
+                if profile_item_path.exists():
+                    if not riot_item_path.exists() or not os.path.islink(riot_item_path):
+                        is_same_account = False
+                        break
+                    try:
+                        target = Path(os.readlink(riot_item_path)).resolve()
+                        if target != profile_item_path.resolve():
+                            is_same_account = False
+                            break
+                    except Exception:
+                        is_same_account = False
+                        break
+                elif riot_item_path.exists():
+                    is_same_account = False
+                    break
+
         if not is_same_account:
             self._terminate_processes()
             # Poll processes to ensure they terminate completely before modifying junctions
             start_time = time.time()
-            all_procs = set(self.GAMES['valorant']["processes_to_kill"] + self.GAMES['lol']["processes_to_kill"])
+            all_procs = set(p.lower() for p in (self.GAMES['valorant']["processes_to_kill"] + self.GAMES['lol']["processes_to_kill"]))
             while time.time() - start_time < 3.0:
-                running = False
-                for proc in psutil.process_iter(['name']):
-                    try:
-                        if proc.info['name'] in all_procs:
-                            running = True
-                            break
-                    except (psutil.NoSuchProcess, psutil.AccessDenied):
-                        pass
-                if not running:
+                running_names = {n.lower() for n in _get_running_process_names()}
+                if not (running_names & all_procs):
                     break
                 time.sleep(0.1)
 
@@ -1006,6 +1276,11 @@ class GameSwitcher:
         for item_name in self.riot_games_config["LoginData"].keys():
             riot_item_path = self.riot_client_data_path / item_name
             self._remove_junction_or_dir(riot_item_path)
+
+        if self.config is not None:
+            self.config["last_active_account"] = None
+            self.config["last_switched_account"] = None
+            self._save_config()
         try:
             launch_args = self.GAMES[game]["launch_args"].split()
             command = [self.riot_games_config["ExeLocationDefault"]] + launch_args
@@ -1113,9 +1388,9 @@ class GameSwitcher:
         if not account_path.is_dir(): return False
         dest_icon_path = account_path / "icon.png"
         try:
-            if Image:
-                pil_image = Image.open(source_icon_path)
-                pil_image.save(dest_icon_path, "PNG")
+            q_img = QImage(str(source_icon_path))
+            if not q_img.isNull():
+                q_img.save(str(dest_icon_path), "PNG")
             else:
                 shutil.copy(source_icon_path, dest_icon_path)
             
@@ -1153,13 +1428,6 @@ class GameSwitcher:
         return False
 
     def _create_shortcut(self, shortcut_path, target_path, arguments="", working_dir=None, icon_location=None, description=""):
-        try:
-            import win32com.client
-            from PIL import Image
-        except ImportError:
-            logging.error("Error: pywin32 and Pillow are required to create shortcuts. Please run 'pip install pywin32 Pillow'.")
-            return False
-
         shortcut_path_p = Path(shortcut_path)
         target_path_p = Path(target_path)
         
@@ -1169,16 +1437,26 @@ class GameSwitcher:
             working_dir_s = str(Path(working_dir))
 
         icon_location_s = None
-        ico_path_p = None
 
         if icon_location:
             icon_location_p = Path(icon_location)
             if icon_location_p.suffix.lower() == '.png':
                 try:
-                    img = Image.open(icon_location_p)
-                    ico_path_p = self.user_data_dir / (shortcut_path_p.name + ".ico")
-                    img.save(ico_path_p, format='ICO', sizes=[(32,32)])
-                    icon_location_s = str(ico_path_p)
+                    q_img = QImage(str(icon_location_p))
+                    if not q_img.isNull():
+                        scaled = q_img.scaled(32, 32)
+                        buf = QBuffer()
+                        buf.open(QIODevice.WriteOnly)
+                        scaled.save(buf, "PNG")
+                        png_bytes = bytes(buf.data())
+                        ico_path_p = self.user_data_dir / (shortcut_path_p.name + ".ico")
+                        ico_header = struct.pack('<HHH', 0, 1, 1)
+                        ico_entry = struct.pack('<BBBBHHII', 32, 32, 0, 0, 1, 32, len(png_bytes), 22)
+                        with open(ico_path_p, 'wb') as f:
+                            f.write(ico_header + ico_entry + png_bytes)
+                        icon_location_s = str(ico_path_p)
+                    else:
+                        icon_location_s = str(target_path_p)
                 except Exception as e:
                     logging.error(f"Failed to convert PNG to ICO: {e}")
                     icon_location_s = str(target_path_p)
@@ -1187,18 +1465,41 @@ class GameSwitcher:
         else:
             icon_location_s = str(target_path_p)
 
+        if _create_shortcut_winapi(
+            shortcut_path=str(shortcut_path_p),
+            target_path=str(target_path_p),
+            arguments=arguments or "",
+            working_dir=working_dir_s or "",
+            icon_location=icon_location_s or "",
+            description=description or ""
+        ):
+            return True
+
         try:
-            shell = win32com.client.Dispatch("WScript.Shell")
-            shortcut = shell.CreateShortCut(str(shortcut_path_p))
-            shortcut.TargetPath = str(target_path_p)
-            shortcut.Arguments = arguments
-            shortcut.WorkingDirectory = working_dir_s
-            shortcut.IconLocation = icon_location_s
-            shortcut.Description = description
-            shortcut.Save()
+            ps_script = (
+                f"$ws = New-Object -ComObject WScript.Shell; "
+                f"$s = $ws.CreateShortcut('{str(shortcut_path_p)}'); "
+                f"$s.TargetPath = '{str(target_path_p)}'; "
+                f"$s.Arguments = '{arguments or ''}'; "
+                f"$s.WorkingDirectory = '{working_dir_s}'; "
+                f"$s.IconLocation = '{icon_location_s}'; "
+                f"$s.Description = '{description or ''}'; "
+                f"$s.Save()"
+            )
+            creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+            startupinfo = None
+            if sys.platform == "win32":
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = subprocess.SW_HIDE
+            subprocess.run(
+                ['powershell', '-NoProfile', '-NonInteractive', '-Command', ps_script],
+                check=True, capture_output=True, text=True,
+                creationflags=creationflags, startupinfo=startupinfo
+            )
             return True
         except Exception as e:
-            logging.error(f"Error creating shortcut at {shortcut_path}: {e}")
+            logging.error(f"Failed to create shortcut: {e}")
             return False
         finally:
             pass
@@ -1244,12 +1545,16 @@ class GameSwitcher:
             rank_clean = rank.lower().replace(' ', '_')
             candidates = [f"{rank_clean}.png", f"{rank_clean}_1.png"]
             for cand in candidates:
-                cand_path = Path(self.base_dir) / "Assets" / cand
+                cand_path = Path(self.base_dir) / "Assets" / "ranks" / cand
+                if not cand_path.exists():
+                    cand_path = Path(self.base_dir) / "Assets" / cand
                 if cand_path.exists():
                     icon_path_to_use = cand_path
                     break
                 app_path = Path(self.get_ima_config().get("app_install_path", self.base_dir))
-                cand_path = app_path / "Assets" / cand
+                cand_path = app_path / "Assets" / "ranks" / cand
+                if not cand_path.exists():
+                    cand_path = app_path / "Assets" / cand
                 if cand_path.exists():
                     icon_path_to_use = cand_path
                     break
@@ -1834,9 +2139,11 @@ class GameSwitcher:
 
         show_map_planner = ui_settings.get("show_map_planner_in_menu", False)
         if show_map_planner:
-            planner_icon_src = Path(self.base_dir) / "Assets" / "map_planner.png"
+            planner_icon_src = Path(self.base_dir) / "Assets" / "ui" / "crosshair.png"
             if not planner_icon_src.exists():
                 planner_icon_src = Path(self.base_dir) / "Assets" / "crosshair.png"
+            if not planner_icon_src.exists():
+                planner_icon_src = Path(self.base_dir) / "Assets" / "ui" / "Options.png"
             if not planner_icon_src.exists():
                 planner_icon_src = Path(self.base_dir) / "Assets" / "Options.png"
             
@@ -2177,9 +2484,9 @@ class GameSwitcher:
         from PyQt5.QtGui import QPixmap, QPainter, QColor, QFont, QIcon
         from PyQt5.QtCore import Qt
         pixmap = QPixmap(128, 128)
-        pixmap.fill(QColor("#3a3637"))
+        pixmap.fill(QColor("#161427"))
         p = QPainter(pixmap)
-        p.setPen(QColor("#c89f68"))
+        p.setPen(QColor("#8c52ff"))
         p.setFont(QFont("Segoe UI", 28, QFont.Bold))
         p.drawText(pixmap.rect(), Qt.AlignCenter, "...")
         p.end()
@@ -2219,9 +2526,9 @@ class GameSwitcher:
                 logging.error(f"Error loading icon from {icon_path}: {e}. Using default icon.")
         
         pixmap = QPixmap(128, 128)
-        pixmap.fill(QColor("#c89f68"))
+        pixmap.fill(QColor("#8c52ff"))
         p = QPainter(pixmap)
-        p.setPen(QColor("#2c2a2b"))
+        p.setPen(QColor("#ffffff"))
         p.setFont(QFont("Segoe UI", 56, QFont.Bold))
         p.drawText(pixmap.rect(), Qt.AlignCenter, "?")
         p.end()
@@ -2276,14 +2583,14 @@ class GameSwitcher:
         for key in keys_to_try:
             try:
                 headers = {"Authorization": key}
-                request_response = requests.get(endpoint_url, headers=headers, timeout=12)
+                request_response = _simple_http_get(endpoint_url, headers=headers, timeout=12)
                 if request_response.status_code in (429, 403):
                     logging.warning(f"Henrik API rate limit or auth error ({request_response.status_code}) with key {key[:8]}... Trying fallback key.")
                     continue
                 request_response.raise_for_status()
                 return request_response.json()
-            except requests.exceptions.HTTPError as http_err:
-                status_code = getattr(http_err.response, 'status_code', None)
+            except urllib.error.HTTPError as http_err:
+                status_code = getattr(http_err, 'code', getattr(http_err, 'status_code', None))
                 if status_code in (429, 403):
                     logging.warning(f"Henrik API rate limit ({status_code}) on key {key[:8]}... Trying fallback key.")
                     last_exception = http_err
@@ -2347,9 +2654,9 @@ class GameSwitcher:
         while time.time() - start_wait_time < 300:
             time.sleep(3)
             try:
-                tasklist_output = subprocess.check_output("tasklist", creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0).decode('utf-8', errors='ignore').lower()
+                running = {p.lower() for p in _get_running_process_names()}
                 for proc in target_processes:
-                    if proc.lower() in tasklist_output:
+                    if proc.lower() in running:
                         process_detected = True
                         break
             except Exception:
@@ -2363,9 +2670,9 @@ class GameSwitcher:
                 time.sleep(5)
                 still_running = False
                 try:
-                    tasklist_output = subprocess.check_output("tasklist", creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0).decode('utf-8', errors='ignore').lower()
+                    running = {p.lower() for p in _get_running_process_names()}
                     for proc in target_processes:
-                        if proc.lower() in tasklist_output:
+                        if proc.lower() in running:
                             still_running = True
                             break
                 except Exception:
@@ -2467,7 +2774,7 @@ class GameSwitcher:
         else:
             try:
                 url = f"https://valorantrank.chat/{region}/{in_game_name}/{in_game_tag}?mmrChange=true"
-                response = requests.get(url, timeout=8)
+                response = _simple_http_get(url, timeout=8)
                 response.raise_for_status()
                 fetched_rank, fetched_current_rr, fetched_last_game_rr = self._parse_rank_data(response.text)
                 if not fetched_rank or fetched_current_rr is None:
@@ -2940,78 +3247,6 @@ class GameSwitcher:
     def start_rank_update_scheduler(self, on_update_callback=None):
         scheduler_thread = threading.Thread(target=self._run_rank_update_loop, args=(on_update_callback,), daemon=True)
         scheduler_thread.start()
-
-    def _parse_version_tuple(self, version_str):
-        if not version_str:
-            return (0, 0, 0)
-        clean_str = version_str.strip().lstrip('v').lstrip('V')
-        parts = []
-        for token in clean_str.split('.'):
-            num = re.sub(r'\D', '', token)
-            if num:
-                parts.append(int(num))
-        return tuple(parts)
-
-    def check_for_update(self):
-        if requests is None:
-            return False, APP_VERSION, None, "Requests library unavailable.", 0
-
-        api_url = "https://api.github.com/repos/iMAboud/iMA-Switcher/releases/latest"
-        headers = {"User-Agent": "iMA-Switcher-App"}
-        try:
-            response = requests.get(api_url, headers=headers, timeout=6)
-            if response.status_code != 200:
-                return False, APP_VERSION, None, f"GitHub API error {response.status_code}", 0
-
-            data = response.json()
-            remote_tag = data.get("tag_name", "")
-            release_notes = data.get("body", "") or "New version available with improvements and bug fixes."
-            assets = data.get("assets", [])
-
-            download_url = None
-            file_size = 0
-            for asset in assets:
-                asset_name = asset.get("name", "")
-                if asset_name.endswith(".exe"):
-                    download_url = asset.get("browser_download_url")
-                    file_size = asset.get("size", 0)
-                    break
-
-            if not download_url and assets:
-                download_url = assets[0].get("browser_download_url")
-                file_size = assets[0].get("size", 0)
-
-            local_tuple = self._parse_version_tuple(APP_VERSION)
-            remote_tuple = self._parse_version_tuple(remote_tag)
-
-            has_update = remote_tuple > local_tuple
-            clean_remote_version = remote_tag.lstrip('v').lstrip('V')
-
-            return has_update, clean_remote_version, download_url, release_notes, file_size
-        except Exception as e:
-            logging.warning(f"Error checking for updates: {e}")
-            return False, APP_VERSION, None, str(e), 0
-
-    def download_update(self, download_url, dest_path, progress_callback=None):
-        if requests is None or not download_url:
-            return False
-        try:
-            response = requests.get(download_url, stream=True, timeout=15)
-            response.raise_for_status()
-            total_size = int(response.headers.get('content-length', 0))
-            downloaded = 0
-            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-            with open(dest_path, 'wb') as file_handle:
-                for chunk in response.iter_content(chunk_size=65536):
-                    if chunk:
-                        file_handle.write(chunk)
-                        downloaded += len(chunk)
-                        if progress_callback:
-                            progress_callback(downloaded, total_size)
-            return True
-        except Exception as e:
-            logging.error(f"Failed to download update: {e}")
-            return False
 
     def apply_update(self, installer_path):
         target_exe = sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(sys.argv[0])
