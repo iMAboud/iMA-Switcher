@@ -1247,6 +1247,16 @@ class GameSwitcher:
 
             self.record_account_launch(account_name)
 
+            if self.config is not None:
+                self.config["last_active_account"] = account_name
+                self.config["last_switched_account"] = account_name
+                self._save_config()
+
+            try:
+                self.update_ima_menu_if_enabled('switch', account_name)
+            except Exception as e:
+                logging.error(f"Failed to update iMA menu on switch: {e}")
+
             post_switch_thread = threading.Thread(
                 target=self._perform_post_switch_tasks,
                 args=(account_name, game, on_update_callback),
@@ -1935,7 +1945,7 @@ class GameSwitcher:
         if action == 'add' and name and name not in current_ordered_list: current_ordered_list.append(name)
         elif action == 'delete' and name and name in current_ordered_list: current_ordered_list.remove(name)
         elif action == 'rename' and name and old_name and old_name in current_ordered_list: current_ordered_list[current_ordered_list.index(old_name)] = name
-        elif action == 'restore':
+        elif action in ('restore', 'switch', 'update'):
             pass
         
         ima_config["ordered_accounts"] = current_ordered_list
@@ -1999,6 +2009,36 @@ class GameSwitcher:
         except Exception as e:
             logging.error(f"An unexpected error occurred while updating shell.nss: {e}")
             return False, f"An unexpected error occurred: {e}"
+        finally:
+            try:
+                shell_exe = Path(ima_menu_path) / 'shell.exe'
+                if shell_exe.exists():
+                    subprocess.Popen([str(shell_exe), '-reload'], creationflags=0x08000000)
+            except Exception:
+                pass
+
+    def get_current_active_account(self):
+        try:
+            if self.riot_client_data_path:
+                data_path = self.riot_client_data_path / "Data"
+                if data_path.exists() and os.path.islink(data_path):
+                    target = os.readlink(str(data_path))
+                    target_path = Path(target.replace("\\\\?\\", ""))
+                    if target_path.name.lower() in ("data", "config", "logindata"):
+                        candidate = target_path.parent.name
+                    else:
+                        candidate = target_path.name
+                    if candidate in self.get_saved_accounts():
+                        return candidate
+        except Exception:
+            pass
+
+        if self.config:
+            last_active = self.config.get("last_active_account") or self.config.get("last_switched_account")
+            if last_active in self.get_saved_accounts():
+                return last_active
+
+        return None
 
     def generate_ima_menu_script(self, output_dir, title, ordered_accounts, menu_icon_path="", save_config=False):
         if save_config:
@@ -2047,15 +2087,24 @@ class GameSwitcher:
             menu_header = f"""menu(where=sel.count>0 type='namespace|back' mode='multiple' vis=@if(key.shift() || key.control(), "hidden", "normal") title='{title}'{menu_icon_arg})"""
 
         script_content = [menu_header, "{"]
+        config_app_path = self.get_ima_config().get("app_install_path")
+        installed_exe = (Path(config_app_path) / "iMA Switcher.exe") if config_app_path else None
+
         if getattr(sys, 'frozen', False):
             cmd_executable = f'"{sys.executable}"'
+            is_exe = True
+        elif installed_exe and installed_exe.exists():
+            cmd_executable = f'"{installed_exe}"'
+            is_exe = True
         else:
             python_exe = sys.executable.replace("python.exe", "pythonw.exe")
             if not os.path.exists(python_exe):
                 python_exe = sys.executable
             cmd_executable = f'"{python_exe}"'
+            is_exe = False
 
         accounts_data = self.get_saved_accounts()
+        current_active_account = self.get_current_active_account()
         
         ui_settings = self.get_ima_config().get("ui_settings", {})
         show_rank_tips = ui_settings.get("show_rank_tips", False)
@@ -2078,6 +2127,7 @@ class GameSwitcher:
         
         for account_name in ordered_accounts:
             if account_name not in accounts_data: continue
+            is_active = (account_name == current_active_account)
             icon_source_path, game, rank, in_game_name, in_game_tag, current_rr, last_game_rr = accounts_data.get(account_name)
             
             existing_line = existing_items.get(account_name)
@@ -2091,7 +2141,7 @@ class GameSwitcher:
                     display_rank = f"{rank} ({current_rr})"
                 tip_val = f"['{display_rank}', {tip_color}, {tip_delay}]"
                 
-            if getattr(sys, 'frozen', False):
+            if is_exe:
                 cmd_args = f'--switch "{account_name}"'
             else:
                 main_script = str((Path(self.base_dir) / "main.pyw").resolve())
@@ -2102,6 +2152,11 @@ class GameSwitcher:
                 item_line = self._update_nss_attribute(item_line, "cmd", cmd_executable)
                 item_line = self._update_nss_attribute(item_line, "args", cmd_args)
                 
+                if is_active:
+                    item_line = self._update_nss_attribute(item_line, "checked", "1", quote=False)
+                else:
+                    item_line = self._remove_nss_attribute(item_line, "checked")
+
                 if tip_val:
                     item_line = self._update_nss_attribute(item_line, "tip", tip_val, is_list=True)
                 else:
@@ -2134,7 +2189,8 @@ class GameSwitcher:
                     item_icon_arg = f" icon='{icon_path_escaped}'"
                 
                 tip_arg = f" tip={tip_val}" if tip_val else ""
-                item_line = f"item(title='{account_name}'{tip_arg} cmd='{cmd_executable}' args='{cmd_args}'{item_icon_arg})"
+                checked_arg = " checked=1" if is_active else ""
+                item_line = f"item(title='{account_name}'{checked_arg}{tip_arg} cmd='{cmd_executable}' args='{cmd_args}'{item_icon_arg})"
                 script_content.append(f"    {item_line}")
 
         show_map_planner = ui_settings.get("show_map_planner_in_menu", False)
@@ -2154,7 +2210,7 @@ class GameSwitcher:
                 except Exception:
                     pass
             
-            if getattr(sys, 'frozen', False):
+            if is_exe:
                 planner_args = '--map-planner'
             else:
                 main_script = str((Path(self.base_dir) / "main.pyw").resolve())
@@ -2162,6 +2218,27 @@ class GameSwitcher:
             
             planner_item = f"item(title='Map Planner' cmd='{cmd_executable}' args='{planner_args}' icon='@app.dir\\imports\\icons\\map_planner.png')"
             script_content.append(f"    {planner_item}")
+
+        # Crosshair Studio shortcut
+        ch_icon_src = Path(self.base_dir) / "Assets" / "ui" / "crosshair.png"
+        if not ch_icon_src.exists():
+            ch_icon_src = Path(self.base_dir) / "Assets" / "crosshair.png"
+        dest_ch_icon = icons_dir / "crosshair.png"
+        if ch_icon_src.exists() and not dest_ch_icon.exists():
+            try:
+                shutil.copy(ch_icon_src, dest_ch_icon)
+            except Exception:
+                pass
+        
+        if is_exe:
+            ch_args = '--crosshair'
+        else:
+            main_script = str((Path(self.base_dir) / "main.pyw").resolve())
+            ch_args = f'"{main_script}" --crosshair'
+        
+        ch_icon_attr = " icon='@app.dir\\imports\\icons\\crosshair.png'" if (dest_ch_icon.exists() or ch_icon_src.exists()) else ""
+        ch_item = f"item(title='Crosshair Studio' cmd='{cmd_executable}' args='{ch_args}'{ch_icon_attr})"
+        script_content.append(f"    {ch_item}")
 
         include_app_shortcut = ui_settings.get("include_app_shortcut", False)
         if include_app_shortcut:
@@ -2185,8 +2262,9 @@ class GameSwitcher:
         with open(script_path, 'w', encoding='utf-8') as f:
             f.write(final_script)
 
-    def _update_nss_attribute(self, line, attribute, new_value, is_list=False):
+    def _update_nss_attribute(self, line, attribute, new_value, is_list=False, quote=True):
         found = False
+        val_str = f"'{new_value}'" if quote else str(new_value)
         if is_list:
             pattern = rf"{attribute}\s*=\s*\[.*?\]"
             replacement = f"{attribute}={new_value}"
@@ -2199,13 +2277,13 @@ class GameSwitcher:
             no_quote_pattern = rf"{attribute}\s*=\s*[^,)\s]+"
             
             if re.search(single_quote_pattern, line):
-                line = re.sub(single_quote_pattern, lambda m: f"{attribute}='{new_value}'", line)
+                line = re.sub(single_quote_pattern, lambda m: f"{attribute}={val_str}", line)
                 found = True
             elif re.search(double_quote_pattern, line):
-                line = re.sub(double_quote_pattern, lambda m: f"{attribute}=\"{new_value}\"", line)
+                line = re.sub(double_quote_pattern, lambda m: f"{attribute}={val_str}", line)
                 found = True
             elif re.search(no_quote_pattern, line):
-                line = re.sub(no_quote_pattern, lambda m: f"{attribute}={new_value}", line)
+                line = re.sub(no_quote_pattern, lambda m: f"{attribute}={val_str}", line)
                 found = True
                 
         if not found:
@@ -2214,8 +2292,10 @@ class GameSwitcher:
                 sep = " " if inner else ""
                 if is_list:
                     line = line[:-1] + f"{sep}{attribute}={new_value})"
-                else:
+                elif quote:
                     line = line[:-1] + f"{sep}{attribute}='{new_value}')"
+                else:
+                    line = line[:-1] + f"{sep}{attribute}={new_value})"
         return line
 
     def _remove_nss_attribute(self, line, attribute):
@@ -2647,7 +2727,7 @@ class GameSwitcher:
             self._save_config()
 
     def _monitor_game_session(self, account_name, on_update_callback=None):
-        target_processes = ["VALORANT-Win64-Shipping.exe", "VALORANT.exe"]
+        target_processes = ["VALORANT-Win64-Shipping.exe"]
         process_detected = False
         start_wait_time = time.time()
 
@@ -2666,6 +2746,7 @@ class GameSwitcher:
                 break
 
         if process_detected:
+            miss_count = 0
             while True:
                 time.sleep(5)
                 still_running = False
@@ -2678,8 +2759,12 @@ class GameSwitcher:
                 except Exception:
                     pass
 
-                if not still_running:
-                    break
+                if still_running:
+                    miss_count = 0
+                else:
+                    miss_count += 1
+                    if miss_count >= 2:
+                        break
 
             time.sleep(5)
             self.fetch_and_update_rank_data(account_name, is_manual_refresh=True, on_update_callback=on_update_callback)
